@@ -152,6 +152,47 @@ updated: [ISO 8601 timestamp]
 
 ---
 
+## Command: /collab monitor
+
+Start a zero-cost background monitor that watches `.ai-collab/` and notifies you the instant another AI writes or updates their log.
+
+**How it works:** Runs a persistent bash script in the background. No tokens consumed while waiting. Only activates Claude when a real change is detected.
+
+**Steps:**
+1. Find project root
+2. Launch a Monitor with this script:
+
+```bash
+COLLAB_DIR="{project-root}/.ai-collab"
+LAST_CHECK=$(date +%s)
+while true; do
+  sleep 20
+  NOW=$(date +%s)
+  for f in "$COLLAB_DIR"/*.md; do
+    [ -f "$f" ] || continue
+    BASENAME=$(basename "$f")
+    [[ "$BASENAME" == claude-* ]] && continue
+    [[ "$BASENAME" == PROTOCOL.md ]] && continue
+    MOD=$(stat -f "%m" "$f" 2>/dev/null) || MOD=$(stat -c "%Y" "$f" 2>/dev/null) || continue
+    if [ "$MOD" -gt "$LAST_CHECK" ]; then
+      AI=$(grep "^ai:" "$f" 2>/dev/null | head -1 | cut -d' ' -f2-)
+      WORKING=$(grep -A2 "^## Working On" "$f" 2>/dev/null | tail -1 | cut -c1-120)
+      echo "UPDATE|$AI|$BASENAME|$WORKING"
+    fi
+  done
+  LAST_CHECK=$NOW
+done
+```
+
+3. When a notification arrives, read the updated file and tell the user: "[AI name] updated their log: [1-2 line summary]"
+4. Confirm to user: "Monitor active — I'll notify you when OpenCode / Codex / [other AIs] update their logs. No tokens consumed while waiting."
+
+**To stop the monitor:** Run `/collab status` to get the monitor task ID, then `TaskStop <id>`.
+
+**Important:** Do NOT use a cron job for this. Cron fires on a fixed interval and consumes tokens every tick even when nothing changed. The Monitor approach is free while idle.
+
+---
+
 ## Reference files
 
 - `references/protocol.md` — Setup snippets for Cursor, Windsurf, Copilot, OpenCode, Codex, and generic AIs

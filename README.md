@@ -129,40 +129,34 @@ Remove stale session logs.
 
 ---
 
-## Live monitoring (auto-notify)
+## Live monitoring (auto-notify, zero token cost)
 
-To have Claude automatically notify you when another AI updates their log — without you having to ask — run this in Claude Code:
+To have Claude automatically notify you the instant another AI updates their log, run:
 
 ```
-/loop Revisa .ai-collab/ y notifica si otra IA actualizó su log
+/collab monitor
 ```
 
-This runs a background loop that checks every ~2 minutes and notifies you only when there is something new.
+This starts a **persistent bash Monitor** that watches `.ai-collab/` every 20 seconds in the background. It consumes zero tokens while waiting — Claude only activates when a real change is detected. You get notified immediately, without polling and without cost.
 
-### Stop the live monitor
+> **Why not use `/loop` with a timer?**
+> A cron or loop fires on a fixed interval and sends a prompt to Claude every N minutes regardless of whether anything changed. That consumes input tokens each tick — even for empty checks. The Monitor approach runs as a pure bash script and only wakes Claude on an actual file change.
+
+### Stop the monitor
 
 ```
 /collab status
 ```
 
-The status command shows active monitors. To stop one:
+This shows the active monitor task ID. Then:
 
-```bash
-# In Claude Code, use the task ID from /collab status
+```
 TaskStop <task-id>
 ```
 
-Or simply close and restart your Claude Code session — session-only monitors stop automatically.
+Or tell Claude: *"stop the collab monitor"* and it will stop it for you.
 
-### Stop the cron job
-
-If you set up a cron-based check with `/loop` and a specific interval (e.g. `/loop 2m ...`), Claude Code will give you a job ID like `47e8b12d`. Cancel it with:
-
-```
-CronDelete 47e8b12d
-```
-
-Or tell Claude: *"stop the collab cron"* and it will cancel it for you.
+Closing your Claude Code session also stops the monitor automatically.
 
 ---
 
