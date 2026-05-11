@@ -25,6 +25,8 @@ parse_timestamp = _mod.parse_timestamp
 filter_notifications = _mod.filter_notifications
 format_note = _mod.format_note
 atomic_write = _mod.atomic_write
+split_by_project = _mod.split_by_project
+detect_project = _mod.detect_project
 
 
 class TestCoerceList(unittest.TestCase):
@@ -139,6 +141,66 @@ class TestAtomicWrite(unittest.TestCase):
             self.assertEqual(remaining, [])
 
 
+class TestSplitByProject(unittest.TestCase):
+    def test_items_with_matching_project_go_to_current(self):
+        items = [{"ai": "a", "project": "gsep"}, {"ai": "b", "project": "other"}]
+        cur, oth = split_by_project(items, "gsep")
+        self.assertEqual(len(cur), 1)
+        self.assertEqual(len(oth), 1)
+        self.assertEqual(cur[0]["ai"], "a")
+        self.assertEqual(oth[0]["ai"], "b")
+
+    def test_items_without_project_go_to_current(self):
+        items = [{"ai": "a"}, {"ai": "b", "project": "gsep"}]
+        cur, oth = split_by_project(items, "gsep")
+        self.assertEqual(len(cur), 2)
+        self.assertEqual(len(oth), 0)
+
+    def test_empty_project_string_goes_to_current(self):
+        items = [{"ai": "a", "project": ""}]
+        cur, oth = split_by_project(items, "gsep")
+        self.assertEqual(len(cur), 1)
+        self.assertEqual(len(oth), 0)
+
+    def test_non_dict_items_dropped(self):
+        items = [{"ai": "a", "project": "gsep"}, "junk", 42, None]
+        cur, oth = split_by_project(items, "gsep")
+        self.assertEqual(len(cur), 1)
+        self.assertEqual(len(oth), 0)
+
+
+class TestDetectProject(unittest.TestCase):
+    def test_env_override(self):
+        old = os.environ.get("AI_COLLAB_PROJECT")
+        try:
+            os.environ["AI_COLLAB_PROJECT"] = "from-env"
+            self.assertEqual(detect_project(), "from-env")
+        finally:
+            if old is None:
+                os.environ.pop("AI_COLLAB_PROJECT", None)
+            else:
+                os.environ["AI_COLLAB_PROJECT"] = old
+
+    def test_returns_string(self):
+        os.environ.pop("AI_COLLAB_PROJECT", None)
+        result = detect_project()
+        self.assertIsInstance(result, str)
+
+
+class TestFormatNoteWithProject(unittest.TestCase):
+    def test_default_no_project_in_output(self):
+        out = format_note({"ai": "opencode", "message": "x", "project": "gsep"})
+        self.assertIn("opencode", out)
+        self.assertNotIn("gsep", out)
+
+    def test_cross_project_mode_shows_project(self):
+        out = format_note(
+            {"ai": "opencode", "message": "x", "project": "gsep"},
+            include_project=True,
+        )
+        self.assertIn("opencode/gsep", out)
+
+
 class TestMainIntegration(unittest.TestCase):
     """End-to-end via subprocess against the real script."""
 
@@ -193,7 +255,7 @@ class TestMainIntegration(unittest.TestCase):
 
     def test_prints_valid_notification(self):
         r, _ = self._run('[{"ai":"opencode","file":"x.md","message":"hi"}]')
-        self.assertIn("[AI-COLLAB]", r.stdout)
+        self.assertIn("[AI-COLLAB", r.stdout)
         self.assertIn("[END AI-COLLAB]", r.stdout)
         self.assertIn("opencode", r.stdout)
         self.assertIn("hi", r.stdout)
@@ -207,6 +269,97 @@ class TestMainIntegration(unittest.TestCase):
         for content in (None, "", "[]", "not-json", "null", '"string"'):
             r, _ = self._run(content)
             self.assertEqual(r.returncode, 0, f"Failed for content={content!r}")
+
+
+class TestProjectIsolationIntegration(unittest.TestCase):
+    """Verify that notifications from other projects are preserved, not shown."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.notif_file = os.path.join(self.tmp, ".ai-collab-notifications.json")
+        self.script = str(Path(__file__).parent / "ai-collab-check-notifications.py")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, content, project="myproject", cross=False):
+        with open(self.notif_file, "w") as f:
+            f.write(content)
+        import subprocess
+        env = {
+            **os.environ,
+            "HOME": self.tmp,
+            "AI_COLLAB_LOCK_TIMEOUT": "1",
+            "AI_COLLAB_PROJECT": project,
+        }
+        if cross:
+            env["AI_COLLAB_CROSS_PROJECT"] = "1"
+        result = subprocess.run(
+            ["python3", self.script],
+            capture_output=True, text=True, env=env, timeout=5,
+        )
+        with open(self.notif_file) as f:
+            after = f.read()
+        return result, after
+
+    def test_only_current_project_shown(self):
+        items = [
+            {"ai": "opencode", "project": "myproject", "message": "for me"},
+            {"ai": "codex", "project": "other", "message": "for other"},
+        ]
+        r, after = self._run(json.dumps(items), project="myproject")
+        self.assertIn("for me", r.stdout)
+        self.assertNotIn("for other", r.stdout)
+
+    def test_other_projects_preserved_in_file(self):
+        items = [
+            {"ai": "opencode", "project": "myproject", "message": "consume me"},
+            {"ai": "codex", "project": "other", "message": "preserve me"},
+        ]
+        r, after = self._run(json.dumps(items), project="myproject")
+        remaining = json.loads(after)
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]["project"], "other")
+        self.assertIn("preserve me", remaining[0]["message"])
+
+    def test_header_shows_active_project(self):
+        items = [{"ai": "opencode", "project": "myproject", "message": "x"}]
+        r, _ = self._run(json.dumps(items), project="myproject")
+        self.assertIn("project=myproject", r.stdout)
+
+    def test_cross_project_mode_shows_all(self):
+        items = [
+            {"ai": "opencode", "project": "myproject", "message": "a"},
+            {"ai": "codex", "project": "other", "message": "b"},
+        ]
+        r, after = self._run(json.dumps(items), project="myproject", cross=True)
+        self.assertIn("a", r.stdout)
+        self.assertIn("b", r.stdout)
+        self.assertIn("cross-project", r.stdout)
+        self.assertIn("opencode/myproject", r.stdout)
+        self.assertIn("codex/other", r.stdout)
+
+    def test_cross_project_mode_clears_all(self):
+        items = [
+            {"ai": "opencode", "project": "myproject"},
+            {"ai": "codex", "project": "other"},
+        ]
+        r, after = self._run(json.dumps(items), project="myproject", cross=True)
+        self.assertEqual(json.loads(after), [])
+
+    def test_legacy_notifications_without_project_consumed(self):
+        items = [{"ai": "opencode", "message": "legacy no-project tag"}]
+        r, after = self._run(json.dumps(items), project="myproject")
+        self.assertIn("legacy no-project tag", r.stdout)
+        self.assertEqual(json.loads(after), [])
+
+    def test_only_other_project_in_file_silent(self):
+        items = [{"ai": "codex", "project": "other", "message": "not mine"}]
+        r, after = self._run(json.dumps(items), project="myproject")
+        self.assertEqual(r.stdout.strip(), "")
+        remaining = json.loads(after)
+        self.assertEqual(len(remaining), 1)
 
 
 if __name__ == "__main__":

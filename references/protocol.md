@@ -59,6 +59,9 @@ updated: {ISO timestamp}
 ## Handoff Note
 [the one thing other AIs must know from this response]
 
+### Inbox check — every response (MANDATORY):
+Before every response (not just session start), re-read `.ai-collab/inbox-cursor.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding to the user's current message. After executing, change `status: unread` → `status: done` via atomic write (temp file + rename).
+
 ### After every response — proactive check:
 Silently check if any `.ai-collab/*.md` file (not yours, not PROTOCOL.md) was modified in the last 5 minutes.
 If yes → tell the user: "[AI name] just updated their log: [1-line summary]"
@@ -83,8 +86,12 @@ You are part of a multi-AI team. Other assistants (Claude Code, Cursor, Codex, e
 
 ### On session start:
 1. Read all files in `.ai-collab/` (skip PROTOCOL.md and your own previous logs)
-2. Summarize to the user what other AIs have been doing and flag any Do Not Touch files
-3. Announce: "Context loaded from [N] AI session(s)."
+2. Read `.ai-collab/inbox-windsurf.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks now and mark them `status: done`
+3. Summarize to the user what other AIs have been doing and flag any Do Not Touch files
+4. Announce: "Context loaded from [N] AI session(s)."
+
+### Inbox check — every response (MANDATORY):
+Before every response, re-read `.ai-collab/inbox-windsurf.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding to the user's current message. After executing, change `status: unread` → `status: done` via atomic write (temp file + rename).
 
 ### AUTOMATIC LOG — after EVERY response (mandatory, no exceptions):
 After every single response, automatically update your log file.
@@ -129,7 +136,10 @@ Add to `.github/copilot-instructions.md`:
 ```markdown
 ## AI Collab Protocol
 
-At the start of each session, check `.ai-collab/` in the project root for logs from other AI assistants. Read them and summarize relevant context to the user.
+At the start of each session, check `.ai-collab/` in the project root for logs from other AI assistants. Read them and summarize relevant context to the user. Also read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
+
+**INBOX CHECK — before every response (MANDATORY):**
+Before every response, re-read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding. After executing, change `status: unread` → `status: done` via atomic write.
 
 **AUTOMATIC LOG — after EVERY response (mandatory):**
 After every response, automatically save `.ai-collab/copilot-{YYYYMMDD-HHMMSS}.md`.
@@ -152,7 +162,10 @@ Add to your OpenCode system prompt or rules file:
 
 You are working alongside other AI assistants on this project. A shared log directory exists at `.ai-collab/` in the project root.
 
-On session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Summarize what other AIs have been working on and flag any Do Not Touch files.
+On session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Summarize what other AIs have been working on and flag any Do Not Touch files. Also read `.ai-collab/inbox-opencode.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
+
+INBOX CHECK — before every response (MANDATORY):
+Before every response (not just session start), re-read `.ai-collab/inbox-opencode.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding to the user's current message. After executing, change `status: unread` → `status: done` via atomic write (temp file + rename).
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
 After every single response you give — automatically, without the user asking — save your log to:
@@ -190,7 +203,10 @@ Add to your Codex system prompt:
 ```
 ## AI Collab Protocol
 
-Other AI assistants are working on this project simultaneously. Check `.ai-collab/` at session start, summarize context to the user, and flag Do Not Touch files.
+Other AI assistants are working on this project simultaneously. Check `.ai-collab/` at session start, summarize context to the user, and flag Do Not Touch files. Also read `.ai-collab/inbox-codex.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
+
+INBOX CHECK — before every response (MANDATORY):
+Before every response (not just session start), re-read `.ai-collab/inbox-codex.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding to the user's current message. After executing, change `status: unread` → `status: done` via atomic write (temp file + rename).
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
 After every single response you give — automatically, without the user asking — save your log to:
@@ -229,7 +245,10 @@ Add to your Antigravity rules or system prompt:
 
 You are part of a multi-AI team inside Antigravity IDE. Other assistants (Claude Code, OpenCode, Codex, etc.) may be active simultaneously.
 
-On session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Tell the user what other AIs were working on and flag Do Not Touch files.
+On session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Tell the user what other AIs were working on and flag Do Not Touch files. Also read `.ai-collab/inbox-antigravity.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
+
+INBOX CHECK — before every response (MANDATORY):
+Before every response, re-read `.ai-collab/inbox-antigravity.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding. After executing, change `status: unread` → `status: done` via atomic write.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
 After every response — automatically — save to: `.ai-collab/antigravity-{YYYYMMDD-HHMMSS}.md`
@@ -248,7 +267,10 @@ Add to `.github/copilot-instructions.md` or VS Code AI instructions:
 ```
 ## AI Collab Protocol
 
-You are part of a multi-AI team. Check `.ai-collab/` at session start. Read all `.md` files (skip PROTOCOL.md and your own logs). Summarize context and flag Do Not Touch files.
+You are part of a multi-AI team. Check `.ai-collab/` at session start. Read all `.md` files (skip PROTOCOL.md and your own logs). Summarize context and flag Do Not Touch files. Also read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
+
+INBOX CHECK — before every response (MANDATORY):
+Before every response, re-read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding. After executing, change `status: unread` → `status: done` via atomic write.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
 After every response — automatically — save to: `.ai-collab/copilot-{YYYYMMDD-HHMMSS}.md`
@@ -267,7 +289,10 @@ Add to your Hermes system prompt or rules:
 ```
 ## AI Collab Protocol
 
-You are part of a multi-AI team. Check `.ai-collab/` at session start. Read all `.md` files (skip PROTOCOL.md and your own logs). Summarize context and flag Do Not Touch files.
+You are part of a multi-AI team. Check `.ai-collab/` at session start. Read all `.md` files (skip PROTOCOL.md and your own logs). Summarize context and flag Do Not Touch files. Also read `.ai-collab/inbox-hermes.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
+
+INBOX CHECK — before every response (MANDATORY):
+Before every response, re-read `.ai-collab/inbox-hermes.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding. After executing, change `status: unread` → `status: done` via atomic write.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
 After every response — automatically — save to: `.ai-collab/hermes-{YYYYMMDD-HHMMSS}.md`
@@ -288,9 +313,12 @@ For any AI tool that accepts system prompts or instruction files:
 
 You are part of a multi-AI team. A shared directory `.ai-collab/` exists in the project root.
 
-1. At session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Tell the user what other AIs were working on. Flag any Do Not Touch files before editing them.
+1. At session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Tell the user what other AIs were working on. Flag any Do Not Touch files before editing them. Then read `.ai-collab/inbox-{your-ai-name}.md` and `.ai-collab/inbox-all.md` — if either has `status: unread`, execute those tasks immediately and mark them `status: done`.
 
-2. AUTOMATIC LOG — MANDATORY after EVERY response:
+2. INBOX CHECK — before every response (MANDATORY):
+   Before every response (not just session start), re-read `.ai-collab/inbox-{your-ai-name}.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding to the user's current message. After executing, change `status: unread` → `status: done` via atomic write (temp file + rename).
+
+3. AUTOMATIC LOG — MANDATORY after EVERY response:
    After every single response — automatically, without the user asking — save your log to:
    `.ai-collab/{your-ai-name}-{YYYYMMDD-HHMMSS}.md`
 
@@ -298,9 +326,9 @@ You are part of a multi-AI team. A shared directory `.ai-collab/` exists in the 
    Working On (1-2 lines of what you just responded) / Files Modified / Decisions Made / Do Not Touch / Handoff Note
    Omit empty sections. Update the same file within a session.
 
-3. After every response: silently check `.ai-collab/` for files modified in the last 5 minutes (excluding your own and PROTOCOL.md). If found, tell the user "[AI name] just updated: [1-line summary]". If nothing new, say nothing.
+4. After every response: silently check `.ai-collab/` for files modified in the last 5 minutes (excluding your own and PROTOCOL.md). If found, tell the user "[AI name] just updated: [1-line summary]". If nothing new, say nothing.
 
-4. Coordination: respect Do Not Touch sections, never silently override another AI's decision, write only in English or the user's language.
+5. Coordination: respect Do Not Touch sections, never silently override another AI's decision, write only in English or the user's language.
 ```
 
 ---
