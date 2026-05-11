@@ -24,6 +24,7 @@ while true; do
       BASENAME=$(basename "$f")
       [[ "$BASENAME" == claude-* ]] && continue
       [[ "$BASENAME" == PROTOCOL.md ]] && continue
+      [[ "$BASENAME" == CONTEXT.md ]] && continue
 
       MOD=$(stat -f "%m" "$f" 2>/dev/null) || continue
 
@@ -50,6 +51,9 @@ data.append({
 with open('$NOTIFICATIONS_FILE', 'w') as f:
     json.dump(data, f, indent=2)
 " 2>/dev/null
+
+        # macOS native notification — aparece inmediatamente en pantalla
+        osascript -e "display notification \"$WORKING\" with title \"AI Collab — $AI\" subtitle \"Proyecto: $PROJECT\" sound name \"Tink\"" 2>/dev/null
       fi
     done
 
