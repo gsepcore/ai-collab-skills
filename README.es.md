@@ -35,11 +35,81 @@ Cada IA escribe un log de sesión en Markdown dentro de `{raíz-del-proyecto}/.a
 tu-proyecto/
 └── .ai-collab/
     ├── PROTOCOL.md                   ← protocolo compartido (se crea automáticamente)
+    ├── inbox-all.md                  ← tareas broadcast para cualquier IA
+    ├── inbox-codex.md                ← tareas asignadas específicamente a Codex
+    ├── inbox-opencode.md             ← tareas asignadas específicamente a OpenCode
     ├── claude-20260511-143022.md     ← log de Claude Code
     ├── cursor-20260511-141500.md     ← log de Cursor
     ├── codex-20260511-141000.md      ← log de Codex
     └── opencode-20260511-140500.md   ← log de OpenCode
 ```
+
+---
+
+## Arquitectura: director, workers autónomos, aislamiento por proyecto
+
+Tres principios definen cómo funciona la skill. Léelos antes de instalar — explican el diseño y qué esperar.
+
+### 1. Claude Code es el director
+
+Tú interactúas con **Claude Code** como la IA orquestadora. Claude es la única asistente que:
+
+- Tiene hooks live `UserPromptSubmit` / `Stop` / `SessionStart` que surface notificaciones y regeneran `CONTEXT.md` automáticamente.
+- Posee los slash commands `/collab` — `/collab assign`, `/collab read`, `/collab monitor`, etc.
+- Escribe asignaciones de tareas en `.ai-collab/inbox-{ai}.md` para que los workers las recojan.
+
+Las otras IAs (Cursor, Windsurf, OpenCode, Codex, Copilot, Antigravity, Hermes, etc.) son **workers**. Participan leyendo su archivo de reglas y el directorio `.ai-collab/` — sin hooks, sin slash commands.
+
+Los workers *pueden* técnicamente leer logs de los demás y editar cualquier archivo, pero la delegación de tareas fluye desde Claude hacia afuera. Esto mantiene la coordinación centralizada y evita situaciones ambiguas de "quién decide aquí".
+
+### 2. Los workers reaccionan autónomamente a asignaciones
+
+Nunca tienes que copiar una tarea desde la ventana de Claude a la ventana de OpenCode. El protocolo lo maneja vía filesystem:
+
+```
+Tú → Claude: "refactoriza auth y que Codex publique v1.1.0"
+       │
+       ↓
+Claude escribe .ai-collab/inbox-codex.md con status: unread
+       │
+       ↓
+Más tarde: abres Codex en cualquier terminal (cuando quieras, sin prisa)
+       │
+       ↓
+Codex lee su archivo de reglas → lee inbox-codex.md → detecta status: unread
+       │
+       ↓
+Codex ejecuta la tarea → escribe codex-{timestamp}.md →
+       marca inbox status: done
+       │
+       ↓
+Daemon detecta el nuevo log → escribe entrada en ~/.ai-collab-notifications.json
+       │
+       ↓
+Próxima vez que envíes un prompt en Claude → hook UserPromptSubmit inyecta
+       "Codex acaba de publicar v1.1.0" en tu contexto →
+       Claude te avisa
+```
+
+Cada archivo de reglas de los workers (creado por `/collab setup` o pegado desde `references/protocol.md`) contiene dos comportamientos obligatorios:
+
+1. **Inbox check antes de cada respuesta** — releer `inbox-{ai}.md` e `inbox-all.md`, ejecutar cualquier tarea con `status: unread`, marcarla `status: done` vía escritura atómica.
+2. **Log automático después de cada respuesta** — guardar en `.ai-collab/{ai}-{timestamp}.md` con frontmatter y secciones estándar.
+
+Estas reglas son no negociables en cada snippet, así los workers se auto-orientan sin que el usuario tenga que recordarles nada.
+
+Cuando `/collab setup` corre en un proyecto nuevo, también siembra `.ai-collab/inbox-all.md` con una **tarea de bienvenida (onboarding)** — el primer worker que abra el proyecto recibe una instrucción inicial concreta en vez de un inbox vacío.
+
+### 3. Cada proyecto es su propia burbuja de aislamiento
+
+Todo vive dentro del proyecto. Si abres otro proyecto mañana → los contextos no se mezclan.
+
+- `.ai-collab/CONTEXT.md`, inboxes, logs, `PROTOCOL.md` — todo dentro de `{raíz-del-proyecto}/.ai-collab/`
+- `AGENTS.md`, `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md` — todos en la raíz del proyecto
+- El hook `SessionStart` resuelve el proyecto desde `git rev-parse --show-toplevel` por sesión
+- La cola global `~/.ai-collab-notifications.json` se **filtra por proyecto** al leer: el hook `UserPromptSubmit` solo inyecta notificaciones cuyo campo `project` coincide con el proyecto activo. Las notificaciones de otros proyectos se preservan intactas en el archivo hasta que abras Claude dentro de ese proyecto.
+
+**Modo cross-project** (opt-in): define `AI_COLLAB_CROSS_PROJECT=1` en tu entorno para ver notificaciones de todos los proyectos en un solo stream. El formato de salida se vuelve `[ai/project]` por línea para que puedas distinguirlas. Útil cuando orquestas trabajo a través de múltiples repos desde la misma sesión de Claude.
 
 ---
 
@@ -166,6 +236,20 @@ Vista rápida de cada IA activa en el proyecto — nombre, última actualizació
 /collab status
 ```
 
+### `/collab assign [nombre-ia] [descripción de la tarea]`
+
+Delega una tarea a otra IA sin salir de tu sesión de Claude. Escribe `.ai-collab/inbox-{nombre-ia}.md` con `status: unread`. La próxima vez que abras esa IA (en cualquier IDE o terminal, en el mismo directorio del proyecto), lee su archivo de reglas, recoge la tarea de su inbox, la ejecuta, y marca `status: done`.
+
+```
+/collab assign codex publica v1.2.0 en npm y crea el tag de release en GitHub
+/collab assign opencode agrega tests de integración al flujo de auth
+/collab assign all corran sus suites de tests y reporten fallos aquí
+```
+
+La tercera forma (`/collab assign all ...`) escribe en `inbox-all.md` para que cada worker la vea.
+
+**Por qué importa:** no tienes que copiar un prompt desde la ventana de Claude a la de Codex o la de OpenCode. El worker se auto-orienta desde su inbox en su primera respuesta después de que lo abras. Ver [Arquitectura](#arquitectura-director-workers-autónomos-aislamiento-por-proyecto) para el flujo completo.
+
 ### `/collab setup`
 
 Configuración inicial para un proyecto. Ejecutar una sola vez por proyecto.
@@ -174,6 +258,7 @@ Configuración inicial para un proyecto. Ejecutar una sola vez por proyecto.
 - La agrega a `.gitignore`
 - Copia `PROTOCOL.md` al directorio
 - Pregunta qué herramientas de IA usas y genera los snippets
+- **Siembra `inbox-all.md` con una tarea de onboarding** — el primer worker que abra este proyecto se auto-orienta automáticamente (preservado intacto si el archivo ya existe)
 - Escribe el primer log de Claude
 
 ```
@@ -322,6 +407,22 @@ launchctl load ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
 tail -f /tmp/ai-collab-daemon.log
 ```
 
+### Variables de entorno
+
+Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`, etc.) para personalizar el comportamiento entre sesiones.
+
+| Variable | Default | Qué controla |
+|----------|---------|--------------|
+| `AI_COLLAB_PROJECT` | _(auto-detectado)_ | Sobrescribe el nombre del proyecto activo. Por defecto el script usa el basename de `git rev-parse --show-toplevel`, con fallback al basename de `cwd`. |
+| `AI_COLLAB_CROSS_PROJECT` | _(off)_ | Define `1` para recibir notificaciones de **todos los proyectos** en un solo stream. La salida se vuelve `[ai/project]` por línea. Útil cuando orquestas múltiples repos desde una sola sesión de Claude. |
+| `AI_COLLAB_LOCK_TIMEOUT` | `3.0` | Cuánto tiempo (segundos) espera el reader al lock del daemon antes de rendirse silenciosamente. Las notificaciones se preservan en timeout — aparecerán en el siguiente prompt. |
+| `AI_COLLAB_MAX_AGE_HOURS` | `24` | Notificaciones más viejas que esto se descartan al leer. Subir si quieres historial más largo entre pausas. |
+| `AI_COLLAB_MAX_ITEMS` | `10` | Máximo de notificaciones inyectadas por prompt. El resto se resume como "...and N more". |
+| `AI_COLLAB_MAX_NOTE_CHARS` | `500` | Cap de caracteres por notificación. Lo más largo se trunca con `...[truncated]`. |
+| `AI_COLLAB_MAX_OUTPUT` | `4000` | Cap total de stdout. Techo duro protegiendo el contexto de Claude. |
+| `AI_COLLAB_YES` | _(off)_ | Define `1` para saltar confirmaciones del installer (útil en CI / instalaciones Dockerfile). |
+| `AI_COLLAB_NO_DAEMON` | _(off)_ | Define `1` para saltar el inicio del daemon durante install (feature de file-watching deshabilitada). |
+
 ### Desinstalar el daemon
 
 ```bash
@@ -401,7 +502,12 @@ El skill dejará de aparecer en las herramientas disponibles de Claude. Las carp
 | **Hermes** | Prompt de sistema / reglas | `examples/hermes.example` |
 | **Cualquier IA / agente** | Pega el snippet genérico | `examples/generic-any-ai.example` |
 
-Todos los snippets incluyen la **regla de log automático** — cada IA guarda su log después de cada respuesta por defecto, sin que el usuario lo pida. Esto es lo que permite la colaboración en tiempo real.
+Cada snippet incluye tres comportamientos built-in:
+- **Log automático** después de cada respuesta — cada IA guarda su log de sesión sin que el usuario lo pida
+- **Inbox check** al inicio de sesión Y antes de cada respuesta — los workers recogen tareas de `/collab assign` autónomamente
+- **Actualizaciones atómicas de status** — `status: unread` → `status: done` vía temp file + rename, sin escrituras parciales
+
+Esto es lo que permite la colaboración multi-AI en tiempo real y autónoma.
 
 ¿Quieres agregar soporte para una nueva herramienta? Ve [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -35,11 +35,81 @@ Each AI writes a Markdown session log to `{project-root}/.ai-collab/`. Any AI wi
 your-project/
 └── .ai-collab/
     ├── PROTOCOL.md                   ← shared protocol (auto-created)
+    ├── inbox-all.md                  ← broadcast tasks for any AI
+    ├── inbox-codex.md                ← tasks assigned specifically to Codex
+    ├── inbox-opencode.md             ← tasks assigned specifically to OpenCode
     ├── claude-20260511-143022.md     ← Claude Code's log
     ├── cursor-20260511-141500.md     ← Cursor's log
     ├── codex-20260511-141000.md      ← Codex's log
     └── opencode-20260511-140500.md   ← OpenCode's log
 ```
+
+---
+
+## Architecture: director, autonomous workers, project isolation
+
+Three principles make this skill work the way it does. Read these before installing — they explain the design and what to expect.
+
+### 1. Claude Code is the director
+
+You interact with **Claude Code** as the orchestrating AI. Claude is the only assistant that:
+
+- Has live `UserPromptSubmit` / `Stop` / `SessionStart` hooks that surface notifications and regenerate `CONTEXT.md` automatically.
+- Owns the `/collab` slash commands — `/collab assign`, `/collab read`, `/collab monitor`, etc.
+- Writes task assignments to `.ai-collab/inbox-{ai}.md` for the worker AIs to pick up.
+
+The other AIs (Cursor, Windsurf, OpenCode, Codex, Copilot, Antigravity, Hermes, etc.) are **workers**. They participate by reading their rules file and the `.ai-collab/` directory — no hooks, no slash commands.
+
+Worker AIs *can* technically read each other's logs and edit any file too, but task delegation flows from Claude outward. This keeps coordination centralized and avoids ambiguous "who owns this decision" situations.
+
+### 2. Workers react autonomously to assignments
+
+You never have to copy a task from Claude's window into OpenCode's window. The protocol handles it via the filesystem:
+
+```
+You → Claude: "refactor auth and have Codex publish v1.1.0"
+       │
+       ↓
+Claude writes .ai-collab/inbox-codex.md with status: unread
+       │
+       ↓
+Later: you open Codex in any terminal (when you want, no rush)
+       │
+       ↓
+Codex reads its rules file → reads inbox-codex.md → status: unread detected
+       │
+       ↓
+Codex executes the task → writes opencode-{timestamp}.md log →
+       marks inbox status: done
+       │
+       ↓
+Daemon detects the new log → writes ~/.ai-collab-notifications.json entry
+       │
+       ↓
+Next time you send any prompt in Claude → UserPromptSubmit hook injects
+       "Codex just published v1.1.0" into your context →
+       Claude tells you it's done
+```
+
+Every worker AI's rules file (created by `/collab setup` or pasted from `references/protocol.md`) contains two mandatory behaviors:
+
+1. **Inbox check before every response** — re-read `inbox-{ai}.md` and `inbox-all.md`, execute any `status: unread` task, mark it `status: done` via atomic write.
+2. **Automatic log after every response** — save to `.ai-collab/{ai}-{timestamp}.md` with frontmatter and standard sections.
+
+These are non-negotiable rules in every snippet so workers self-orient without the user prompting.
+
+When `/collab setup` runs on a fresh project, it also seeds `.ai-collab/inbox-all.md` with a **welcome onboarding task** — the first worker AI to open the project gets a concrete first instruction instead of an empty inbox.
+
+### 3. Each project is its own isolation bubble
+
+Everything lives inside the project. Open a different project tomorrow → contexts do not mix.
+
+- `.ai-collab/CONTEXT.md`, inboxes, logs, `PROTOCOL.md` — all inside `{project-root}/.ai-collab/`
+- `AGENTS.md`, `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md` — all in the project root
+- The `SessionStart` hook resolves the project from `git rev-parse --show-toplevel` per session
+- The `~/.ai-collab-notifications.json` global queue is **filtered by project** at read time: the `UserPromptSubmit` hook only injects notifications whose `project` field matches the active project. Notifications from other projects are preserved untouched in the file until you open Claude inside that project.
+
+**Cross-project mode** (opt-in): set `AI_COLLAB_CROSS_PROJECT=1` in your environment to see notifications from all projects in one stream. The output format then becomes `[ai/project]` per line so you can tell them apart. Useful when you intentionally orchestrate work across multiple repos from the same Claude session.
 
 ---
 
@@ -143,6 +213,20 @@ One-line overview of every AI active on this project — name, last update, and 
 /collab status
 ```
 
+### `/collab assign [ai-name] [task description]`
+
+Delegate a task to another AI without leaving your Claude session. Writes `.ai-collab/inbox-{ai-name}.md` with `status: unread`. The next time you open that AI (in any IDE or terminal, in the same project directory), it reads its rules file, picks up the task from its inbox, executes it, and marks it `status: done`.
+
+```
+/collab assign codex publish v1.2.0 to npm and tag the release on GitHub
+/collab assign opencode add integration tests for the auth flow
+/collab assign all run your test suites and report failures here
+```
+
+The third form (`/collab assign all ...`) writes to `inbox-all.md` so every worker AI sees it.
+
+**Why this matters:** you do not have to copy a prompt from Claude's window into Codex's or OpenCode's window. The worker AI self-orients from its inbox on its first response after you open it. See [Architecture](#architecture-director-autonomous-workers-project-isolation) for the full flow.
+
 ### `/collab setup`
 
 First-time setup for a project. Run this once per project.
@@ -151,6 +235,7 @@ First-time setup for a project. Run this once per project.
 - Adds it to `.gitignore`
 - Copies `PROTOCOL.md` into the directory
 - Asks which AI tools you use and generates the rules snippets
+- **Seeds `inbox-all.md` with a welcome onboarding task** — first worker AI to open this project self-orients automatically (preserved unchanged if file already exists)
 - Writes Claude's first log entry
 
 ```
@@ -202,13 +287,14 @@ Remove stale session logs.
 
 > **This is all set up automatically by the installer.** No manual steps.
 
-Three components keep Claude informed 24/7:
+Four components keep Claude informed 24/7:
 
-1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Auto-starts on login, survives sleep and reboots.
-2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight message queue. The daemon writes to it; the hooks read from it.
-3. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
+1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
+2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
+3. **Notification reader script** — `~/.claude/ai-collab-check-notifications.py` is invoked by the `UserPromptSubmit` hook. It uses an `fcntl` lock to coordinate with the daemon, **filters notifications by active project**, caps output to 10 items / 500 chars per message / 4 KB total, drops notifications older than 24 h, defends against malformed JSON, and always exits 0 (never blocks your prompt). All limits are tunable — see [Environment variables](#environment-variables) below.
+4. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
-   - `UserPromptSubmit` — shows pending notifications before each message, zero token cost at idle
+   - `UserPromptSubmit` — runs `ai-collab-check-notifications.py` to show pending notifications for the **active project only**, zero token cost at idle
    - `Stop` — auto-regenerates `CONTEXT.md` after every Claude response using a Python script
 
 ### Manage the daemon
@@ -226,6 +312,22 @@ launchctl unload ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
 # Restart
 launchctl load ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
 ```
+
+### Environment variables
+
+All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to tune behavior across sessions.
+
+| Variable | Default | What it controls |
+|----------|---------|-----------------|
+| `AI_COLLAB_PROJECT` | _(auto-detected)_ | Override active project name. By default the script uses `git rev-parse --show-toplevel` basename, falling back to `cwd` basename. |
+| `AI_COLLAB_CROSS_PROJECT` | _(off)_ | Set to `1` to receive notifications from **all projects** in one stream. Output becomes `[ai/project]` per line. Useful when you orchestrate multiple repos from one Claude session. |
+| `AI_COLLAB_LOCK_TIMEOUT` | `3.0` | How long (seconds) the reader waits for the daemon's file lock before giving up silently. Notifications are preserved on timeout — they will surface on the next prompt. |
+| `AI_COLLAB_MAX_AGE_HOURS` | `24` | Notifications older than this are dropped on read. Tune up if you want longer history across long breaks. |
+| `AI_COLLAB_MAX_ITEMS` | `10` | Maximum number of notifications to inject per prompt. The rest are summarized as "...and N more". |
+| `AI_COLLAB_MAX_NOTE_CHARS` | `500` | Per-notification character cap. Anything longer is truncated with `...[truncated]`. |
+| `AI_COLLAB_MAX_OUTPUT` | `4000` | Total stdout character cap. Hard ceiling protecting Claude's context. |
+| `AI_COLLAB_YES` | _(off)_ | Set to `1` to skip installer confirmation prompts (useful in CI / Dockerfile installs). |
+| `AI_COLLAB_NO_DAEMON` | _(off)_ | Set to `1` to skip starting the background daemon during install (file-watching feature disabled). |
 
 ---
 
@@ -294,7 +396,12 @@ rm -rf {project-root}/.ai-collab/
 | **Hermes** | System prompt / rules | `examples/hermes.example` |
 | **Any AI / Any agent** | Paste the generic snippet | `examples/generic-any-ai.example` |
 
-Every snippet includes the **automatic log rule** — each AI saves its log after every response by default, without the user asking. This is what enables real-time collaboration.
+Every snippet includes three built-in behaviors:
+- **Automatic log** after every response — each AI saves its session log without the user asking
+- **Inbox check** at session start AND before every response — workers pick up `/collab assign` tasks autonomously
+- **Atomic status updates** — `status: unread` → `status: done` via temp file + rename, no torn writes
+
+This is what enables real-time, autonomous multi-AI collaboration.
 
 Want to add support for a new tool? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
