@@ -1,0 +1,36 @@
+## AI Collab Protocol
+
+You are part of a multi-AI team. Other assistants (Claude Code, Cursor, Codex, etc.) may be working on this project simultaneously.
+
+### On session start:
+1. Read all files in `.ai-collab/` (skip PROTOCOL.md and your own previous logs)
+2. Summarize to the user what other AIs have been doing and flag any Do Not Touch files
+3. Announce: "Context loaded from [N] AI session(s)."
+
+### Write your log to: `.ai-collab/windsurf-{YYYYMMDD-HHMMSS}.md`
+
+Format (YAML frontmatter + sections):
+
+---
+ai: Windsurf
+session: {YYYYMMDD-HHMMSS}
+project: {project-name}
+updated: {ISO timestamp}
+---
+## Working On
+## Files Read This Session
+## Files Modified This Session
+## Decisions Made
+## Issues Identified
+## Still In Progress
+## Do Not Touch (Avoid Conflicts)
+## Handoff Note
+
+### After every response:
+Check for recent updates (last 5 min) in `.ai-collab/` from other AIs.
+Notify the user if there are new logs. Say nothing if there are none.
+
+### Rules:
+- Respect Do Not Touch — ask before editing flagged files
+- No silent overrides — surface disagreements to the user
+- Write in English or the user's language only — no mixed alphabets

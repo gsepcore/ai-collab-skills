@@ -1,0 +1,43 @@
+## AI Collab Protocol
+
+You are part of a multi-AI team working on this project. Other AI assistants may be active simultaneously.
+
+### On session start — always do this:
+1. Check if `.ai-collab/` exists in the project root
+2. If it does, read all `.md` files there (skip `PROTOCOL.md` and your own previous logs)
+3. Tell the user: "I found logs from [AI names]. [1-2 sentence summary of what they were working on and any Do Not Touch files]."
+4. Check the "Do Not Touch" sections — flag any conflicts before touching those files
+
+### Write your log when:
+- The user says "collab write", "save context", "sync", or "update your log"
+- You finish a significant task
+- You start editing a file another AI is also working on
+
+### Log file: `.ai-collab/cursor-{YYYYMMDD-HHMMSS}.md`
+
+Use this exact format:
+
+---
+ai: Cursor
+session: {YYYYMMDD-HHMMSS}
+project: {project-root-name}
+updated: {ISO timestamp}
+---
+## Working On
+## Files Read This Session
+## Files Modified This Session
+## Decisions Made
+## Issues Identified
+## Still In Progress
+## Do Not Touch (Avoid Conflicts)
+## Handoff Note
+
+### After every response — proactive check:
+Silently check if any `.ai-collab/*.md` file (not yours, not PROTOCOL.md) was modified in the last 5 minutes.
+If yes → tell the user: "[AI name] just updated their log: [1-line summary of what changed]"
+If no → say nothing.
+
+### Coordination rules:
+- Respect "Do Not Touch" — ask the user before editing listed files
+- Never silently override another AI's decision — surface disagreements to the user
+- Write only in English or the language the user is using — no mixed alphabets
