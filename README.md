@@ -173,11 +173,22 @@ curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/inst
 launchctl load ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
 ```
 
-**Step 3 — Add the hook to your project:**
+**Step 3 — Add the hooks to your project:**
 Add this to `.claude/settings.local.json` in your project (merge with existing settings):
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd); CTX=\"$ROOT/.ai-collab/CONTEXT.md\"; NOTIF=\"$HOME/.ai-collab-notifications.json\"; if [ -f \"$CTX\" ]; then echo \"[AI-COLLAB SESSION RECOVERY]\"; echo \"Project: $(basename $ROOT)\"; echo \"---\"; cat \"$CTX\"; echo \"---\"; fi; if [ -f \"$NOTIF\" ]; then CONTENT=$(cat \"$NOTIF\"); if [ \"$CONTENT\" != \"[]\" ] && [ -n \"$CONTENT\" ]; then echo \"[PENDING NOTIFICATIONS FROM OTHER AIs]\"; echo \"$CONTENT\"; echo \"[]\" > \"$NOTIF\"; fi; fi'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -193,7 +204,9 @@ Add this to `.claude/settings.local.json` in your project (merge with existing s
 }
 ```
 
-After this setup, every time you write something in Claude Code, it automatically shows any pending notifications from other AIs — without polling, without cron jobs, without consuming tokens.
+**`SessionStart` hook** — fires automatically when you open a new Claude Code session. Reads `CONTEXT.md` and injects full project context before you type a single word. Survives battery death, reboots, and session crashes.
+
+**`UserPromptSubmit` hook** — fires on every message. Shows pending notifications from other AIs instantly, zero token cost at idle.
 
 ### Manage the daemon
 
