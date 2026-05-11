@@ -118,6 +118,24 @@ First-time setup for a project. Run this once per project.
 /collab setup
 ```
 
+### `/collab summary`
+
+Generate `.ai-collab/CONTEXT.md` — a clean synthesis of all AI logs into a single onboarding file.
+
+This is the **context bootstrapping** command. Run it after any significant session. Any new AI joining the project reads this one file and is fully up to speed in seconds — what was built, what decisions were made, what files were touched, known bugs, active locks, and a one-paragraph brief.
+
+```
+/collab summary
+```
+
+**The flow:**
+```
+All AI sessions → /collab summary → CONTEXT.md
+New AI joins   → reads CONTEXT.md → instant full context
+```
+
+---
+
 ### `/collab clear`
 
 Remove stale session logs.

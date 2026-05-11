@@ -142,6 +142,57 @@ updated: [ISO 8601 timestamp]
 
 ---
 
+## Command: /collab summary
+
+Generate a `CONTEXT.md` file — a clean, structured synthesis of all AI logs in the project. This is the onboarding document for any new AI joining the project. One file, full picture, no reading required.
+
+**Steps:**
+1. Find project root
+2. Read ALL `.md` files in `.ai-collab/` except `PROTOCOL.md` and `CONTEXT.md` itself
+3. Extract and deduplicate across all logs:
+   - All "Working On" sections → what has been done
+   - All "Decisions Made" → key decisions and reasoning
+   - All "Files Modified" → what changed and why
+   - All "Issues Identified" → known bugs and problems
+   - All "Do Not Touch" → files currently locked
+   - All "Handoff Notes" → critical context per AI
+4. Write `.ai-collab/CONTEXT.md` using this format:
+
+```markdown
+# Project Context — AI Collaboration Summary
+Generated: {ISO timestamp}
+Project: {project name}
+Active AIs: {list of AIs that have written logs}
+
+## What has been done
+[Chronological summary of work across all AIs — what was built, fixed, analyzed]
+
+## Key Decisions
+[All decisions from all logs, deduplicated, with reasoning]
+
+## Current State of the Codebase
+[Files modified by each AI and what changed]
+
+## Known Issues
+[All bugs and problems identified, with file:line when available]
+
+## Do Not Touch (Active Locks)
+[All files currently locked by any AI, with reason]
+
+## Context for New AI — Start Here
+[A paragraph synthesizing everything above into a concise onboarding brief.
+What is this project? What stage is it at? What should the next AI know before touching anything?]
+```
+
+5. Confirm: `CONTEXT.md written → .ai-collab/CONTEXT.md`
+6. Tell the user: "Any new AI can now read `.ai-collab/CONTEXT.md` and have full project context instantly."
+
+**Edge cases:**
+- If no logs exist yet → say "No AI logs found. Run `/collab write` first."
+- If only your own logs exist → generate from those, note it's single-AI context
+
+---
+
 ## Coordination rules (remind other AIs of these)
 
 - **Do Not Touch is binding** — if a file appears in another AI's Do Not Touch section, ask the user before editing it

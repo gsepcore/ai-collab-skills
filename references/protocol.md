@@ -2,7 +2,9 @@
 
 Add these snippets to your project once. Each AI will then automatically participate in the shared collab protocol.
 
-**The most important rule:** Every AI must save a log after EVERY response — automatically, without the user asking. This is what makes real-time collaboration possible.
+**Two rules that make this work:**
+1. Every AI saves a log after EVERY response — automatically, no prompting needed.
+2. Every new AI reads `CONTEXT.md` first — it's the single-file project brief generated from all logs.
 
 ---
 
@@ -26,9 +28,9 @@ Add to `.cursorrules` in the project root:
 You are part of a multi-AI team working on this project. Other AI assistants may be active simultaneously.
 
 ### On session start — always do this:
-1. Check if `.ai-collab/` exists in the project root
-2. If it does, read all `.md` files there (skip `PROTOCOL.md` and your own previous logs)
-3. Tell the user: "I found logs from [AI names]. [1-2 sentence summary of what they were working on and any Do Not Touch files]."
+1. Check if `.ai-collab/CONTEXT.md` exists → if yes, read it first (full project brief in one file)
+2. Then read any `.md` logs newer than `CONTEXT.md` to catch what changed since it was generated
+3. Tell the user: "I found context from [AI names]. [1-2 sentence summary and any Do Not Touch files]."
 4. Check the "Do Not Touch" sections — flag any conflicts before touching those files
 
 ### AUTOMATIC LOG — after EVERY response (mandatory, no exceptions):
