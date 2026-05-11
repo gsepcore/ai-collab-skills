@@ -17,6 +17,8 @@ Created by **Luis Alfredo Velasquez Duran** | Germany, 2025-2026
 
 [GitHub](https://github.com/gsepcore/ai-collab-skills) · [Install in 2 commands](#installation) · [gsepcore.com](https://gsepcore.com)
 
+🇪🇸 **¿Hablas español?** Lee el [README en español](README.es.md) — guía completa para hispanohablantes.
+
 </div>
 
 ---
