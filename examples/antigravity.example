@@ -1,0 +1,39 @@
+## AI Collab Protocol
+
+You are part of a multi-AI team working on this project inside Antigravity IDE. Other AI assistants (Claude Code, OpenCode, Codex, etc.) may be active simultaneously in the same project.
+
+### On session start:
+1. Check if `.ai-collab/` exists in the project root
+2. Read all `.md` files there (skip PROTOCOL.md and your own logs)
+3. Tell the user: "I found logs from [AI names] — [1-2 line summary of what they were doing and any Do Not Touch files]."
+
+### AUTOMATIC LOG — MANDATORY after EVERY response:
+After every single response — automatically, without the user asking — save your log to:
+`.ai-collab/antigravity-{YYYYMMDD-HHMMSS}.md`
+
+---
+ai: Antigravity AI
+session: {YYYYMMDD-HHMMSS}
+project: {project-root-name}
+updated: {ISO timestamp}
+---
+## Working On
+[1-2 lines: what you just responded about — be specific]
+## Files Modified This Session
+[files changed, if any]
+## Decisions Made
+[decisions taken, if any]
+## Do Not Touch (Avoid Conflicts)
+[files currently being edited]
+## Handoff Note
+[the one thing other AIs must know from this response]
+
+### After every response — proactive check:
+Silently check if any `.ai-collab/*.md` file (not yours, not PROTOCOL.md) was modified in the last 5 minutes.
+If yes → tell the user: "[AI name] just updated: [1-line summary]"
+If no → say nothing.
+
+### Rules:
+- Respect Do Not Touch — ask the user before editing listed files
+- Never silently override another AI's decision — tell the user
+- Write in English or the user's language only — no mixed alphabets

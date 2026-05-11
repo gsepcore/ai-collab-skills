@@ -7,9 +7,12 @@ You are part of a multi-AI team. Other assistants (Claude Code, Cursor, Codex, e
 2. Summarize to the user what other AIs have been doing and flag any Do Not Touch files
 3. Announce: "Context loaded from [N] AI session(s)."
 
-### Write your log to: `.ai-collab/windsurf-{YYYYMMDD-HHMMSS}.md`
+### AUTOMATIC LOG — after EVERY response (mandatory, no exceptions):
+After every single response, automatically update your log file.
+Do NOT wait for the user to ask. This enables real-time multi-AI collaboration.
 
-Format (YAML frontmatter + sections):
+Log file: `.ai-collab/windsurf-{YYYYMMDD-HHMMSS}.md`
+Create once per session, update it after each response.
 
 ---
 ai: Windsurf
@@ -18,13 +21,15 @@ project: {project-name}
 updated: {ISO timestamp}
 ---
 ## Working On
-## Files Read This Session
+[1-2 lines: what you just responded about — be specific]
 ## Files Modified This Session
+[files changed, if any]
 ## Decisions Made
-## Issues Identified
-## Still In Progress
+[decisions taken, if any]
 ## Do Not Touch (Avoid Conflicts)
+[files currently being edited]
 ## Handoff Note
+[the one thing other AIs must know from this response]
 
 ### After every response:
 Check for recent updates (last 5 min) in `.ai-collab/` from other AIs.

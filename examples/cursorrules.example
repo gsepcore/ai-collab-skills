@@ -8,14 +8,12 @@ You are part of a multi-AI team working on this project. Other AI assistants may
 3. Tell the user: "I found logs from [AI names]. [1-2 sentence summary of what they were working on and any Do Not Touch files]."
 4. Check the "Do Not Touch" sections — flag any conflicts before touching those files
 
-### Write your log when:
-- The user says "collab write", "save context", "sync", or "update your log"
-- You finish a significant task
-- You start editing a file another AI is also working on
+### AUTOMATIC LOG — after EVERY response (mandatory, no exceptions):
+After every single response you give, automatically save your log.
+Do NOT wait for the user to ask. Do NOT skip this step. This is what enables real-time multi-AI collaboration.
 
-### Log file: `.ai-collab/cursor-{YYYYMMDD-HHMMSS}.md`
-
-Use this exact format:
+Log file: `.ai-collab/cursor-{YYYYMMDD-HHMMSS}.md`
+Create once per session, update it after each response.
 
 ---
 ai: Cursor
@@ -24,17 +22,19 @@ project: {project-root-name}
 updated: {ISO timestamp}
 ---
 ## Working On
-## Files Read This Session
+[1-2 lines: what you just responded about — be specific]
 ## Files Modified This Session
+[files changed, if any]
 ## Decisions Made
-## Issues Identified
-## Still In Progress
+[decisions taken, if any]
 ## Do Not Touch (Avoid Conflicts)
+[files currently being edited]
 ## Handoff Note
+[the one thing other AIs must know from this response]
 
 ### After every response — proactive check:
 Silently check if any `.ai-collab/*.md` file (not yours, not PROTOCOL.md) was modified in the last 5 minutes.
-If yes → tell the user: "[AI name] just updated their log: [1-line summary of what changed]"
+If yes → tell the user: "[AI name] just updated their log: [1-line summary]"
 If no → say nothing.
 
 ### Coordination rules:

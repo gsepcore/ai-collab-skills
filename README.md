@@ -260,14 +260,19 @@ The skill will no longer appear in Claude's available skills. Any `.ai-collab/` 
 
 ## Supported AI tools
 
-| Tool | Rules file | Example snippet |
-|------|-----------|----------------|
+| Tool | Rules file | Example |
+|------|-----------|---------|
 | **Cursor** | `.cursorrules` | `examples/cursorrules.example` |
 | **Windsurf** | `.windsurfrules` | `examples/windsurfrules.example` |
-| **GitHub Copilot** | `.github/copilot-instructions.md` | `references/protocol.md` → Copilot section |
-| **OpenCode** | System prompt / rules | `references/protocol.md` → OpenCode section |
+| **Antigravity IDE** | System prompt / rules | `examples/antigravity.example` |
+| **VS Code (Copilot)** | `.github/copilot-instructions.md` | `examples/vscode-copilot.example` |
+| **GitHub Copilot** | `.github/copilot-instructions.md` | `examples/vscode-copilot.example` |
+| **OpenCode / Minimax** | System prompt / rules | `references/protocol.md` → OpenCode section |
 | **Codex / GPT** | System prompt | `references/protocol.md` → Codex section |
-| **Any AI** | Paste the generic snippet | `references/protocol.md` → Generic section |
+| **Hermes** | System prompt / rules | `examples/hermes.example` |
+| **Any AI / Any agent** | Paste the generic snippet | `examples/generic-any-ai.example` |
+
+Every snippet includes the **automatic log rule** — each AI saves its log after every response by default, without the user asking. This is what enables real-time collaboration.
 
 Want to add support for a new tool? See [CONTRIBUTING.md](CONTRIBUTING.md).
 

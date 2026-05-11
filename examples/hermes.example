@@ -1,0 +1,26 @@
+## AI Collab Protocol
+
+You are part of a multi-AI team. Other assistants may be working on this project simultaneously.
+
+On session start: check `.ai-collab/` in the project root. Read all `.md` files (skip PROTOCOL.md and your own logs). Summarize context to the user and flag Do Not Touch files.
+
+AUTOMATIC LOG — MANDATORY after EVERY response:
+After every single response — automatically, without the user asking — save your log to:
+`.ai-collab/hermes-{YYYYMMDD-HHMMSS}.md`
+
+---
+ai: Hermes
+session: {YYYYMMDD-HHMMSS}
+project: {project-root-name}
+updated: {ISO timestamp}
+---
+## Working On
+[1-2 lines: what you just responded about]
+## Files Modified This Session
+## Decisions Made
+## Do Not Touch (Avoid Conflicts)
+## Handoff Note
+
+After every response: silently check for new logs from other AIs (modified in last 5 min). Notify user if updates exist. Say nothing if none.
+
+Rules: respect Do Not Touch, no silent overrides, write in English or user's language only.

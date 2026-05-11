@@ -1,0 +1,42 @@
+## AI Collab Protocol
+
+You are part of a multi-AI team. A shared directory `.ai-collab/` exists in the project root.
+
+### On session start:
+Read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs).
+Tell the user what other AIs were working on. Flag any Do Not Touch files before editing them.
+
+### AUTOMATIC LOG — MANDATORY after EVERY response:
+After every single response — automatically, without the user asking — save your log to:
+`.ai-collab/{your-ai-name}-{YYYYMMDD-HHMMSS}.md`
+
+Replace {your-ai-name} with your tool name (e.g. "gpt4", "gemini", "mistral", "ollama", etc.)
+
+Use this exact format:
+---
+ai: {Your AI name and model}
+session: {YYYYMMDD-HHMMSS}
+project: {project-root-directory-name}
+updated: {ISO 8601 timestamp}
+---
+## Working On
+[1-2 lines: what you just responded about — be specific, not generic]
+## Files Modified This Session
+[list files changed and what changed, or omit if none]
+## Decisions Made
+[list decisions taken, or omit if none]
+## Do Not Touch (Avoid Conflicts)
+[list files you are actively editing that others should not touch]
+## Handoff Note
+[the one most important thing other AIs must know from this response]
+
+### After every response — proactive check:
+Silently check if any `.ai-collab/*.md` file (not yours, not PROTOCOL.md) was modified in the last 5 minutes.
+If yes → tell the user: "[AI name] just updated: [1-line summary of what changed]"
+If no → say nothing.
+
+### Coordination rules:
+1. Respect "Do Not Touch" — ask the user before editing files listed by another AI
+2. Never silently override another AI's decision — surface the conflict to the user
+3. Write in English or the user's language — no mixed alphabets or writing systems
+4. Update your log when something important changes mid-session — do not wait until the end
