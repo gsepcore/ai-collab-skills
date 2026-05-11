@@ -203,6 +203,40 @@ What is this project? What stage is it at? What should the next AI know before t
 
 ---
 
+## Command: /collab assign [ai-name] [task description]
+
+Write a task directly to another AI's inbox so it executes automatically on their next response — without the user having to tell them.
+
+**Inbox files:**
+- `.ai-collab/inbox-{ai-name}.md` — task for a specific AI (e.g. `inbox-opencode.md`, `inbox-codex.md`)
+- `.ai-collab/inbox-all.md` — broadcast to all AIs
+
+**Steps:**
+1. Find project root
+2. Write `.ai-collab/inbox-{ai-name}.md` with this format:
+```
+---
+from: Claude Code
+to: {ai-name}
+priority: high | normal | low
+updated: {ISO timestamp}
+status: unread
+---
+## Task
+{detailed task description with files, constraints, and exit criteria}
+```
+3. Confirm: "Task written to inbox-{ai-name}.md — {ai-name} will pick it up on next response"
+
+**For broadcast to all AIs:**
+```
+/collab assign all [task]
+→ writes to inbox-all.md
+```
+
+**How other AIs respond:** Every AI checks `inbox-{its-name}.md` and `inbox-all.md` at the start of every response. If `status: unread`, it executes the task and marks it `status: done`.
+
+---
+
 ## Command: /collab monitor
 
 Start a zero-cost background monitor that watches `.ai-collab/` and notifies you the instant another AI writes or updates their log.

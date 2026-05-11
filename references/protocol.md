@@ -2,9 +2,10 @@
 
 Add these snippets to your project once. Each AI will then automatically participate in the shared collab protocol.
 
-**Two rules that make this work:**
+**Three rules that make this work:**
 1. Every AI saves a log after EVERY response — automatically, no prompting needed.
-2. Every new AI reads `CONTEXT.md` first — it's the single-file project brief generated from all logs.
+2. Every new AI reads `CONTEXT.md` first — the single-file project brief from all logs.
+3. Every AI checks its inbox on every response — `inbox-{ai-name}.md` and `inbox-all.md` for direct task assignments from the orchestrating AI.
 
 ---
 
@@ -30,8 +31,9 @@ You are part of a multi-AI team working on this project. Other AI assistants may
 ### On session start — always do this:
 1. Check if `.ai-collab/CONTEXT.md` exists → if yes, read it first (full project brief in one file)
 2. Then read any `.md` logs newer than `CONTEXT.md` to catch what changed since it was generated
-3. Tell the user: "I found context from [AI names]. [1-2 sentence summary and any Do Not Touch files]."
-4. Check the "Do Not Touch" sections — flag any conflicts before touching those files
+3. Read `.ai-collab/inbox-cursor.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks now
+4. Tell the user: "I found context from [AI names]. [1-2 sentence summary and any Do Not Touch files]."
+5. Check the "Do Not Touch" sections — flag any conflicts before touching those files
 
 ### AUTOMATIC LOG — after EVERY response (mandatory, no exceptions):
 After every single response you give, automatically save your log.
