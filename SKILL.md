@@ -84,8 +84,37 @@ First-time setup on a new project.
 5. Detect which AI tools the project uses:
    - Ask: "Which other AI tools are working on this project? (Cursor / Windsurf / Copilot / OpenCode / Codex / Other)"
    - For each confirmed tool, read `references/protocol.md` → extract the snippet for that tool → append to the relevant rules file (`.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`, etc.) or create it
-6. Run `/collab write` immediately to log Claude's current context
-7. Summarize what was created
+6. **Create onboarding welcome** — if `.ai-collab/inbox-all.md` does NOT already exist, write it with this content so the first worker AI to open this project self-orients without the user prompting:
+   ```
+   ---
+   from: Claude Code (setup)
+   to: all
+   priority: normal
+   updated: {ISO timestamp}
+   status: unread
+   ---
+
+   ## Welcome to the multi-AI team for this project
+
+   You are joining a shared collaboration protocol. The orchestrating director
+   is Claude Code. Other AIs may already be active on this codebase.
+
+   ### First-response checklist
+   1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise `.ai-collab/PROTOCOL.md`.
+   2. Check your specific inbox: `.ai-collab/inbox-{your-slug}.md` (slug = lowercase tool name).
+   3. Save your first session log at `.ai-collab/{your-slug}-{YYYYMMDD-HHMMSS}.md`.
+   4. Tell the user what role you are taking and what you read from existing logs.
+
+   ### Project context
+   - Project: {project-name}
+   - Director: Claude Code
+   - Coordination: filesystem-based via `.ai-collab/`
+
+   When done, change `status: unread` → `status: done` via atomic write.
+   ```
+   If `inbox-all.md` already exists, do NOT overwrite — tell the user it was preserved.
+7. Run `/collab write` immediately to log Claude's current context
+8. Summarize what was created — explicitly mention that the onboarding inbox is ready and that any worker AI opening this project will self-orient on first response
 
 ---
 

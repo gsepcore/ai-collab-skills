@@ -309,6 +309,45 @@ if [[ -n "$PROJECT_ROOT" ]]; then
       green "Created .gitignore with .ai-collab/"
     fi
 
+    # Onboarding welcome — give the first AI that opens this project
+    # a concrete unread task so the protocol kicks in automatically.
+    WELCOME_FILE="$COLLAB_DIR/inbox-all.md"
+    if [[ ! -f "$WELCOME_FILE" ]]; then
+      PROJECT_NAME=$(basename "$PROJECT_ROOT")
+      NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+      cat > "$WELCOME_FILE" << INBOX
+---
+from: Claude Code (setup)
+to: all
+priority: normal
+updated: $NOW
+status: unread
+---
+
+## Welcome to the multi-AI team for this project
+
+You are joining a shared collaboration protocol. The orchestrating director
+is Claude Code. Other AIs may already be active on this codebase.
+
+### First-response checklist
+1. Read \`.ai-collab/CONTEXT.md\` if it exists; otherwise read \`.ai-collab/PROTOCOL.md\`.
+2. Check your specific inbox: \`.ai-collab/inbox-{your-slug}.md\` (slug = lowercase tool name, e.g. \`cursor\`, \`opencode\`, \`codex\`, \`windsurf\`, \`copilot\`).
+3. Save your first session log at \`.ai-collab/{your-slug}-{YYYYMMDD-HHMMSS}.md\` using the standard frontmatter + sections format (see PROTOCOL.md).
+4. Tell the user what role you are taking in the team and what you read from existing logs.
+
+### Project context
+- Project: $PROJECT_NAME
+- Project root: $PROJECT_ROOT
+- Director: Claude Code
+- Coordination: filesystem-based via \`.ai-collab/\`
+
+When you have completed the onboarding, change \`status: unread\` → \`status: done\` via atomic write (temp file + rename).
+INBOX
+      green "Onboarding inbox-all.md created — first AI to open this project will self-orient"
+    else
+      info "inbox-all.md already present — onboarding message not overwritten"
+    fi
+
     green ".ai-collab/ ready → $COLLAB_DIR/"
   fi
 else
