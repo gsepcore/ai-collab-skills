@@ -53,7 +53,12 @@ with open('$NOTIFICATIONS_FILE', 'w') as f:
 " 2>/dev/null
 
         # macOS native notification — aparece inmediatamente en pantalla
-        osascript -e "display notification \"$WORKING\" with title \"AI Collab — $AI\" subtitle \"Proyecto: $PROJECT\" sound name \"Tink\"" 2>/dev/null
+        ICON="$HOME/.claude/ai-collab-icon.png"
+        if [ -f "$ICON" ]; then
+          osascript -e "display notification \"$WORKING\" with title \"AI Collab — $AI\" subtitle \"Proyecto: $PROJECT\" sound name \"Tink\"" 2>/dev/null
+        else
+          osascript -e "display notification \"$WORKING\" with title \"AI Collab — $AI\" subtitle \"Proyecto: $PROJECT\" sound name \"Tink\"" 2>/dev/null
+        fi
       fi
     done
 

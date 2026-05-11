@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="AI Collab Skill" width="160" />
+</p>
+
 # AI Collab Skill
 
 **A Claude Code skill that lets multiple AI assistants work on the same project simultaneously — and actually see each other.**
