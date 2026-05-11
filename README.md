@@ -61,11 +61,52 @@ This will:
 
 ### Step 3 — Set up other AIs
 
-Tell each other AI assistant:
+Paste this command into each other AI at the start of their session. Replace the paths with your actual project path:
 
-> *"Read `.ai-collab/PROTOCOL.md` in this project and write your session log following the protocol."*
+```
+You are part of a multi-AI team working on this project simultaneously.
 
-Or paste the ready-made snippets from `examples/` directly into their rules files. See the [Supported AI Tools](#supported-ai-tools) table below.
+STEP 1 — Read these files now:
+- {project-root}/.ai-collab/PROTOCOL.md
+- {project-root}/.ai-collab/CONTEXT.md
+- Any other .md file in {project-root}/.ai-collab/ (those are logs from other AIs)
+
+STEP 2 — Confirm you read them with a 3-line summary:
+- What the other AIs are working on
+- What files you must NOT touch
+- The most critical pending issue
+
+STEP 3 — Write your first log to:
+{project-root}/.ai-collab/{your-ai-name}-{YYYYMMDD-HHMMSS}.md
+
+Use this exact format:
+---
+ai: [Your AI name and model]
+session: [YYYYMMDD-HHMMSS]
+project: [project name]
+updated: [ISO timestamp]
+---
+## Working On
+[what you are doing right now]
+## Files Modified This Session
+[files you touched, or "None"]
+## Decisions Made
+[decisions taken, or "None"]
+## Do Not Touch (Avoid Conflicts)
+[files you are actively editing]
+## Handoff Note
+[the most important thing other AIs must know from this session]
+
+PERMANENT RULE — after EVERY response you give me:
+Update that log file with what you just did. Do not wait to be asked. Always.
+
+COORDINATION RULE:
+- Before editing any file, check the "Do Not Touch" section of other AI logs
+- If another AI has a file listed, ask me before touching it
+- Write only in English or the language I am using — no mixed alphabets or scripts
+```
+
+Or for **permanent setup** (so the AI does this automatically every session), paste the ready-made snippets from `examples/` into their rules files. See the [Supported AI Tools](#supported-ai-tools) table below.
 
 ---
 
