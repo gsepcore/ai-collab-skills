@@ -129,6 +129,82 @@ Remove stale session logs.
 
 ---
 
+## Persistent monitoring (survives sleep, session close, and restarts)
+
+For production use — this approach survives Mac sleep/wake, session restarts, and computer reboots.
+
+### How it works
+
+Three components work together:
+1. **launchd daemon** — macOS system service that watches `.ai-collab/` every 15 seconds. Runs 24/7, auto-restarts on crash, resumes after sleep.
+2. **Notifications file** — `~/.ai-collab-notifications.json` acts as a message queue. The daemon writes here; Claude reads here.
+3. **Claude Code hook** — `UserPromptSubmit` hook checks the queue every time you type a message. If there are pending notifications, shows them and clears the queue.
+
+### Setup
+
+**Step 1 — Install the daemon script:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/daemon.sh \
+  -o ~/.claude/ai-collab-daemon.sh && chmod +x ~/.claude/ai-collab-daemon.sh
+```
+
+**Step 2 — Register the launchd service:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/com.gsepcore.ai-collab.plist \
+  -o ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
+launchctl load ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
+```
+
+**Step 3 — Add the hook to your project:**
+Add this to `.claude/settings.local.json` in your project (merge with existing settings):
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'FILE=\"$HOME/.ai-collab-notifications.json\"; if [ -f \"$FILE\" ]; then CONTENT=$(cat \"$FILE\"); if [ \"$CONTENT\" != \"[]\" ] && [ -n \"$CONTENT\" ]; then echo \"[AI-COLLAB] Pending notifications from other AIs:\"; echo \"$CONTENT\"; echo \"[]\" > \"$FILE\"; fi; fi'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+After this setup, every time you write something in Claude Code, it automatically shows any pending notifications from other AIs — without polling, without cron jobs, without consuming tokens.
+
+### Manage the daemon
+
+```bash
+# Check status
+launchctl list | grep ai-collab
+
+# Stop
+launchctl unload ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
+
+# Start
+launchctl load ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
+
+# View logs
+tail -f /tmp/ai-collab-daemon.log
+```
+
+### Uninstall daemon
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
+rm ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
+rm ~/.claude/ai-collab-daemon.sh
+rm ~/.ai-collab-notifications.json
+rm ~/.ai-collab-last-check
+```
+
+---
+
 ## Live monitoring (auto-notify, zero token cost)
 
 To have Claude automatically notify you the instant another AI updates their log, run:
