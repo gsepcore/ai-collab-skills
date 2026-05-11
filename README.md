@@ -1,10 +1,25 @@
-<p align="center">
-  <img src="assets/logo.png" alt="AI Collab Skill" width="160" />
-</p>
+<div align="center">
+
+<img src="assets/logo.png" alt="AI Collab Skill" width="480">
+
+<br>
 
 # AI Collab Skill
 
-**A Claude Code skill that lets multiple AI assistants work on the same project simultaneously — and actually see each other.**
+[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/gsepcore/ai-collab-skills?style=for-the-badge&logo=github)](https://github.com/gsepcore/ai-collab-skills)
+[![Works With](https://img.shields.io/badge/Works_With-Claude_Code-blueviolet?style=for-the-badge)](https://claude.ai/code)
+[![Built By](https://img.shields.io/badge/Built_by-gsepcore-blue?style=for-the-badge)](https://gsepcore.com)
+
+**Let multiple AI assistants work on the same project simultaneously — and actually see each other.**
+
+Created by **Luis Alfredo Velasquez Duran** | Germany, 2025-2026
+
+[GitHub](https://github.com/gsepcore/ai-collab-skills) · [Install in 2 commands](#installation) · [gsepcore.com](https://gsepcore.com)
+
+</div>
+
+---
 
 When you use Claude Code alongside Cursor, Windsurf, Codex, OpenCode, or any other AI tool, they are completely blind to each other. This skill creates a shared filesystem protocol so they can read and write context in real time — no external service, no API, no internet required. Just a `.ai-collab/` directory inside your project.
 
