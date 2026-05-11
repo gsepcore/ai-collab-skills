@@ -15,7 +15,7 @@
 
 Created by **Luis Alfredo Velasquez Duran** | Germany, 2025-2026
 
-[GitHub](https://github.com/gsepcore/ai-collab-skills) · [Install in 2 commands](#installation) · [gsepcore.com](https://gsepcore.com)
+[GitHub](https://github.com/gsepcore/ai-collab-skills) · [Install in 1 command](#installation) · [gsepcore.com](https://gsepcore.com)
 
 🇪🇸 **¿Hablas español?** Lee el [README en español](README.es.md) — guía completa para hispanohablantes.
 
@@ -45,28 +45,32 @@ your-project/
 
 ## Installation
 
-### Step 1 — Install the skill files
+### One command — installs everything
 
 ```bash
-mkdir -p ~/.claude/skills/collab/references
-
-curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/SKILL.md \
-  -o ~/.claude/skills/collab/SKILL.md
-
-curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/references/protocol.md \
-  -o ~/.claude/skills/collab/references/protocol.md
+curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/install.sh | bash
 ```
 
-Or clone and copy manually:
+**Or from a cloned repo:**
 
 ```bash
 git clone https://github.com/gsepcore/ai-collab-skills.git
-mkdir -p ~/.claude/skills/collab/references
-cp ai-collab-skills/SKILL.md ~/.claude/skills/collab/SKILL.md
-cp ai-collab-skills/references/protocol.md ~/.claude/skills/collab/references/protocol.md
+bash ai-collab-skills/install/install.sh
 ```
 
-### Step 2 — Set up your project
+That's it. The installer sets up **all five components** automatically:
+
+| Component | What it does | Where |
+|-----------|-------------|-------|
+| 📚 Claude Code skill | `/collab` commands available in all sessions | `~/.claude/skills/collab/` |
+| 🔄 Background daemon | Watches every `.ai-collab/` directory 24/7 | launchd (macOS) / cron (Linux) |
+| 🪝 `SessionStart` hook | Loads `CONTEXT.md` + notifications on session open | `~/.claude/settings.json` |
+| 🪝 `UserPromptSubmit` hook | Shows pending AI notifications before each message | `~/.claude/settings.json` |
+| 🪝 `Stop` hook | Auto-regenerates `CONTEXT.md` after each Claude response | `~/.claude/settings.json` |
+
+The hooks are installed **globally** (`~/.claude/settings.json`) so they work in **every project** automatically — no per-project configuration needed.
+
+### After installing — set up your project
 
 Open Claude Code inside your project and run:
 
@@ -74,15 +78,13 @@ Open Claude Code inside your project and run:
 /collab setup
 ```
 
-This will:
-- Create `{project-root}/.ai-collab/`
-- Add `.ai-collab/` to `.gitignore` automatically
-- Copy the `PROTOCOL.md` into the shared directory
-- Ask which other AI tools you use and generate the rules snippets for each one
+This creates `.ai-collab/`, adds it to `.gitignore`, copies `PROTOCOL.md`, and walks you through adding snippets to your other AI tools.
 
-### Step 3 — Set up other AIs
+### Set up other AIs
 
-Paste this command into each other AI at the start of their session. Replace the paths with your actual project path:
+For permanent setup, paste the ready-made snippets from `references/protocol.md` into each tool's rules file. See the [Supported AI Tools](#supported-ai-tools) table below.
+
+For a one-time session, paste this into any AI at session start:
 
 ```
 You are part of a multi-AI team working on this project simultaneously.
@@ -100,34 +102,9 @@ STEP 2 — Confirm you read them with a 3-line summary:
 STEP 3 — Write your first log to:
 {project-root}/.ai-collab/{your-ai-name}-{YYYYMMDD-HHMMSS}.md
 
-Use this exact format:
----
-ai: [Your AI name and model]
-session: [YYYYMMDD-HHMMSS]
-project: [project name]
-updated: [ISO timestamp]
----
-## Working On
-[what you are doing right now]
-## Files Modified This Session
-[files you touched, or "None"]
-## Decisions Made
-[decisions taken, or "None"]
-## Do Not Touch (Avoid Conflicts)
-[files you are actively editing]
-## Handoff Note
-[the most important thing other AIs must know from this session]
-
-PERMANENT RULE — after EVERY response you give me:
-Update that log file with what you just did. Do not wait to be asked. Always.
-
-COORDINATION RULE:
-- Before editing any file, check the "Do Not Touch" section of other AI logs
-- If another AI has a file listed, ask me before touching it
-- Write only in English or the language I am using — no mixed alphabets or scripts
+PERMANENT RULE: after EVERY response you give, update that log. Do not wait to be asked.
+COORDINATION RULE: check "Do Not Touch" sections before editing any file.
 ```
-
-Or for **permanent setup** (so the AI does this automatically every session), paste the ready-made snippets from `examples/` into their rules files. See the [Supported AI Tools](#supported-ai-tools) table below.
 
 ---
 
@@ -221,116 +198,33 @@ Remove stale session logs.
 
 ---
 
-## Persistent monitoring (survives sleep, session close, and restarts)
+## How the background system works
 
-For production use — this approach survives Mac sleep/wake, session restarts, and computer reboots.
+> **This is all set up automatically by the installer.** No manual steps.
 
-### How it works
+Three components keep Claude informed 24/7:
 
-Three components work together:
-1. **launchd daemon** — macOS system service that watches `.ai-collab/` every 15 seconds. Runs 24/7, auto-restarts on crash, resumes after sleep.
-2. **Notifications file** — `~/.ai-collab-notifications.json` acts as a message queue. The daemon writes here; Claude reads here.
-3. **Claude Code hook** — `UserPromptSubmit` hook checks the queue every time you type a message. If there are pending notifications, shows them and clears the queue.
-
-### Setup
-
-**Step 1 — Install the daemon script:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/daemon.sh \
-  -o ~/.claude/ai-collab-daemon.sh && chmod +x ~/.claude/ai-collab-daemon.sh
-```
-
-**Step 2 — Register the launchd service:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/com.gsepcore.ai-collab.plist \
-  -o ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
-launchctl load ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
-```
-
-**Step 3 — Add the hooks to your project:**
-Add this to `.claude/settings.local.json` in your project (merge with existing settings):
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash -c 'ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd); CTX=\"$ROOT/.ai-collab/CONTEXT.md\"; NOTIF=\"$HOME/.ai-collab-notifications.json\"; if [ -f \"$CTX\" ]; then echo \"[AI-COLLAB SESSION RECOVERY]\"; echo \"Project: $(basename $ROOT)\"; echo \"---\"; cat \"$CTX\"; echo \"---\"; fi; if [ -f \"$NOTIF\" ]; then CONTENT=$(cat \"$NOTIF\"); if [ \"$CONTENT\" != \"[]\" ] && [ -n \"$CONTENT\" ]; then echo \"[PENDING NOTIFICATIONS FROM OTHER AIs]\"; echo \"$CONTENT\"; echo \"[]\" > \"$NOTIF\"; fi; fi'",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash -c 'FILE=\"$HOME/.ai-collab-notifications.json\"; if [ -f \"$FILE\" ]; then CONTENT=$(cat \"$FILE\"); if [ \"$CONTENT\" != \"[]\" ] && [ -n \"$CONTENT\" ]; then echo \"[AI-COLLAB] Pending notifications from other AIs:\"; echo \"$CONTENT\"; echo \"[]\" > \"$FILE\"; fi; fi'",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-**`SessionStart` hook** — fires when you open a new session. Reads `CONTEXT.md` and injects full project context before you type a single word. Survives battery death, reboots, and session crashes.
-
-**`Stop` hook** — fires when Claude finishes responding. Auto-regenerates `CONTEXT.md` from all logs using a Python script. Zero tokens, zero user action required.
-
-**`UserPromptSubmit` hook** — fires on every message. Shows pending notifications from other AIs instantly, zero token cost at idle.
-
-**Step 3b — Install the summary script:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/ai-collab-summary.py \
-  -o ~/.claude/ai-collab-summary.py
-```
-
-Then add the `Stop` hook to your `.claude/settings.local.json`:
-```json
-"Stop": [
-  {
-    "hooks": [
-      {
-        "type": "command",
-        "command": "python3 ~/.claude/ai-collab-summary.py 2>/dev/null || true",
-        "timeout": 15,
-        "async": true
-      }
-    ]
-  }
-],
-```
+1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Auto-starts on login, survives sleep and reboots.
+2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight message queue. The daemon writes to it; the hooks read from it.
+3. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
+   - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
+   - `UserPromptSubmit` — shows pending notifications before each message, zero token cost at idle
+   - `Stop` — auto-regenerates `CONTEXT.md` after every Claude response using a Python script
 
 ### Manage the daemon
 
 ```bash
-# Check status
+# Check if running
 launchctl list | grep ai-collab
+
+# View logs
+tail -f /tmp/ai-collab-daemon.log
 
 # Stop
 launchctl unload ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
 
-# Start
+# Restart
 launchctl load ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
-
-# View logs
-tail -f /tmp/ai-collab-daemon.log
-```
-
-### Uninstall daemon
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/uninstall.sh)
-```
-
-Or run the script manually if you already have it:
-```bash
-bash ~/.claude/ai-collab-skills/install/uninstall.sh
 ```
 
 ---
@@ -368,23 +262,21 @@ Closing your Claude Code session also stops the monitor automatically.
 
 ## Uninstalling
 
-### Remove from a specific project
+### Remove everything the installer added
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/uninstall.sh | bash
+```
+
+This removes the daemon, hooks, scripts, and skill. Your `.ai-collab/` project directories are untouched — your logs stay safe.
+
+### Remove from a specific project only
 
 ```bash
 rm -rf {project-root}/.ai-collab/
+# Also remove .ai-collab/ from .gitignore
+# Also remove the AI Collab Protocol block from .cursorrules / .windsurfrules
 ```
-
-And remove the `.ai-collab/` line from `.gitignore` if you added it.
-
-For other AI tools: remove the `## AI Collab Protocol` block from `.cursorrules`, `.windsurfrules`, or `.github/copilot-instructions.md`.
-
-### Remove the skill from Claude Code
-
-```bash
-rm -rf ~/.claude/skills/collab/
-```
-
-The skill will no longer appear in Claude's available skills. Any `.ai-collab/` directories in your projects are independent — removing the skill does not delete them.
 
 ---
 

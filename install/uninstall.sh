@@ -1,6 +1,6 @@
 #!/bin/bash
 # AI Collab Skill — Uninstaller
-# Removes daemon, hooks support files, and skill from Claude Code.
+# Removes everything install.sh put in place.
 # Does NOT delete .ai-collab/ directories in your projects.
 
 set -e
@@ -13,10 +13,10 @@ echo "This will remove:"
 echo "  - launchd daemon (com.gsepcore.ai-collab)"
 echo "  - ~/.claude/ai-collab-daemon.sh"
 echo "  - ~/.claude/ai-collab-summary.py"
-echo "  - ~/.claude/ai-collab-icon.png"
 echo "  - ~/.ai-collab-notifications.json"
 echo "  - ~/.ai-collab-last-check"
 echo "  - ~/.claude/skills/collab/"
+echo "  - AI-collab hooks from ~/.claude/settings.json"
 echo ""
 echo "NOT removed: .ai-collab/ directories in your projects (your logs stay safe)"
 echo ""
@@ -25,7 +25,7 @@ read -r -p "Continue? [y/N] " confirm
 
 echo ""
 
-# Stop and unload launchd daemon (macOS only)
+# Stop and unload launchd daemon (macOS)
 if [[ "$OSTYPE" == "darwin"* ]]; then
     PLIST="$HOME/Library/LaunchAgents/com.gsepcore.ai-collab.plist"
     if [ -f "$PLIST" ]; then
@@ -34,10 +34,15 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     fi
 fi
 
+# Remove cron job (Linux)
+if command -v crontab &>/dev/null; then
+    ( crontab -l 2>/dev/null | grep -v "ai-collab-daemon" ) | crontab - 2>/dev/null && true
+    echo "✓ Removed cron job (if any)"
+fi
+
 # Remove daemon and support scripts
 [ -f "$HOME/.claude/ai-collab-daemon.sh" ]  && rm -f "$HOME/.claude/ai-collab-daemon.sh"  && echo "✓ Removed ai-collab-daemon.sh"
 [ -f "$HOME/.claude/ai-collab-summary.py" ] && rm -f "$HOME/.claude/ai-collab-summary.py" && echo "✓ Removed ai-collab-summary.py"
-[ -f "$HOME/.claude/ai-collab-icon.png" ]   && rm -f "$HOME/.claude/ai-collab-icon.png"   && echo "✓ Removed ai-collab-icon.png"
 
 # Remove notification queue files
 [ -f "$HOME/.ai-collab-notifications.json" ] && rm -f "$HOME/.ai-collab-notifications.json" && echo "✓ Removed notifications queue"
@@ -49,11 +54,59 @@ if [ -d "$SKILL_DIR" ]; then
     rm -rf "$SKILL_DIR" && echo "✓ Removed Claude Code skill (~/.claude/skills/collab/)"
 fi
 
+# Remove AI-collab hooks from ~/.claude/settings.json
+SETTINGS="$HOME/.claude/settings.json"
+if [ -f "$SETTINGS" ]; then
+    python3 - "$SETTINGS" << 'PYEOF'
+import json, sys, os
+
+settings_file = sys.argv[1]
+
+try:
+    with open(settings_file) as f:
+        settings = json.load(f)
+except Exception:
+    print("  Could not read settings.json — skipping hook removal.")
+    sys.exit(0)
+
+hooks = settings.get("hooks", {})
+changed = False
+
+for event in list(hooks.keys()):
+    new_list = []
+    for entry in hooks[event]:
+        new_hooks = [
+            h for h in entry.get("hooks", [])
+            if "ai-collab" not in h.get("command", "")
+        ]
+        if new_hooks:
+            new_list.append({**entry, "hooks": new_hooks})
+        else:
+            changed = True  # removed an entry
+    if new_list:
+        hooks[event] = new_list
+    else:
+        del hooks[event]
+        changed = True
+
+if changed:
+    settings["hooks"] = hooks
+    tmp = settings_file + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, settings_file)
+    print("✓ Removed AI-collab hooks from ~/.claude/settings.json")
+else:
+    print("  No AI-collab hooks found in settings.json")
+PYEOF
+fi
+
 echo ""
 echo "✅ AI Collab Skill uninstalled."
 echo ""
-echo "To remove from a specific project:"
-echo "  rm -rf {project-root}/.ai-collab/"
-echo "  # Also remove .ai-collab/ from .gitignore"
-echo "  # Also remove the AI Collab Protocol block from .cursorrules / .windsurfrules"
+echo "To clean up a specific project:"
+echo "  rm -rf {project}/.ai-collab/"
+echo "  # Remove .ai-collab/ from .gitignore"
+echo "  # Remove AI Collab Protocol block from .cursorrules / .windsurfrules"
 echo ""
