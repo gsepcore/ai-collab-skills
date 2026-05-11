@@ -281,3 +281,37 @@ The most valuable contributions are support for new AI tools — add a snippet t
 ## License
 
 MIT — created by [Luis Alfredo Velasquez Duran](https://github.com/LuisvelMarketer) / [gsepcore](https://github.com/gsepcore)
+
+---
+
+## Built by gsepcore
+
+**[gsepcore](https://github.com/gsepcore)** builds open-source infrastructure for AI agents — tools that make agents more reliable, secure, and collaborative.
+
+AI Collab Skill is part of the gsepcore ecosystem. If it saved you time, check out our other projects.
+
+---
+
+## GSEP — The Security & Evolution Layer for AI Agents
+
+**[GSEP (Genomic Self-Evolving Prompts)](https://gsepcore.com)** is the framework powering the AI behind this skill. It wraps any LLM with 5 security layers and makes agents autonomously improve over time.
+
+- **C3 Content Firewall** — blocks prompt injection before it reaches your LLM (57 patterns)
+- **C4 Behavioral Immune System** — detects if your agent's response was manipulated
+- **C5 Action Firewall** — prevents destructive actions (rm -rf, DROP TABLE, etc.) before they execute
+- **Autonomous evolution** — agents improve their own prompts based on feedback, no retraining needed
+
+**[GSEP-MCP](https://github.com/gsepcore/gsep-mcp)** — drop GSEP security into any AI agent in 2 minutes via the Model Context Protocol. Works with Claude Desktop, Cursor, Windsurf, n8n, and any MCP-compatible client.
+
+```json
+{
+  "mcpServers": {
+    "gsep": {
+      "command": "npx",
+      "args": ["-y", "@gsep/mcp@latest"]
+    }
+  }
+}
+```
+
+→ [gsepcore.com](https://gsepcore.com) · [GitHub](https://github.com/gsepcore/gsep) · [npm](https://www.npmjs.com/package/@gsep/core)
