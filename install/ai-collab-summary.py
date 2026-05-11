@@ -148,8 +148,11 @@ Read the sections above before touching any file. Check "Do Not Touch" first.
 Run `/collab read` in Claude Code for full log details.
 """
 
+    # Atomic write via temp file + os.replace() — prevents race conditions
     output = collab_dir / "CONTEXT.md"
-    output.write_text(context, encoding="utf-8")
+    tmp = output.with_suffix(".tmp")
+    tmp.write_text(context, encoding="utf-8")
+    tmp.replace(output)
     print(f"[AI-COLLAB] CONTEXT.md updated — {len(logs)} logs synthesized.")
 
 if __name__ == "__main__":

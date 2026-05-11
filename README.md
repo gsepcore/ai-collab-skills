@@ -325,11 +325,12 @@ tail -f /tmp/ai-collab-daemon.log
 ### Uninstall daemon
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
-rm ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
-rm ~/.claude/ai-collab-daemon.sh
-rm ~/.ai-collab-notifications.json
-rm ~/.ai-collab-last-check
+bash <(curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/uninstall.sh)
+```
+
+Or run the script manually if you already have it:
+```bash
+bash ~/.claude/ai-collab-skills/install/uninstall.sh
 ```
 
 ---

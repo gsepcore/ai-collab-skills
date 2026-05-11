@@ -4,10 +4,18 @@
 
 NOTIFICATIONS_FILE="$HOME/.ai-collab-notifications.json"
 LAST_CHECK_FILE="$HOME/.ai-collab-last-check"
+MAX_NOTIFICATIONS=50
 
 # Initialize files
 [ -f "$NOTIFICATIONS_FILE" ] || echo "[]" > "$NOTIFICATIONS_FILE"
 [ -f "$LAST_CHECK_FILE" ] || date +%s > "$LAST_CHECK_FILE"
+
+# Fix #4 — detect stat command (macOS vs Linux)
+if stat -f "%m" /dev/null 2>/dev/null; then
+    STAT_MOD() { stat -f "%m" "$1" 2>/dev/null; }
+else
+    STAT_MOD() { stat -c "%Y" "$1" 2>/dev/null; }
+fi
 
 while true; do
   sleep 15
@@ -15,7 +23,7 @@ while true; do
   LAST_CHECK=$(cat "$LAST_CHECK_FILE" 2>/dev/null || date +%s)
   NOW=$(date +%s)
 
-  # Find all .ai-collab directories under home (covers all projects)
+  # Fix #3 — increased maxdepth from 4 to 6 for deeper project structures
   while IFS= read -r -d '' COLLAB_DIR; do
     PROJECT=$(basename "$(dirname "$COLLAB_DIR")")
 
@@ -26,44 +34,61 @@ while true; do
       [[ "$BASENAME" == PROTOCOL.md ]] && continue
       [[ "$BASENAME" == CONTEXT.md ]] && continue
 
-      MOD=$(stat -f "%m" "$f" 2>/dev/null) || continue
+      MOD=$(STAT_MOD "$f") || continue
 
       if [ "$MOD" -gt "$LAST_CHECK" ]; then
         AI=$(grep "^ai:" "$f" 2>/dev/null | head -1 | cut -d' ' -f2- | tr -d '\r\n' | sed 's/["\]/\\&/g')
         WORKING=$(grep -A2 "^## Working On" "$f" 2>/dev/null | grep -v "^## " | head -1 | tr -d '\r\n' | cut -c1-120 | sed 's/["\]/\\&/g')
         TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-        # Append to notifications JSON using python3
-        python3 -c "
-import json, sys
-try:
-    with open('$NOTIFICATIONS_FILE', 'r') as f:
-        data = json.load(f)
-except:
-    data = []
-data.append({
-    'ai': '$AI',
-    'file': '$BASENAME',
-    'project': '$PROJECT',
-    'working': '$WORKING',
-    'timestamp': '$TIMESTAMP'
-})
-with open('$NOTIFICATIONS_FILE', 'w') as f:
-    json.dump(data, f, indent=2)
-" 2>/dev/null
+        # Fix #8 — skip malformed logs with empty AI name
+        [ -z "$AI" ] && echo "[AI-COLLAB] Warning: skipped $BASENAME — missing 'ai:' frontmatter field" >> /tmp/ai-collab-daemon.log && continue
 
-        # macOS native notification — aparece inmediatamente en pantalla
-        ICON="$HOME/.claude/ai-collab-icon.png"
-        if [ -f "$ICON" ]; then
-          osascript -e "display notification \"$WORKING\" with title \"AI Collab — $AI\" subtitle \"Proyecto: $PROJECT\" sound name \"Tink\"" 2>/dev/null
-        else
-          osascript -e "display notification \"$WORKING\" with title \"AI Collab — $AI\" subtitle \"Proyecto: $PROJECT\" sound name \"Tink\"" 2>/dev/null
-        fi
+        # Fix #1 + #6 — atomic write via temp file + os.replace() prevents race conditions and data loss
+        python3 - "$NOTIFICATIONS_FILE" "$MAX_NOTIFICATIONS" "$AI" "$BASENAME" "$PROJECT" "$WORKING" "$TIMESTAMP" << 'PYEOF'
+import json, sys, os
+
+notifications_file, max_n, ai, fname, project, working, timestamp = sys.argv[1:]
+max_n = int(max_n)
+
+for attempt in range(3):
+    try:
+        try:
+            with open(notifications_file, 'r') as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = []
+
+        data.append({
+            'ai': ai, 'file': fname, 'project': project,
+            'working': working, 'timestamp': timestamp
+        })
+
+        # Fix #7 — cap size to prevent unbounded growth
+        if len(data) > max_n:
+            data = data[-max_n:]
+
+        # Atomic write: write to temp, then rename (os.replace is atomic on POSIX)
+        tmp = notifications_file + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, notifications_file)
+        break
+    except IOError as e:
+        import time
+        if attempt < 2:
+            time.sleep(0.1 * (attempt + 1))
+        else:
+            print(f'[AI-COLLAB] Error writing notification: {e}', file=sys.stderr)
+PYEOF
+
+        # Fix #5 — run osascript in background so it never blocks the daemon
+        osascript -e "display notification \"$WORKING\" with title \"AI Collab — $AI\" subtitle \"Proyecto: $PROJECT\" sound name \"Tink\"" 2>/dev/null &
+
       fi
     done
 
-  done < <(find "$HOME" -maxdepth 4 -type d -name ".ai-collab" -print0 2>/dev/null)
+  done < <(find "$HOME" -maxdepth 6 -type d -name ".ai-collab" -print0 2>/dev/null)
 
-  # Update last check time
   echo "$NOW" > "$LAST_CHECK_FILE"
 done
