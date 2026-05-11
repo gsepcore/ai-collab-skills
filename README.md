@@ -204,9 +204,33 @@ Add this to `.claude/settings.local.json` in your project (merge with existing s
 }
 ```
 
-**`SessionStart` hook** — fires automatically when you open a new Claude Code session. Reads `CONTEXT.md` and injects full project context before you type a single word. Survives battery death, reboots, and session crashes.
+**`SessionStart` hook** — fires when you open a new session. Reads `CONTEXT.md` and injects full project context before you type a single word. Survives battery death, reboots, and session crashes.
+
+**`Stop` hook** — fires when Claude finishes responding. Auto-regenerates `CONTEXT.md` from all logs using a Python script. Zero tokens, zero user action required.
 
 **`UserPromptSubmit` hook** — fires on every message. Shows pending notifications from other AIs instantly, zero token cost at idle.
+
+**Step 3b — Install the summary script:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/ai-collab-summary.py \
+  -o ~/.claude/ai-collab-summary.py
+```
+
+Then add the `Stop` hook to your `.claude/settings.local.json`:
+```json
+"Stop": [
+  {
+    "hooks": [
+      {
+        "type": "command",
+        "command": "python3 ~/.claude/ai-collab-summary.py 2>/dev/null || true",
+        "timeout": 15,
+        "async": true
+      }
+    ]
+  }
+],
+```
 
 ### Manage the daemon
 
