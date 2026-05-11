@@ -4,11 +4,19 @@
 
 NOTIFICATIONS_FILE="$HOME/.ai-collab-notifications.json"
 LAST_CHECK_FILE="$HOME/.ai-collab-last-check"
+LOG_FILE="/tmp/ai-collab-daemon.log"
 MAX_NOTIFICATIONS=50
+
+log() { echo "[AI-COLLAB] $(date -u +"%Y-%m-%dT%H:%M:%SZ") $*" >> "$LOG_FILE"; }
+
+# Fix #3 (OpenCode) — trap crashes and log them
+trap 'log "CRASH: daemon exited unexpectedly (exit $?)"' EXIT
+
+log "Daemon started (PID $$)"
 
 # Initialize files
 [ -f "$NOTIFICATIONS_FILE" ] || echo "[]" > "$NOTIFICATIONS_FILE"
-[ -f "$LAST_CHECK_FILE" ] || date +%s > "$LAST_CHECK_FILE"
+[ -f "$LAST_CHECK_FILE" ]    || date +%s > "$LAST_CHECK_FILE"
 
 # Fix #4 — detect stat command (macOS vs Linux)
 if stat -f "%m" /dev/null 2>/dev/null; then
@@ -42,7 +50,7 @@ while true; do
         TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
         # Fix #8 — skip malformed logs with empty AI name
-        [ -z "$AI" ] && echo "[AI-COLLAB] Warning: skipped $BASENAME — missing 'ai:' frontmatter field" >> /tmp/ai-collab-daemon.log && continue
+        [ -z "$AI" ] && log "Warning: skipped $BASENAME — missing 'ai:' frontmatter field" && continue
 
         # Fix #1 + #6 — atomic write via temp file + os.replace() prevents race conditions and data loss
         python3 - "$NOTIFICATIONS_FILE" "$MAX_NOTIFICATIONS" "$AI" "$BASENAME" "$PROJECT" "$WORKING" "$TIMESTAMP" << 'PYEOF'
@@ -56,7 +64,10 @@ for attempt in range(3):
         try:
             with open(notifications_file, 'r') as f:
                 data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+        except FileNotFoundError:
+            data = []
+        except json.JSONDecodeError as e:
+            print(f'[AI-COLLAB] Warning: notifications file corrupted ({e}), resetting', file=sys.stderr)
             data = []
 
         data.append({
@@ -92,3 +103,5 @@ PYEOF
 
   echo "$NOW" > "$LAST_CHECK_FILE"
 done
+
+log "Daemon loop exited"
