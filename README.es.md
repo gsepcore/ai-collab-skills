@@ -180,6 +180,18 @@ Configuración inicial para un proyecto. Ejecutar una sola vez por proyecto.
 /collab setup
 ```
 
+### `/collab monitor`
+
+Inicia un monitor en segundo plano de costo cero que te notifica en el instante en que otra IA actualiza su log. Corre como script bash persistente — no consume tokens mientras espera.
+
+```
+/collab monitor
+```
+
+Para detenerlo: dile a Claude *"detén el monitor de collab"* o ejecuta `TaskStop <id>` con el ID que muestra `/collab status`.
+
+---
+
 ### `/collab summary`
 
 Genera `.ai-collab/CONTEXT.md` — una síntesis limpia de todos los logs de IA en un único archivo de incorporación.

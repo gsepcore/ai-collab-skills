@@ -180,6 +180,18 @@ First-time setup for a project. Run this once per project.
 /collab setup
 ```
 
+### `/collab monitor`
+
+Start a zero-cost background monitor that notifies you the instant another AI updates their log. Runs as a persistent bash script — no tokens consumed while waiting.
+
+```
+/collab monitor
+```
+
+To stop it: tell Claude *"stop the collab monitor"* or run `TaskStop <id>` with the ID shown in `/collab status`.
+
+---
+
 ### `/collab summary`
 
 Generate `.ai-collab/CONTEXT.md` — a clean synthesis of all AI logs into a single onboarding file.
