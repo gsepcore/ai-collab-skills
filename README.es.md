@@ -391,6 +391,30 @@ Luego agrega el hook `Stop` a tu `.claude/settings.local.json`:
 ],
 ```
 
+### Notificaciones macOS (sobreviven cierre de Claude, sleep, y reinicio)
+
+El daemon launchd ya vigila tus directorios `.ai-collab/` 24/7, pero sus notificaciones normalmente esperan en cola hasta que abras Claude Code y envíes un prompt. Si quieres **banners proactivos que disparen incluso con Claude cerrado** — por ejemplo dejar a Codex publicando un release durante la noche y recibir un banner del Notification Center cuando termine — activa las notificaciones macOS.
+
+El installer te pregunta sobre esto durante el paso 3. Para activarlas/desactivarlas después, edita `~/Library/LaunchAgents/com.gsepcore.ai-collab.plist` y agrega (o elimina) este bloque antes de `<key>ProgramArguments</key>`:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>AI_COLLAB_OS_NOTIFY</key>
+    <string>1</string>
+</dict>
+```
+
+Después recarga el daemon: `launchctl unload ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist && launchctl load ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist`.
+
+**Formato del banner:** `AI Collab — {proyecto}` / `{nombre-ia}` / `{línea Working On de la IA}`.
+
+**Sonido opcional:** añade `<key>AI_COLLAB_OS_NOTIFY_SOUND</key><string>Tink</string>` para reproducir un sonido con cada banner. Otros nombres válidos: `Glass`, `Pop`, `Hero`, `Bottle`, `Frog`, `Funk`, `Morse`, `Ping`, `Purr`, `Sosumi`, `Submarine`. Sin definir = banners silenciosos (recomendado si trabajas con varias IAs activas).
+
+**Primera vez:** macOS puede pedir permiso para enviar notificaciones desde el script. Acéptalo una vez vía System Settings → Notifications. Si nunca ves banners, revisa ahí.
+
+**Desactivar mid-session:** edita el plist quitando el bloque `EnvironmentVariables` y recarga. El daemon sigue escribiendo en la cola de notificaciones (así que las notificaciones in-Claude vía `UserPromptSubmit` siguen funcionando) — solo el banner OS se detiene.
+
 ### Gestionar el daemon
 
 ```bash
@@ -422,6 +446,8 @@ Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`,
 | `AI_COLLAB_MAX_OUTPUT` | `4000` | Cap total de stdout. Techo duro protegiendo el contexto de Claude. |
 | `AI_COLLAB_YES` | _(off)_ | Define `1` para saltar confirmaciones del installer (útil en CI / instalaciones Dockerfile). |
 | `AI_COLLAB_NO_DAEMON` | _(off)_ | Define `1` para saltar el inicio del daemon durante install (feature de file-watching deshabilitada). |
+| `AI_COLLAB_OS_NOTIFY` | _(off)_ | Define `1` (en el `EnvironmentVariables` del plist launchd del daemon) para disparar banners del Notification Center de macOS cuando otras IAs completen tareas. Capa persistente que funciona incluso con Claude Code cerrado — ver [Notificaciones macOS](#notificaciones-macos-sobreviven-cierre-de-claude-sleep-y-reinicio). |
+| `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | Nombre de sonido de macOS (ej. `Tink`, `Glass`, `Pop`, `Hero`) que se reproduce con cada banner. Solo efectivo cuando `AI_COLLAB_OS_NOTIFY=1`. Sin definir = banners silenciosos. |
 
 ### Desinstalar el daemon
 

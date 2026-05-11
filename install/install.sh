@@ -122,6 +122,33 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
   # macOS — launchd
   mkdir -p "$HOME/Library/LaunchAgents"
 
+  # Ask about macOS Notification Center banners (proactive even when Claude is closed)
+  OS_NOTIFY_BLOCK=""
+  if [[ -z "$YES" ]]; then
+    echo ""
+    info "macOS Notification Center: fire a banner when another AI completes a task?"
+    info "  Survives Claude Code closing, Mac sleep, restart, and shutdown."
+    info "  You can change this later by editing the plist file."
+    if ask "  Enable macOS notifications?"; then
+      OS_NOTIFY_BLOCK='    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AI_COLLAB_OS_NOTIFY</key>
+        <string>1</string>
+    </dict>
+'
+      green "macOS notifications enabled — banners will appear on AI activity"
+    else
+      info "macOS notifications disabled — set AI_COLLAB_OS_NOTIFY=1 in the plist later if you change your mind"
+    fi
+  elif [[ "$AI_COLLAB_OS_NOTIFY" = "1" ]]; then
+    OS_NOTIFY_BLOCK='    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AI_COLLAB_OS_NOTIFY</key>
+        <string>1</string>
+    </dict>
+'
+  fi
+
   cat > "$PLIST_PATH" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -129,7 +156,7 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
 <dict>
     <key>Label</key>
     <string>${PLIST_LABEL}</string>
-    <key>ProgramArguments</key>
+${OS_NOTIFY_BLOCK}    <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
         <string>${CLAUDE_DIR}/ai-collab-daemon.sh</string>

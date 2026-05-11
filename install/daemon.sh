@@ -45,8 +45,12 @@ while true; do
       MOD=$(STAT_MOD "$f") || continue
 
       if [ "$MOD" -gt "$LAST_CHECK" ]; then
-        AI=$(grep "^ai:" "$f" 2>/dev/null | head -1 | cut -d' ' -f2- | tr -d '\r\n' | sed 's/["\]/\\&/g')
-        WORKING=$(grep -A2 "^## Working On" "$f" 2>/dev/null | grep -v "^## " | head -1 | tr -d '\r\n' | cut -c1-120 | sed 's/["\]/\\&/g')
+        # Capture RAW values for the macOS notification (which uses AppleScript, NOT Python escapes)
+        AI_RAW=$(grep "^ai:" "$f" 2>/dev/null | head -1 | cut -d' ' -f2- | tr -d '\r\n')
+        WORKING_RAW=$(grep -A2 "^## Working On" "$f" 2>/dev/null | grep -v "^## " | head -1 | tr -d '\r\n' | cut -c1-120)
+        # Apply Python-safe escaping for the notifications.json write
+        AI=$(printf '%s' "$AI_RAW" | sed 's/["\]/\\&/g')
+        WORKING=$(printf '%s' "$WORKING_RAW" | sed 's/["\]/\\&/g')
         TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
         # Fix #8 — skip malformed logs with empty AI name
@@ -93,8 +97,22 @@ for attempt in range(3):
             print(f'[AI-COLLAB] Error writing notification: {e}', file=sys.stderr)
 PYEOF
 
-        # Fix #5 — run osascript in background so it never blocks the daemon
-        osascript -e "display notification \"$WORKING\" with title \"AI Collab — $AI\" subtitle \"Proyecto: $PROJECT\" sound name \"Tink\"" 2>/dev/null &
+        # macOS Notification Center — opt-in via AI_COLLAB_OS_NOTIFY=1
+        # Sound is separately opt-in via AI_COLLAB_OS_NOTIFY_SOUND=<name> (e.g. "Tink", "Glass", "Pop")
+        if [ "$AI_COLLAB_OS_NOTIFY" = "1" ] && [[ "$OSTYPE" == "darwin"* ]]; then
+          # Sanitize for AppleScript: strip quotes/backslashes, collapse whitespace, cap length
+          OSC_AI=$(printf '%s' "$AI_RAW" | tr -d '"\\' | tr -s '[:space:]' ' ' | cut -c1-60)
+          OSC_PROJECT=$(printf '%s' "$PROJECT" | tr -d '"\\' | tr -s '[:space:]' ' ' | cut -c1-60)
+          OSC_WORKING=$(printf '%s' "$WORKING_RAW" | tr -d '"\\' | tr -s '[:space:]' ' ' | cut -c1-200)
+          [ -z "$OSC_WORKING" ] && OSC_WORKING="updated $BASENAME"
+          OSC_SOUND=""
+          if [ -n "$AI_COLLAB_OS_NOTIFY_SOUND" ]; then
+            OSC_SOUND_NAME=$(printf '%s' "$AI_COLLAB_OS_NOTIFY_SOUND" | tr -d '"\\' | cut -c1-30)
+            OSC_SOUND=" sound name \"$OSC_SOUND_NAME\""
+          fi
+          # Run in background subshell so it never blocks the daemon loop
+          ( osascript -e "display notification \"$OSC_WORKING\" with title \"AI Collab — $OSC_PROJECT\" subtitle \"$OSC_AI\"$OSC_SOUND" 2>/dev/null ) &
+        fi
 
       fi
     done

@@ -297,6 +297,30 @@ Four components keep Claude informed 24/7:
    - `UserPromptSubmit` — runs `ai-collab-check-notifications.py` to show pending notifications for the **active project only**, zero token cost at idle
    - `Stop` — auto-regenerates `CONTEXT.md` after every Claude response using a Python script
 
+### macOS notifications (survives Claude close, Mac sleep, and restart)
+
+The launchd daemon already watches your `.ai-collab/` directories 24/7, but its notifications normally wait in the queue until you open Claude Code and submit a prompt. If you want **proactive banners that fire even when Claude is closed** — for example so you can leave Codex publishing a release overnight and get a Notification Center banner when it finishes — opt in to macOS notifications.
+
+The installer prompts you about this during step 3. To toggle it later, edit `~/Library/LaunchAgents/com.gsepcore.ai-collab.plist` and add (or remove) this block before `<key>ProgramArguments</key>`:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>AI_COLLAB_OS_NOTIFY</key>
+    <string>1</string>
+</dict>
+```
+
+Then reload the daemon: `launchctl unload ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist && launchctl load ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist`.
+
+**Banner format:** `AI Collab — {project}` / `{ai-name}` / `{the AI's Working On line}`.
+
+**Optional sound:** add `<key>AI_COLLAB_OS_NOTIFY_SOUND</key><string>Tink</string>` to play a sound with each banner. Other valid names: `Glass`, `Pop`, `Hero`, `Bottle`, `Frog`, `Funk`, `Morse`, `Ping`, `Purr`, `Sosumi`, `Submarine`. Leave unset for silent banners (recommended if you work with multiple active AIs).
+
+**First time:** macOS may ask permission to send notifications from the script. Grant it once via System Settings → Notifications. If you never see banners, check there.
+
+**Disable mid-session:** edit the plist to remove the `EnvironmentVariables` block and reload. The daemon keeps writing to the notification queue (so in-Claude notifications via `UserPromptSubmit` still work) — only the OS banner stops.
+
 ### Manage the daemon
 
 ```bash
@@ -328,6 +352,8 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_MAX_OUTPUT` | `4000` | Total stdout character cap. Hard ceiling protecting Claude's context. |
 | `AI_COLLAB_YES` | _(off)_ | Set to `1` to skip installer confirmation prompts (useful in CI / Dockerfile installs). |
 | `AI_COLLAB_NO_DAEMON` | _(off)_ | Set to `1` to skip starting the background daemon during install (file-watching feature disabled). |
+| `AI_COLLAB_OS_NOTIFY` | _(off)_ | Set to `1` (in the daemon's launchd plist `EnvironmentVariables`) to fire macOS Notification Center banners when other AIs complete tasks. Persistent layer that works even when Claude Code is closed — see [macOS notifications](#macos-notifications-survives-claude-close-mac-sleep-and-restart). |
+| `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | macOS sound name (e.g. `Tink`, `Glass`, `Pop`, `Hero`) to play with each banner. Only effective when `AI_COLLAB_OS_NOTIFY=1`. Leave unset for silent banners. |
 
 ---
 
