@@ -13,6 +13,7 @@ echo "This will remove:"
 echo "  - launchd daemon (com.gsepcore.ai-collab)"
 echo "  - ~/.claude/ai-collab-daemon.sh"
 echo "  - ~/.claude/ai-collab-summary.py"
+echo "  - ~/.claude/ai-collab-check-notifications.py"
 echo "  - ~/.ai-collab-notifications.json"
 echo "  - ~/.ai-collab-last-check"
 echo "  - ~/.claude/skills/collab/"
@@ -41,8 +42,9 @@ if command -v crontab &>/dev/null; then
 fi
 
 # Remove daemon and support scripts
-[ -f "$HOME/.claude/ai-collab-daemon.sh" ]  && rm -f "$HOME/.claude/ai-collab-daemon.sh"  && echo "✓ Removed ai-collab-daemon.sh"
-[ -f "$HOME/.claude/ai-collab-summary.py" ] && rm -f "$HOME/.claude/ai-collab-summary.py" && echo "✓ Removed ai-collab-summary.py"
+[ -f "$HOME/.claude/ai-collab-daemon.sh" ]               && rm -f "$HOME/.claude/ai-collab-daemon.sh"               && echo "✓ Removed ai-collab-daemon.sh"
+[ -f "$HOME/.claude/ai-collab-summary.py" ]              && rm -f "$HOME/.claude/ai-collab-summary.py"              && echo "✓ Removed ai-collab-summary.py"
+[ -f "$HOME/.claude/ai-collab-check-notifications.py" ]  && rm -f "$HOME/.claude/ai-collab-check-notifications.py"  && echo "✓ Removed ai-collab-check-notifications.py"
 
 # Remove notification queue files
 [ -f "$HOME/.ai-collab-notifications.json" ] && rm -f "$HOME/.ai-collab-notifications.json" && echo "✓ Removed notifications queue"

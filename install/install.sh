@@ -4,11 +4,12 @@
 #  https://github.com/gsepcore/ai-collab-skills
 #
 #  What this installs:
-#    1. Claude Code skill   → ~/.claude/skills/collab/
-#    2. Daemon script       → ~/.claude/ai-collab-daemon.sh
-#    3. Summary script      → ~/.claude/ai-collab-summary.py
-#    4. Background daemon   → launchd (macOS) / cron (Linux)
-#    5. Claude Code hooks   → ~/.claude/settings.json  (global, all projects)
+#    1. Claude Code skill        → ~/.claude/skills/collab/
+#    2. Daemon script            → ~/.claude/ai-collab-daemon.sh
+#    3. Summary script           → ~/.claude/ai-collab-summary.py
+#    4. Notifications script     → ~/.claude/ai-collab-check-notifications.py
+#    5. Background daemon        → launchd (macOS) / cron (Linux)
+#    6. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -101,12 +102,14 @@ info  "Use /collab read, /collab write, /collab setup, /collab assign, etc."
 echo ""
 bold "Step 2/5 — Installing background scripts"
 
-copy_or_download "install/daemon.sh"             "$CLAUDE_DIR/ai-collab-daemon.sh"
-copy_or_download "install/ai-collab-summary.py"  "$CLAUDE_DIR/ai-collab-summary.py"
+copy_or_download "install/daemon.sh"                          "$CLAUDE_DIR/ai-collab-daemon.sh"
+copy_or_download "install/ai-collab-summary.py"               "$CLAUDE_DIR/ai-collab-summary.py"
+copy_or_download "install/ai-collab-check-notifications.py"   "$CLAUDE_DIR/ai-collab-check-notifications.py"
 chmod +x "$CLAUDE_DIR/ai-collab-daemon.sh"
 
-green "Daemon script      → $CLAUDE_DIR/ai-collab-daemon.sh"
-green "CONTEXT.md script  → $CLAUDE_DIR/ai-collab-summary.py"
+green "Daemon script        → $CLAUDE_DIR/ai-collab-daemon.sh"
+green "CONTEXT.md script    → $CLAUDE_DIR/ai-collab-summary.py"
+green "Notifications script → $CLAUDE_DIR/ai-collab-check-notifications.py"
 
 # ── 3. Start background daemon ───────────────────────────────────────────────
 echo ""
@@ -216,24 +219,7 @@ NEW_HOOKS = {
     "hooks": [{
       "type": "command",
       "timeout": 5,
-      "command": (
-        "bash -c '"
-        "FILE=\"$HOME/.ai-collab-notifications.json\"; "
-        "if [ -f \"$FILE\" ]; then "
-          "CONTENT=$(python3 -c \""
-            "import json,sys; "
-            "data=json.load(open(\\\\\\\"$FILE\\\\\\\")); "
-            "filtered=[x for x in data if x.get(\\\\\\\"ai\\\\\\\") "
-              "and x.get(\\\\\\\"file\\\\\\\") not in (\\\\\\\"CONTEXT.md\\\\\\\",\\\\\\\"PROTOCOL.md\\\\\\\")]; "
-            "print(json.dumps(filtered)) if filtered else None"
-          "\\\" 2>/dev/null); "
-          "if [ -n \\\"$CONTENT\\\" ] && [ \\\"$CONTENT\\\" != \\\"[]\\\" ] && [ \\\"$CONTENT\\\" != \\\"None\\\" ]; then "
-            "echo \\\"[AI-COLLAB] Pending notifications from other AIs:\\\"; "
-            "echo \\\"$CONTENT\\\"; "
-          "fi; "
-          "echo \\\"[]\\\" > \\\"$FILE\\\"; "
-        "fi'"
-      )
+      "command": "python3 ~/.claude/ai-collab-check-notifications.py 2>/dev/null || true"
     }]
   }]
 }
