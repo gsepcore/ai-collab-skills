@@ -148,7 +148,7 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
     else
       info "macOS notifications disabled — set AI_COLLAB_OS_NOTIFY=1 in the plist later if you change your mind"
     fi
-  elif [[ "$AI_COLLAB_OS_NOTIFY" = "1" ]]; then
+  elif [[ "${AI_COLLAB_OS_NOTIFY:-}" = "1" ]]; then
     add_plist_env "AI_COLLAB_OS_NOTIFY" "1"
   fi
 
