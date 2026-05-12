@@ -352,6 +352,30 @@ def process_inbox(
             "adapter_result": adapter_result,
         }
 
+    if adapter_result["status"] == "success":
+        current_meta, current_body = parse_frontmatter(inbox_path.read_text(encoding="utf-8"))
+        if current_meta.get("status") and current_meta.get("status") != "unread":
+            state[state_key] = timestamp
+            if len(state) > MAX_EVENTS:
+                state = dict(list(state.items())[-MAX_EVENTS:])
+            write_json(state_file, state)
+            log(
+                "WAKE "
+                f"action=adapter-updated task_id={task_id} target={target_slug} attempt={attempts} "
+                f"adapter={adapter_result['adapter_name']} adapter_status=success "
+                f"inbox_status={current_meta.get('status')} inbox={inbox_path}",
+                log_file,
+            )
+            return {
+                "action": "adapter-updated",
+                "task_id": task_id,
+                "attempts": attempts,
+                "event": event,
+                "adapter_result": adapter_result,
+                "inbox_status": current_meta.get("status", ""),
+            }
+        meta, body = current_meta, current_body
+
     meta["attempts"] = str(next_attempts)
     meta["last_attempt"] = timestamp
     if adapter_result["status"] == "success":

@@ -284,6 +284,44 @@ class TestAdapters(unittest.TestCase):
         self.assertIn("--dir", calls[0][0])
         self.assertIn("--file", calls[0][0])
 
+    def test_successful_cli_does_not_overwrite_agent_done(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inbox = root / ".ai-collab" / "inbox-opencode.md"
+            inbox.parent.mkdir()
+            inbox.write_text(SAMPLE_INBOX.replace("to: codex", "to: opencode"), encoding="utf-8")
+
+            def fake_runner(command, **kwargs):
+                text = inbox.read_text(encoding="utf-8").replace("status: unread", "status: done")
+                inbox.write_text(text, encoding="utf-8")
+
+                class Completed:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+
+                return Completed()
+
+            old_path = _mod.shutil.which
+            try:
+                _mod.shutil.which = lambda name: f"/usr/bin/{name}"
+                result = process_inbox(
+                    inbox,
+                    "smoke",
+                    events_file=root / "events.json",
+                    state_file=root / "state.json",
+                    log_file=root / "wakeup.log",
+                    adapter_mode="cli",
+                    adapter_runner=fake_runner,
+                )
+            finally:
+                _mod.shutil.which = old_path
+
+            self.assertEqual(result["action"], "adapter-updated")
+            meta, _ = parse_frontmatter(inbox.read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "done")
+            self.assertEqual(meta["attempts"], "0")
+
 
 if __name__ == "__main__":
     unittest.main()
