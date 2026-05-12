@@ -5,6 +5,7 @@
 NOTIFICATIONS_FILE="$HOME/.ai-collab-notifications.json"
 LAST_CHECK_FILE="$HOME/.ai-collab-last-check"
 LOG_FILE="/tmp/ai-collab-daemon.log"
+WAKEUP_SCRIPT="$HOME/.claude/ai-collab-wakeup.py"
 MAX_NOTIFICATIONS=50
 
 log() { echo "[AI-COLLAB] $(date -u +"%Y-%m-%dT%H:%M:%SZ") $*" >> "$LOG_FILE"; }
@@ -34,6 +35,16 @@ while true; do
   # Fix #3 — increased maxdepth from 4 to 6 for deeper project structures
   while IFS= read -r -d '' COLLAB_DIR; do
     PROJECT=$(basename "$(dirname "$COLLAB_DIR")")
+
+    # Phase B — scan inboxes separately from normal log notifications.
+    # The Python helper owns frontmatter parsing, retry/backoff, event writes,
+    # and failed-state transitions. This keeps the bash daemon small.
+    if [ -x "$WAKEUP_SCRIPT" ]; then
+      for inbox in "$COLLAB_DIR"/inbox-*.md; do
+        [ -f "$inbox" ] || continue
+        python3 "$WAKEUP_SCRIPT" "$PROJECT" "$inbox" >/dev/null 2>>"$LOG_FILE" || log "Warning: wakeup scan failed for $inbox"
+      done
+    fi
 
     for f in "$COLLAB_DIR"/*.md; do
       [ -f "$f" ] || continue

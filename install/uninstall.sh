@@ -14,8 +14,11 @@ echo "  - launchd daemon (com.gsepcore.ai-collab)"
 echo "  - ~/.claude/ai-collab-daemon.sh"
 echo "  - ~/.claude/ai-collab-summary.py"
 echo "  - ~/.claude/ai-collab-check-notifications.py"
+echo "  - ~/.claude/ai-collab-wakeup.py"
 echo "  - ~/.ai-collab-notifications.json"
 echo "  - ~/.ai-collab-last-check"
+echo "  - ~/.ai-collab-wakeup-events.json"
+echo "  - ~/.ai-collab-wakeup-state.json"
 echo "  - ~/.claude/skills/collab/"
 echo "  - AI-collab hooks from ~/.claude/settings.json"
 echo ""
@@ -45,10 +48,13 @@ fi
 [ -f "$HOME/.claude/ai-collab-daemon.sh" ]               && rm -f "$HOME/.claude/ai-collab-daemon.sh"               && echo "✓ Removed ai-collab-daemon.sh"
 [ -f "$HOME/.claude/ai-collab-summary.py" ]              && rm -f "$HOME/.claude/ai-collab-summary.py"              && echo "✓ Removed ai-collab-summary.py"
 [ -f "$HOME/.claude/ai-collab-check-notifications.py" ]  && rm -f "$HOME/.claude/ai-collab-check-notifications.py"  && echo "✓ Removed ai-collab-check-notifications.py"
+[ -f "$HOME/.claude/ai-collab-wakeup.py" ]               && rm -f "$HOME/.claude/ai-collab-wakeup.py"               && echo "✓ Removed ai-collab-wakeup.py"
 
 # Remove notification queue files
 [ -f "$HOME/.ai-collab-notifications.json" ] && rm -f "$HOME/.ai-collab-notifications.json" && echo "✓ Removed notifications queue"
 [ -f "$HOME/.ai-collab-last-check" ]         && rm -f "$HOME/.ai-collab-last-check"         && echo "✓ Removed last-check file"
+[ -f "$HOME/.ai-collab-wakeup-events.json" ] && rm -f "$HOME/.ai-collab-wakeup-events.json" && echo "✓ Removed wakeup events queue"
+[ -f "$HOME/.ai-collab-wakeup-state.json" ]  && rm -f "$HOME/.ai-collab-wakeup-state.json"  && echo "✓ Removed wakeup state file"
 
 # Remove skill from Claude Code
 SKILL_DIR="$HOME/.claude/skills/collab"

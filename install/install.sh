@@ -8,8 +8,9 @@
 #    2. Daemon script            → ~/.claude/ai-collab-daemon.sh
 #    3. Summary script           → ~/.claude/ai-collab-summary.py
 #    4. Notifications script     → ~/.claude/ai-collab-check-notifications.py
-#    5. Background daemon        → launchd (macOS) / cron (Linux)
-#    6. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#    5. Wakeup detector script   → ~/.claude/ai-collab-wakeup.py
+#    6. Background daemon        → launchd (macOS) / cron (Linux)
+#    7. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -105,11 +106,14 @@ bold "Step 2/5 — Installing background scripts"
 copy_or_download "install/daemon.sh"                          "$CLAUDE_DIR/ai-collab-daemon.sh"
 copy_or_download "install/ai-collab-summary.py"               "$CLAUDE_DIR/ai-collab-summary.py"
 copy_or_download "install/ai-collab-check-notifications.py"   "$CLAUDE_DIR/ai-collab-check-notifications.py"
+copy_or_download "install/ai-collab-wakeup.py"                "$CLAUDE_DIR/ai-collab-wakeup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-daemon.sh"
+chmod +x "$CLAUDE_DIR/ai-collab-wakeup.py"
 
 green "Daemon script        → $CLAUDE_DIR/ai-collab-daemon.sh"
 green "CONTEXT.md script    → $CLAUDE_DIR/ai-collab-summary.py"
 green "Notifications script → $CLAUDE_DIR/ai-collab-check-notifications.py"
+green "Wakeup detector      → $CLAUDE_DIR/ai-collab-wakeup.py"
 
 # ── 3. Start background daemon ───────────────────────────────────────────────
 echo ""
