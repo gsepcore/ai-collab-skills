@@ -416,7 +416,11 @@ class TestAdapters(unittest.TestCase):
             return 200, "ok"
 
         def fake_getter(url, **kwargs):
-            return 200, [{"id": "ses_test"}]
+            if "/project/current" in url:
+                return 200, {"worktree": "/tmp/project"}
+            if url.endswith("/session"):
+                return 200, [{"id": "ses_test", "directory": "/tmp/project"}]
+            return 404, ""
 
         result = _mod.run_opencode_visible_adapter(
             {
@@ -446,7 +450,15 @@ class TestAdapters(unittest.TestCase):
         old_get = _mod.get_json
         try:
             _mod.post_json = lambda url, payload, **kwargs: (200, "ok")
-            _mod.get_json = lambda url, **kwargs: (200, [{"id": "ses_test"}])
+
+            def fake_get(url, **kwargs):
+                if "/project/current" in url:
+                    return 200, {"worktree": "/tmp/project"}
+                if url.endswith("/session"):
+                    return 200, [{"id": "ses_test", "directory": "/tmp/project"}]
+                return 404, ""
+
+            _mod.get_json = fake_get
             result = run_wakeup_adapter(
                 {
                     "project_path": "/tmp/project",
@@ -464,25 +476,31 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["adapter_name"], "opencode-visible")
 
-    def test_opencode_visible_skips_port_without_session(self):
-        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
-        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "12345,23456"
+    def test_opencode_visible_prefers_port_matching_project(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/gsep"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "11111,22222"
         posts = []
 
         def fake_poster(url, payload, **kwargs):
             posts.append((url, payload, kwargs))
             return 200, "ok"
 
-        responses = iter([(200, []), (200, [{"id": "ses_second"}])])
-
         def fake_getter(url, **kwargs):
-            return next(responses)
+            if "127.0.0.1:11111/project/current" in url:
+                return 200, {"worktree": "/tmp/other-project"}
+            if "127.0.0.1:22222/project/current" in url:
+                return 200, {"worktree": "/tmp/gsep"}
+            if "127.0.0.1:22222/session" in url:
+                return 200, [{"id": "ses_gsep", "directory": "/tmp/gsep"}]
+            if "127.0.0.1:11111/session" in url:
+                return 200, [{"id": "ses_other", "directory": "/tmp/other-project"}]
+            return 404, ""
 
         result = _mod.run_opencode_visible_adapter(
             {
-                "project_path": "/tmp/project",
+                "project_path": "/tmp/gsep",
                 "target_slug": "opencode",
-                "inbox_path": "/tmp/project/.ai-collab/inbox-opencode.md",
+                "inbox_path": "/tmp/gsep/.ai-collab/inbox-opencode.md",
                 "task_id": "task-123",
                 "synthetic_prompt": "read visible inbox",
             },
@@ -492,8 +510,8 @@ class TestAdapters(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(posts[0][0], "http://127.0.0.1:23456/session/ses_second/prompt_async")
         self.assertEqual(len(posts), 1)
+        self.assertEqual(posts[0][0], "http://127.0.0.1:22222/session/ses_gsep/prompt_async")
 
     def test_antigravity_chat_adapter_uses_reuse_window(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"

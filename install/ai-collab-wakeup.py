@@ -472,15 +472,46 @@ def get_json(url: str, *, timeout: int) -> tuple[int, Any]:
         return 0, str(exc)
 
 
-def discover_opencode_active_session(port: int, *, timeout: int, getter=None) -> str | None:
+def opencode_port_project(port: int, *, timeout: int, getter=None) -> str | None:
+    getter = getter or get_json
+    status, body = getter(f"http://127.0.0.1:{port}/project/current", timeout=timeout)
+    if not (200 <= status < 300) or not isinstance(body, dict):
+        return None
+    worktree = body.get("worktree")
+    return worktree if isinstance(worktree, str) else None
+
+
+def discover_opencode_active_session(
+    port: int,
+    *,
+    timeout: int,
+    getter=None,
+    project_path: str | None = None,
+) -> str | None:
     getter = getter or get_json
     status, body = getter(f"http://127.0.0.1:{port}/session", timeout=timeout)
     if not (200 <= status < 300) or not isinstance(body, list) or not body:
         return None
-    for session in body:
-        if isinstance(session, dict) and session.get("id"):
-            return session["id"]
-    return None
+
+    def matches_project(session: dict) -> bool:
+        if not project_path:
+            return True
+        directory = session.get("directory") or ""
+        try:
+            return Path(directory).resolve() == Path(project_path).resolve()
+        except OSError:
+            return directory == project_path
+
+    candidates = [s for s in body if isinstance(s, dict) and s.get("id") and matches_project(s)]
+    if not candidates:
+        return None
+
+    def updated_at(session: dict) -> int:
+        time = session.get("time") or {}
+        return int(time.get("updated") or time.get("created") or 0)
+
+    candidates.sort(key=updated_at, reverse=True)
+    return candidates[0]["id"]
 
 
 def run_opencode_visible_adapter(
@@ -512,12 +543,36 @@ def run_opencode_visible_adapter(
         }
 
     prompt = input_data["synthetic_prompt"]
+    project_path = input_data.get("project_path")
     last_error = ""
     fast_timeout = min(timeout, 10)
+    # Prefer ports whose /project/current matches the inbox's project_path so
+    # the synthetic prompt lands in the user's visible tab, not a tab open on
+    # another project.
+    project_ports: list[int] = []
+    other_ports: list[int] = []
     for port in ports:
-        session_id = discover_opencode_active_session(port, timeout=fast_timeout, getter=getter)
+        port_project = opencode_port_project(port, timeout=fast_timeout, getter=getter)
+        if project_path and port_project:
+            try:
+                same = Path(port_project).resolve() == Path(project_path).resolve()
+            except OSError:
+                same = port_project == project_path
+            if same:
+                project_ports.append(port)
+                continue
+        other_ports.append(port)
+    ordered_ports = project_ports + other_ports
+
+    for port in ordered_ports:
+        session_id = discover_opencode_active_session(
+            port,
+            timeout=fast_timeout,
+            getter=getter,
+            project_path=project_path if port in project_ports else None,
+        )
         if not session_id:
-            last_error = f"port {port}: no active session found"
+            last_error = f"port {port}: no matching session found"
             continue
         status, text = poster(
             f"http://127.0.0.1:{port}/session/{session_id}/prompt_async",
