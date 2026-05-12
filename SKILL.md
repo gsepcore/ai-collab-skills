@@ -262,28 +262,59 @@ Write a task directly to another AI's inbox so it executes automatically on thei
 - `.ai-collab/inbox-all.md` — broadcast to all AIs
 
 **Steps:**
-1. Find project root
-2. Write `.ai-collab/inbox-{ai-name}.md` with this format:
-```
+
+1. Find project root.
+2. Generate a fresh `task_id` from the current UTC timestamp + target slug + short task slug. Format: `YYYYMMDD-HHMMSS-{slug}-{short-description}`. Example: `20260512-143015-codex-fix-daemon`.
+3. Check whether `.ai-collab/inbox-{ai-name}.md` already exists. If it does AND its current `status` is not `done` or `failed`, STOP and warn the user: "Existing task in inbox-{ai-name}.md is still {status}. Overwrite? (y/n)" Only proceed on explicit confirmation.
+4. Write `.ai-collab/inbox-{ai-name}.md` with this frontmatter:
+
+```yaml
 ---
 from: Claude Code
 to: {ai-name}
-priority: high | normal | low
-updated: {ISO timestamp}
+task_id: {generated task_id}
+priority: critical | high | normal | low
+updated: {ISO-8601 UTC timestamp}
 status: unread
+attempts: 0
+last_attempt:
+claimed_by:
+claimed_at:
+done_at:
 ---
 ## Task
 {detailed task description with files, constraints, and exit criteria}
 ```
-3. Confirm: "Task written to inbox-{ai-name}.md — {ai-name} will pick it up on next response"
+
+5. Confirm: "Task written to inbox-{ai-name}.md (task_id: {task_id}) — {ai-name} will pick it up on next response."
+
+**Schema fields (all required):**
+
+| Field         | Purpose                                                                   |
+|---------------|---------------------------------------------------------------------------|
+| `task_id`     | Durable identifier. Never changes after creation. Used by daemon dedup.   |
+| `status`      | Lifecycle state: `unread → claimed → running → blocked → done \| failed`. |
+| `attempts`    | Wakeup attempts counter (incremented by daemon or adapter on each wake).  |
+| `last_attempt`| ISO timestamp of most recent wake attempt (empty until first attempt).    |
+| `claimed_by`  | Slug of the agent that claimed the task (empty until claimed).            |
+| `claimed_at`  | ISO timestamp when claim happened (empty until claimed).                  |
+| `done_at`     | ISO timestamp when status moved to `done` (empty until done).             |
 
 **For broadcast to all AIs:**
+
 ```
 /collab assign all [task]
-→ writes to inbox-all.md
+→ writes to inbox-all.md with the same schema, to: all
 ```
 
-**How other AIs respond:** Every AI checks `inbox-{its-name}.md` and `inbox-all.md` at the start of every response. If `status: unread`, it executes the task and marks it `status: done`.
+**How other AIs respond:** Every AI checks `inbox-{its-name}.md` and `inbox-all.md` at the start of every response. If `status: unread`, the agent first sets `status: claimed` + `claimed_by` + `claimed_at`, then executes the task, then marks `status: done` and sets `done_at`. See `claude-task-lifecycle-spec.md` for the full state machine, conflict resolution, and director semantics.
+
+**Director rules (when reassigning or overriding):**
+
+- Do not overwrite a `running` task that is making progress. Wait for the daemon's stale-claim timeout (30 min default).
+- Moving `blocked` → `unread` requires a reason in the task body or thread file.
+- Marking a task `failed` is allowed when the agent reports non-recoverable error or `attempts >= MAX_ATTEMPTS`.
+- `done` and `failed` are terminal. To re-do work, issue a NEW task with a new `task_id`.
 
 ---
 
