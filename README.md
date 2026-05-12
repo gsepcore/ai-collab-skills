@@ -334,7 +334,7 @@ Six components keep Claude informed and able to dispatch inbox tasks:
 1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
 3. **Notification reader script** — `~/.claude/ai-collab-check-notifications.py` is invoked by the `UserPromptSubmit` hook. It uses an `fcntl` lock to coordinate with the daemon, **filters notifications by active project**, caps output to 10 items / 500 chars per message / 4 KB total, drops notifications older than 24 h, defends against malformed JSON, and always exits 0 (never blocks your prompt). All limits are tunable — see [Environment variables](#environment-variables) below.
-4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` and `thread-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; thread mentions use `reason: thread-mention`. By default it uses `notify-only`; CLI execution is opt-in via `AI_COLLAB_WAKEUP_ADAPTER=cli`.
+4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` and `thread-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; thread mentions use `reason: thread-mention`. By default it uses `notify-only`; `visible` targets active Antigravity/OpenCode panels when possible, and `cli` runs headless CLIs.
 5. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
 6. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
@@ -409,15 +409,36 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Set to `1` (in the daemon's launchd plist `EnvironmentVariables`) to fire macOS Notification Center banners when other AIs complete tasks. Persistent layer that works even when Claude Code is closed — see [macOS notifications](#macos-notifications-survives-claude-close-mac-sleep-and-restart). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | macOS sound name (e.g. `Tink`, `Glass`, `Pop`, `Hero`) to play with each banner. Only effective when `AI_COLLAB_OS_NOTIFY=1`. Leave unset for silent banners. |
 | `AI_COLLAB_DOCTOR_STRICT` | _(off)_ | Set to `1` so `ai-collab-doctor.py` exits nonzero when required install files/settings are broken. Warnings remain non-fatal. |
-| `AI_COLLAB_WAKEUP_ADAPTER` | `notify-only` | Wakeup adapter mode for unread inboxes. Use `notify-only` for safe event logging, or `cli` to run target CLIs (`codex`, `opencode`, `claude`) automatically. |
+| `AI_COLLAB_WAKEUP_ADAPTER` | `notify-only` | Wakeup adapter mode. Use `notify-only` for safe event logging, `visible` for active Antigravity/OpenCode panels, `opencode-visible`, `antigravity-chat`, or `cli` for headless execution. |
 | `AI_COLLAB_WAKEUP_MAX_ATTEMPTS` | `3` | Maximum wake attempts before an unread inbox auto-transitions to `failed`. |
 | `AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT` | `120` | Seconds before a CLI adapter run is considered failed. |
-| `AI_COLLAB_WAKEUP_CLI_PROJECTS` | _(empty)_ | Required allowlist for `AI_COLLAB_WAKEUP_ADAPTER=cli`. Comma-separated project basenames or absolute paths. Use `*` only for disposable testing. |
+| `AI_COLLAB_WAKEUP_CLI_PROJECTS` | _(empty)_ | Required allowlist for executable adapters (`visible`, `opencode-visible`, `antigravity-chat`, `cli`). Comma-separated project basenames or absolute paths. Use `*` only for disposable testing. |
 | `AI_COLLAB_WAKEUP_CLI_TARGETS` | `codex,opencode,claude` | Optional comma-separated target allowlist for CLI execution. |
+| `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode` | Optional comma-separated target allowlist for visible adapters. Falls back to `AI_COLLAB_WAKEUP_CLI_TARGETS` if set. |
 | `AI_COLLAB_WAKEUP_DRY_RUN` | _(off)_ | Set to `1` to record what would be woken without executing any CLI command. |
 | `AI_COLLAB_CODEX_BIN` | _(auto-detected)_ | Override the `codex` executable path used by the CLI adapter. |
 | `AI_COLLAB_OPENCODE_BIN` | _(auto-detected)_ | Override the `opencode` executable path used by the CLI adapter. |
 | `AI_COLLAB_CLAUDE_BIN` | _(auto-detected)_ | Override the `claude` executable path used by the CLI adapter. |
+| `AI_COLLAB_OPENCODE_PORTS` | _(auto-detected)_ | Optional comma-separated OpenCode TUI ports for `opencode-visible`. Normally auto-detected from running `opencode --port` processes. |
+| `AI_COLLAB_ANTIGRAVITY_BIN` | _(auto-detected)_ | Override the `antigravity` executable used by `antigravity-chat`. |
+| `AI_COLLAB_ANTIGRAVITY_MODE` | `agent` | Mode passed to `antigravity chat --mode` for visible Codex/Antigravity wakeups. |
+
+### Visible Antigravity/OpenCode wakeup
+
+Visible wakeup tries to reach the agent panel you already have open in Antigravity:
+
+```bash
+AI_COLLAB_WAKEUP_ADAPTER=visible \
+AI_COLLAB_WAKEUP_CLI_PROJECTS=/path/to/project \
+AI_COLLAB_WAKEUP_VISIBLE_TARGETS=codex,opencode \
+bash install/install.sh
+```
+
+Behavior:
+
+- `@opencode` or `inbox-opencode.md` uses the OpenCode extension's local `/tui/append-prompt` endpoint.
+- `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent`.
+- If no visible panel/port exists, the adapter fails safely and normal retry/backoff applies.
 
 ---
 

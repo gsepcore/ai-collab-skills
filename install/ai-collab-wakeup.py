@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 import hashlib
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -33,6 +35,7 @@ DEFAULT_LOG_FILE = Path("/tmp/ai-collab-wakeup.log")
 DEFAULT_ADAPTER = "notify-only"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
 DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude")
+DEFAULT_VISIBLE_TARGETS = ("codex", "opencode")
 MAX_EVENTS = 200
 MENTION_RE = re.compile(r"(?<![\w.-])@([a-z][a-z0-9_-]{1,40})\b")
 FALLBACK_BIN_DIRS = (
@@ -309,6 +312,37 @@ def cli_target_allowed(target_slug: str) -> bool:
     return "*" in allowed or target_slug in allowed
 
 
+def visible_target_allowed(target_slug: str) -> bool:
+    allowed = csv_env("AI_COLLAB_WAKEUP_VISIBLE_TARGETS")
+    if not allowed:
+        allowed = csv_env("AI_COLLAB_WAKEUP_CLI_TARGETS")
+    if not allowed:
+        allowed = list(DEFAULT_VISIBLE_TARGETS)
+    return "*" in allowed or target_slug in allowed
+
+
+def visible_guardrail(input_data: dict[str, str], adapter_name: str) -> dict[str, str] | None:
+    if truthy_env("AI_COLLAB_WAKEUP_DRY_RUN"):
+        return {
+            "status": "degraded",
+            "message": f"{adapter_name} dry-run: prompt not sent",
+            "adapter_name": f"{adapter_name}-dry-run",
+        }
+    if not cli_project_allowed(input_data["project_path"]):
+        return {
+            "status": "degraded",
+            "message": f"{adapter_name} blocked: project is not in AI_COLLAB_WAKEUP_CLI_PROJECTS",
+            "adapter_name": f"{adapter_name}-guardrail",
+        }
+    if not visible_target_allowed(input_data["target_slug"]):
+        return {
+            "status": "degraded",
+            "message": f"{adapter_name} blocked: target is not in AI_COLLAB_WAKEUP_VISIBLE_TARGETS",
+            "adapter_name": f"{adapter_name}-guardrail",
+        }
+    return None
+
+
 def executable_for(target_slug: str) -> str | None:
     env_key = f"AI_COLLAB_{target_slug.upper().replace('-', '_')}_BIN"
     configured = os.environ.get(env_key)
@@ -319,6 +353,7 @@ def executable_for(target_slug: str) -> str | None:
         "codex": ["codex"],
         "opencode": ["opencode"],
         "claude": ["claude"],
+        "antigravity": ["antigravity"],
     }.get(target_slug, [target_slug])
 
     for candidate in candidates:
@@ -367,6 +402,208 @@ def build_cli_command(input_data: dict[str, str]) -> list[str] | None:
     return [exe, prompt]
 
 
+def ps_commands(runner=subprocess.run) -> str:
+    try:
+        completed = runner(
+            ["ps", "ax", "-o", "command="],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout or ""
+
+
+def discover_opencode_ports(runner=subprocess.run) -> list[int]:
+    ports: list[int] = []
+    for value in csv_env("AI_COLLAB_OPENCODE_PORTS"):
+        try:
+            ports.append(int(value))
+        except ValueError:
+            continue
+
+    commands = ps_commands(runner=runner)
+    for match in re.finditer(r"\bopencode\b.*?(?:--port(?:=|\s+))(\d+)", commands):
+        ports.append(int(match.group(1)))
+
+    deduped: list[int] = []
+    for port in ports:
+        if port not in deduped and 0 < port < 65536:
+            deduped.append(port)
+    return deduped
+
+
+def post_json(url: str, payload: dict[str, str], *, timeout: int) -> tuple[int, str]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            text = response.read(400).decode("utf-8", errors="replace")
+            return response.status, text
+    except urllib.error.HTTPError as exc:
+        text = exc.read(400).decode("utf-8", errors="replace")
+        return exc.code, text
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return 0, str(exc)
+
+
+def run_opencode_visible_adapter(
+    input_data: dict[str, str],
+    *,
+    timeout: int,
+    runner=subprocess.run,
+    poster=None,
+) -> dict[str, str]:
+    poster = poster or post_json
+    guardrail = visible_guardrail(input_data, "opencode-visible")
+    if guardrail:
+        return guardrail
+    if input_data["target_slug"] != "opencode":
+        return {
+            "status": "failed",
+            "message": "opencode-visible adapter only supports target opencode",
+            "adapter_name": "opencode-visible",
+        }
+
+    ports = discover_opencode_ports(runner=runner)
+    if not ports:
+        return {
+            "status": "failed",
+            "message": "no visible OpenCode TUI port found; open the OpenCode panel first",
+            "adapter_name": "opencode-visible",
+        }
+
+    prompt = input_data["synthetic_prompt"]
+    last_error = ""
+    for port in ports:
+        status, text = poster(
+            f"http://127.0.0.1:{port}/tui/append-prompt",
+            {"text": prompt},
+            timeout=min(timeout, 10),
+        )
+        if 200 <= status < 300:
+            return {
+                "status": "degraded",
+                "message": f"prompt appended to visible OpenCode TUI on port {port}",
+                "adapter_name": "opencode-visible",
+            }
+        last_error = f"port {port} returned {status}: {text}".strip()
+
+    return {
+        "status": "failed",
+        "message": last_error or "visible OpenCode TUI did not accept prompt",
+        "adapter_name": "opencode-visible",
+    }
+
+
+def antigravity_executable() -> str | None:
+    configured = os.environ.get("AI_COLLAB_ANTIGRAVITY_BIN")
+    if configured:
+        return configured
+    found = executable_for("antigravity")
+    if found:
+        return found
+    fallback = Path.home() / ".antigravity/antigravity/bin/antigravity"
+    if fallback.exists() and os.access(fallback, os.X_OK):
+        return str(fallback)
+    return None
+
+
+def build_antigravity_chat_command(input_data: dict[str, str]) -> list[str] | None:
+    exe = antigravity_executable()
+    if not exe:
+        return None
+    mode = os.environ.get("AI_COLLAB_ANTIGRAVITY_MODE", "agent").strip() or "agent"
+    command = [exe, "chat", "--mode", mode, "--reuse-window"]
+    source = input_data.get("inbox_path") or input_data.get("source_path")
+    if source:
+        command.extend(["--add-file", source])
+    command.append(input_data["synthetic_prompt"])
+    return command
+
+
+def run_antigravity_chat_adapter(
+    input_data: dict[str, str],
+    *,
+    timeout: int,
+    runner=subprocess.run,
+) -> dict[str, str]:
+    guardrail = visible_guardrail(input_data, "antigravity-chat")
+    if guardrail:
+        return guardrail
+    if input_data["target_slug"] not in {"codex", "antigravity"}:
+        return {
+            "status": "failed",
+            "message": "antigravity-chat adapter supports target codex/antigravity",
+            "adapter_name": "antigravity-chat",
+        }
+
+    command = build_antigravity_chat_command(input_data)
+    if not command:
+        return {
+            "status": "failed",
+            "message": "no antigravity executable found",
+            "adapter_name": "antigravity-chat",
+        }
+
+    try:
+        completed = runner(
+            command,
+            cwd=input_data["project_path"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "failed", "message": f"antigravity chat timed out after {timeout}s", "adapter_name": "antigravity-chat"}
+    except OSError as exc:
+        return {"status": "failed", "message": f"antigravity chat failed to start: {exc}", "adapter_name": "antigravity-chat"}
+
+    if completed.returncode == 0:
+        return {
+            "status": "degraded",
+            "message": "prompt sent to Antigravity chat with --reuse-window",
+            "adapter_name": "antigravity-chat",
+        }
+
+    stderr = (completed.stderr or completed.stdout or "").strip().replace("\n", " ")
+    if len(stderr) > 300:
+        stderr = stderr[:300] + "...[truncated]"
+    return {
+        "status": "failed",
+        "message": f"antigravity chat exited {completed.returncode}: {stderr}",
+        "adapter_name": "antigravity-chat",
+    }
+
+
+def run_visible_adapter(
+    input_data: dict[str, str],
+    *,
+    timeout: int,
+    runner=subprocess.run,
+) -> dict[str, str]:
+    target = input_data["target_slug"]
+    if target == "opencode":
+        return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if target in {"codex", "antigravity"}:
+        return run_antigravity_chat_adapter(input_data, timeout=timeout, runner=runner)
+    return {
+        "status": "failed",
+        "message": f"visible adapter has no implementation for target {target}",
+        "adapter_name": "visible",
+    }
+
+
 def run_wakeup_adapter(
     input_data: dict[str, str],
     *,
@@ -387,6 +624,12 @@ def run_wakeup_adapter(
             "message": "wake event recorded; no active execution adapter configured",
             "adapter_name": "notify-only",
         }
+    if mode == "visible":
+        return run_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "opencode-visible":
+        return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "antigravity-chat":
+        return run_antigravity_chat_adapter(input_data, timeout=timeout, runner=runner)
     if mode != "cli":
         return {"status": "failed", "message": f"unknown adapter mode: {mode}", "adapter_name": mode}
 

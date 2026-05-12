@@ -254,7 +254,11 @@ class TestAdapters(unittest.TestCase):
         self._env = {
             "AI_COLLAB_WAKEUP_CLI_PROJECTS": os.environ.get("AI_COLLAB_WAKEUP_CLI_PROJECTS"),
             "AI_COLLAB_WAKEUP_CLI_TARGETS": os.environ.get("AI_COLLAB_WAKEUP_CLI_TARGETS"),
+            "AI_COLLAB_WAKEUP_VISIBLE_TARGETS": os.environ.get("AI_COLLAB_WAKEUP_VISIBLE_TARGETS"),
             "AI_COLLAB_WAKEUP_DRY_RUN": os.environ.get("AI_COLLAB_WAKEUP_DRY_RUN"),
+            "AI_COLLAB_OPENCODE_PORTS": os.environ.get("AI_COLLAB_OPENCODE_PORTS"),
+            "AI_COLLAB_ANTIGRAVITY_BIN": os.environ.get("AI_COLLAB_ANTIGRAVITY_BIN"),
+            "AI_COLLAB_ANTIGRAVITY_MODE": os.environ.get("AI_COLLAB_ANTIGRAVITY_MODE"),
         }
         for key in self._env:
             os.environ.pop(key, None)
@@ -388,6 +392,116 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(result["status"], "degraded")
         self.assertEqual(result["adapter_name"], "cli-dry-run")
         self.assertEqual(calls, [])
+
+    def test_discover_opencode_ports_from_env_and_ps(self):
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "12345"
+
+        def fake_runner(command, **kwargs):
+            class Completed:
+                returncode = 0
+                stdout = "node /x/opencode --port 23456\n"
+                stderr = ""
+
+            return Completed()
+
+        self.assertEqual(_mod.discover_opencode_ports(runner=fake_runner), [12345, 23456])
+
+    def test_opencode_visible_posts_to_tui_port(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "12345"
+        posts = []
+
+        def fake_poster(url, payload, **kwargs):
+            posts.append((url, payload, kwargs))
+            return 200, "ok"
+
+        result = _mod.run_opencode_visible_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            timeout=10,
+            poster=fake_poster,
+        )
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["adapter_name"], "opencode-visible")
+        self.assertEqual(posts[0][0], "http://127.0.0.1:12345/tui/append-prompt")
+        self.assertEqual(posts[0][1]["text"], "read visible inbox")
+
+    def test_visible_adapter_routes_opencode(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "12345"
+
+        old_post = _mod.post_json
+        try:
+            _mod.post_json = lambda url, payload, **kwargs: (200, "ok")
+            result = run_wakeup_adapter(
+                {
+                    "project_path": "/tmp/project",
+                    "target_slug": "opencode",
+                    "inbox_path": "/tmp/project/.ai-collab/inbox-opencode.md",
+                    "task_id": "task-123",
+                    "synthetic_prompt": "read visible inbox",
+                },
+                mode="visible",
+            )
+        finally:
+            _mod.post_json = old_post
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["adapter_name"], "opencode-visible")
+
+    def test_antigravity_chat_adapter_uses_reuse_window(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
+        os.environ["AI_COLLAB_ANTIGRAVITY_BIN"] = "/usr/bin/antigravity"
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append((command, kwargs))
+
+            class Completed:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Completed()
+
+        result = run_wakeup_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "codex",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-codex.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            mode="antigravity-chat",
+            runner=fake_runner,
+        )
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["adapter_name"], "antigravity-chat")
+        self.assertEqual(calls[0][0][:5], ["/usr/bin/antigravity", "chat", "--mode", "agent", "--reuse-window"])
+        self.assertIn("--add-file", calls[0][0])
+        self.assertEqual(calls[0][0][-1], "read visible inbox")
+
+    def test_visible_adapter_blocks_unallowed_project(self):
+        result = run_wakeup_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            mode="visible",
+        )
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertIn("guardrail", result["adapter_name"])
 
     def test_successful_cli_does_not_overwrite_agent_done(self):
         with tempfile.TemporaryDirectory() as d:
