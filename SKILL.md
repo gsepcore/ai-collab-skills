@@ -308,6 +308,9 @@ while true; do
     BASENAME=$(basename "$f")
     [[ "$BASENAME" == claude-* ]] && continue
     [[ "$BASENAME" == PROTOCOL.md ]] && continue
+    [[ "$BASENAME" == CONTEXT.md ]] && continue
+    [[ "$BASENAME" == TEAM.md ]] && continue
+    [[ "$BASENAME" == inbox-* ]] && continue
     MOD=$(stat -f "%m" "$f" 2>/dev/null) || MOD=$(stat -c "%Y" "$f" 2>/dev/null) || continue
     if [ "$MOD" -gt "$LAST_CHECK" ]; then
       AI=$(grep "^ai:" "$f" 2>/dev/null | head -1 | cut -d' ' -f2-)

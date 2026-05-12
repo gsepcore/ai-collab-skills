@@ -41,6 +41,8 @@ while true; do
       [[ "$BASENAME" == claude-* ]] && continue
       [[ "$BASENAME" == PROTOCOL.md ]] && continue
       [[ "$BASENAME" == CONTEXT.md ]] && continue
+      [[ "$BASENAME" == TEAM.md ]] && continue
+      [[ "$BASENAME" == inbox-* ]] && continue
 
       MOD=$(STAT_MOD "$f") || continue
 
