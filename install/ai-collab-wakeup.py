@@ -180,6 +180,7 @@ def build_cli_command(input_data: dict[str, str]) -> list[str] | None:
             "never",
             "--sandbox",
             "workspace-write",
+            "--skip-git-repo-check",
             "exec",
             prompt,
         ]
