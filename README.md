@@ -381,6 +381,9 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_WAKEUP_ADAPTER` | `notify-only` | Wakeup adapter mode for unread inboxes. Use `notify-only` for safe event logging, or `cli` to run target CLIs (`codex`, `opencode`, `claude`) automatically. |
 | `AI_COLLAB_WAKEUP_MAX_ATTEMPTS` | `3` | Maximum wake attempts before an unread inbox auto-transitions to `failed`. |
 | `AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT` | `120` | Seconds before a CLI adapter run is considered failed. |
+| `AI_COLLAB_WAKEUP_CLI_PROJECTS` | _(empty)_ | Required allowlist for `AI_COLLAB_WAKEUP_ADAPTER=cli`. Comma-separated project basenames or absolute paths. Use `*` only for disposable testing. |
+| `AI_COLLAB_WAKEUP_CLI_TARGETS` | `codex,opencode,claude` | Optional comma-separated target allowlist for CLI execution. |
+| `AI_COLLAB_WAKEUP_DRY_RUN` | _(off)_ | Set to `1` to record what would be woken without executing any CLI command. |
 | `AI_COLLAB_CODEX_BIN` | _(auto-detected)_ | Override the `codex` executable path used by the CLI adapter. |
 | `AI_COLLAB_OPENCODE_BIN` | _(auto-detected)_ | Override the `opencode` executable path used by the CLI adapter. |
 | `AI_COLLAB_CLAUDE_BIN` | _(auto-detected)_ | Override the `claude` executable path used by the CLI adapter. |

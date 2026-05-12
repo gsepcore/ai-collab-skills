@@ -6,6 +6,7 @@ Run with: python3 -m pytest install/test_wakeup.py -v
 """
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -220,6 +221,22 @@ class TestProcessInbox(unittest.TestCase):
 
 
 class TestAdapters(unittest.TestCase):
+    def setUp(self):
+        self._env = {
+            "AI_COLLAB_WAKEUP_CLI_PROJECTS": os.environ.get("AI_COLLAB_WAKEUP_CLI_PROJECTS"),
+            "AI_COLLAB_WAKEUP_CLI_TARGETS": os.environ.get("AI_COLLAB_WAKEUP_CLI_TARGETS"),
+            "AI_COLLAB_WAKEUP_DRY_RUN": os.environ.get("AI_COLLAB_WAKEUP_DRY_RUN"),
+        }
+        for key in self._env:
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        for key, value in self._env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
     def test_notify_only_is_degraded(self):
         result = run_wakeup_adapter(
             {
@@ -250,6 +267,7 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
 
     def test_cli_adapter_success_uses_runner(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
         calls = []
 
         def fake_runner(command, **kwargs):
@@ -284,9 +302,50 @@ class TestAdapters(unittest.TestCase):
         self.assertIn("--dir", calls[0][0])
         self.assertIn("--file", calls[0][0])
 
+    def test_cli_adapter_requires_project_allowlist(self):
+        result = run_wakeup_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read inbox",
+            },
+            mode="cli",
+        )
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["adapter_name"], "cli-guardrail")
+        self.assertIn("AI_COLLAB_WAKEUP_CLI_PROJECTS", result["message"])
+
+    def test_cli_adapter_dry_run_does_not_execute(self):
+        os.environ["AI_COLLAB_WAKEUP_DRY_RUN"] = "1"
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append(command)
+            raise AssertionError("runner should not execute in dry-run")
+
+        result = run_wakeup_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read inbox",
+            },
+            mode="cli",
+            runner=fake_runner,
+        )
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["adapter_name"], "cli-dry-run")
+        self.assertEqual(calls, [])
+
     def test_successful_cli_does_not_overwrite_agent_done(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
+            os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = str(root)
             inbox = root / ".ai-collab" / "inbox-opencode.md"
             inbox.parent.mkdir()
             inbox.write_text(SAMPLE_INBOX.replace("to: codex", "to: opencode"), encoding="utf-8")

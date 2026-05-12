@@ -25,6 +25,7 @@ DEFAULT_STATE_FILE = Path.home() / ".ai-collab-wakeup-state.json"
 DEFAULT_LOG_FILE = Path("/tmp/ai-collab-wakeup.log")
 DEFAULT_ADAPTER = "notify-only"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
+DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude")
 MAX_EVENTS = 200
 
 
@@ -142,6 +143,41 @@ def adapter_timeout_from_env() -> int:
     return max(1, coerce_int(os.environ.get("AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT"), DEFAULT_ADAPTER_TIMEOUT_SECONDS))
 
 
+def truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def csv_env(name: str) -> list[str]:
+    return [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
+
+
+def path_matches(value: str, allowed: str) -> bool:
+    if allowed == "*":
+        return True
+    path = Path(value).expanduser()
+    allowed_path = Path(allowed).expanduser()
+    if path.name == allowed:
+        return True
+    try:
+        return path.resolve() == allowed_path.resolve()
+    except OSError:
+        return str(path) == str(allowed_path)
+
+
+def cli_project_allowed(project_path: str) -> bool:
+    allowed = csv_env("AI_COLLAB_WAKEUP_CLI_PROJECTS")
+    if not allowed:
+        return False
+    return any(path_matches(project_path, item) for item in allowed)
+
+
+def cli_target_allowed(target_slug: str) -> bool:
+    allowed = csv_env("AI_COLLAB_WAKEUP_CLI_TARGETS")
+    if not allowed:
+        allowed = list(DEFAULT_CLI_TARGETS)
+    return "*" in allowed or target_slug in allowed
+
+
 def executable_for(target_slug: str) -> str | None:
     env_key = f"AI_COLLAB_{target_slug.upper().replace('-', '_')}_BIN"
     configured = os.environ.get(env_key)
@@ -213,6 +249,25 @@ def run_wakeup_adapter(
         }
     if mode != "cli":
         return {"status": "failed", "message": f"unknown adapter mode: {mode}", "adapter_name": mode}
+
+    if truthy_env("AI_COLLAB_WAKEUP_DRY_RUN"):
+        return {
+            "status": "degraded",
+            "message": "CLI adapter dry-run: command not executed",
+            "adapter_name": "cli-dry-run",
+        }
+    if not cli_project_allowed(input_data["project_path"]):
+        return {
+            "status": "degraded",
+            "message": "CLI adapter blocked: project is not in AI_COLLAB_WAKEUP_CLI_PROJECTS",
+            "adapter_name": "cli-guardrail",
+        }
+    if not cli_target_allowed(input_data["target_slug"]):
+        return {
+            "status": "degraded",
+            "message": "CLI adapter blocked: target is not in AI_COLLAB_WAKEUP_CLI_TARGETS",
+            "adapter_name": "cli-guardrail",
+        }
 
     command = build_cli_command(input_data)
     if not command:
@@ -333,7 +388,7 @@ def process_inbox(
     event["adapter_result"] = adapter_result
     append_event(events_file, {**event, "event_type": "adapter_result"})
 
-    if adapter_result["adapter_name"] == "notify-only" and adapter_result["status"] == "degraded":
+    if adapter_result["status"] == "degraded":
         state[state_key] = timestamp
         if len(state) > MAX_EVENTS:
             state = dict(list(state.items())[-MAX_EVENTS:])
@@ -341,7 +396,7 @@ def process_inbox(
         log(
             "WAKE "
             f"action=notified task_id={task_id} target={target_slug} attempt={attempts} "
-            f"adapter=notify-only adapter_status=degraded inbox={inbox_path}",
+            f"adapter={adapter_result['adapter_name']} adapter_status=degraded inbox={inbox_path}",
             log_file,
         )
         return {
