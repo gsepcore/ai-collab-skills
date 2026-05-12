@@ -15,6 +15,7 @@ echo "  - ~/.claude/ai-collab-daemon.sh"
 echo "  - ~/.claude/ai-collab-summary.py"
 echo "  - ~/.claude/ai-collab-check-notifications.py"
 echo "  - ~/.claude/ai-collab-wakeup.py"
+echo "  - ~/.claude/ai-collab-doctor.py"
 echo "  - ~/.ai-collab-notifications.json"
 echo "  - ~/.ai-collab-last-check"
 echo "  - ~/.ai-collab-wakeup-events.json"
@@ -49,6 +50,7 @@ fi
 [ -f "$HOME/.claude/ai-collab-summary.py" ]              && rm -f "$HOME/.claude/ai-collab-summary.py"              && echo "✓ Removed ai-collab-summary.py"
 [ -f "$HOME/.claude/ai-collab-check-notifications.py" ]  && rm -f "$HOME/.claude/ai-collab-check-notifications.py"  && echo "✓ Removed ai-collab-check-notifications.py"
 [ -f "$HOME/.claude/ai-collab-wakeup.py" ]               && rm -f "$HOME/.claude/ai-collab-wakeup.py"               && echo "✓ Removed ai-collab-wakeup.py"
+[ -f "$HOME/.claude/ai-collab-doctor.py" ]               && rm -f "$HOME/.claude/ai-collab-doctor.py"               && echo "✓ Removed ai-collab-doctor.py"
 
 # Remove notification queue files
 [ -f "$HOME/.ai-collab-notifications.json" ] && rm -f "$HOME/.ai-collab-notifications.json" && echo "✓ Removed notifications queue"
