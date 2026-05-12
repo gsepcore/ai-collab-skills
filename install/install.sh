@@ -156,6 +156,23 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
     add_plist_env "AI_COLLAB_OS_NOTIFY" "1"
   fi
 
+  # launchd does not inherit the user's interactive shell PATH, so node/nvm
+  # /homebrew binaries (opencode, codex, claude) are unreachable to the daemon
+  # by default. Capture the user's current PATH plus common toolchain dirs so
+  # CLI and visible adapters can spawn those binaries when triggered.
+  AI_COLLAB_DAEMON_PATH="${AI_COLLAB_DAEMON_PATH:-$PATH}"
+  for extra in \
+    "$HOME/.nvm/versions/node/$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)/bin" \
+    "/opt/homebrew/bin" \
+    "/usr/local/bin"
+  do
+    case ":$AI_COLLAB_DAEMON_PATH:" in
+      *":$extra:"*) : ;;
+      *) [[ -n "$extra" && -d "$extra" ]] && AI_COLLAB_DAEMON_PATH="$extra:$AI_COLLAB_DAEMON_PATH" ;;
+    esac
+  done
+  add_plist_env "PATH" "$AI_COLLAB_DAEMON_PATH"
+
   # Persist optional wakeup adapter settings into launchd. launchd does not
   # inherit the user's interactive shell env, so opt-in automation must be
   # written here at install time or edited into the plist later.
