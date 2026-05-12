@@ -25,6 +25,8 @@ _spec.loader.exec_module(_mod)
 parse_frontmatter = _mod.parse_frontmatter
 render_frontmatter = _mod.render_frontmatter
 process_inbox = _mod.process_inbox
+process_thread = _mod.process_thread
+append_thread_message = _mod.append_thread_message
 run_wakeup_adapter = _mod.run_wakeup_adapter
 
 
@@ -139,6 +141,33 @@ class TestProcessInbox(unittest.TestCase):
 
         self.assertEqual(result["action"], "ignored")
         self.assertFalse(self.events.exists())
+
+    def test_done_inbox_closes_existing_thread(self):
+        self.write_inbox(SAMPLE_INBOX.replace("status: unread", "status: done"))
+        thread = self.inbox.parent / "thread-task-123.md"
+        append_thread_message(
+            thread,
+            task_id="task-123",
+            project="gsep",
+            inbox_name="inbox-codex.md",
+            author_slug="codex",
+            message="Work is ready.",
+            now=self.now,
+        )
+
+        result = process_inbox(
+            self.inbox,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "closed-thread")
+        meta, body = parse_frontmatter(thread.read_text(encoding="utf-8"))
+        self.assertEqual(meta["status"], "closed")
+        self.assertIn("Task closed: status=done", body)
 
     def test_backoff_prevents_second_attempt_too_soon(self):
         content = SAMPLE_INBOX.replace("attempts: 0", "attempts: 1").replace(
@@ -266,6 +295,24 @@ class TestAdapters(unittest.TestCase):
 
         self.assertEqual(result["status"], "failed")
 
+    def test_executable_for_checks_launchd_fallback_paths(self):
+        old_path = _mod.shutil.which
+        old_dirs = _mod.FALLBACK_BIN_DIRS
+        old_globs = _mod.FALLBACK_BIN_GLOBS
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / "opencode"
+            exe.write_text("#!/bin/sh\n", encoding="utf-8")
+            exe.chmod(0o755)
+            try:
+                _mod.shutil.which = lambda name: None
+                _mod.FALLBACK_BIN_DIRS = (Path(d),)
+                _mod.FALLBACK_BIN_GLOBS = ()
+                self.assertEqual(_mod.executable_for("opencode"), str(exe))
+            finally:
+                _mod.shutil.which = old_path
+                _mod.FALLBACK_BIN_DIRS = old_dirs
+                _mod.FALLBACK_BIN_GLOBS = old_globs
+
     def test_cli_adapter_success_uses_runner(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
         calls = []
@@ -380,6 +427,109 @@ class TestAdapters(unittest.TestCase):
             meta, _ = parse_frontmatter(inbox.read_text(encoding="utf-8"))
             self.assertEqual(meta["status"], "done")
             self.assertEqual(meta["attempts"], "0")
+
+
+class TestProcessThread(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.collab = self.root / ".ai-collab"
+        self.collab.mkdir()
+        self.thread = self.collab / "thread-task-123.md"
+        self.events = self.root / "events.json"
+        self.state = self.root / "state.json"
+        self.log = self.root / "wakeup.log"
+        self.now = datetime(2026, 5, 12, 12, 0, 0, tzinfo=timezone.utc)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def append(self, author="claude", message="@codex please review this."):
+        append_thread_message(
+            self.thread,
+            task_id="task-123",
+            project="gsep",
+            inbox_name="inbox-codex.md",
+            author_slug=author,
+            message=message,
+            now=self.now,
+        )
+
+    def test_thread_mention_produces_wake_event(self):
+        self.append()
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "thread-mentions")
+        events = json.loads(self.events.read_text(encoding="utf-8"))
+        self.assertEqual(events[0]["source_type"], "thread")
+        self.assertEqual(events[0]["reason"], "thread-mention")
+        self.assertEqual(events[0]["target_slug"], "codex")
+        self.assertEqual(events[0]["thread_path"], str(self.thread))
+        self.assertIn("mentioned", events[0]["synthetic_prompt"])
+
+    def test_thread_mention_dedupes_same_message_and_target(self):
+        self.append()
+        process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["results"][0]["action"], "deduped")
+        events = json.loads(self.events.read_text(encoding="utf-8"))
+        self.assertEqual(len(events), 2)
+
+    def test_thread_does_not_wake_author_self_mention(self):
+        self.append(author="codex", message="@codex note to self.")
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "ignored")
+        self.assertEqual(result["reason"], "no-mentions")
+        self.assertFalse(self.events.exists())
+
+    def test_closed_thread_is_ignored(self):
+        self.append()
+        meta, body = parse_frontmatter(self.thread.read_text(encoding="utf-8"))
+        meta["status"] = "closed"
+        self.thread.write_text(render_frontmatter(meta, body), encoding="utf-8")
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "ignored")
+        self.assertEqual(result["reason"], "closed")
+        self.assertFalse(self.events.exists())
 
 
 if __name__ == "__main__":

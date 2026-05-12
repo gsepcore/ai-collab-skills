@@ -255,7 +255,7 @@ What is this project? What stage is it at? What should the next AI know before t
 
 ## Command: /collab assign [ai-name] [task description]
 
-Write a task directly to another AI's inbox so it executes automatically on their next response — without the user having to tell them.
+Write a task directly to another AI's inbox so it can be picked up by that AI's per-agent monitor/adapter path — without the user having to copy prompts between IDEs.
 
 **Inbox files:**
 - `.ai-collab/inbox-{ai-name}.md` — task for a specific AI (e.g. `inbox-opencode.md`, `inbox-codex.md`)
@@ -286,7 +286,7 @@ done_at:
 {detailed task description with files, constraints, and exit criteria}
 ```
 
-5. Confirm: "Task written to inbox-{ai-name}.md (task_id: {task_id}) — {ai-name} will pick it up on next response."
+5. Confirm: "Task written to inbox-{ai-name}.md (task_id: {task_id}) — the daemon will record a wake event for {ai-name}; with an execution adapter configured it can wake automatically, otherwise {ai-name} will pick it up on next response."
 
 **Schema fields (all required):**
 
@@ -307,7 +307,7 @@ done_at:
 → writes to inbox-all.md with the same schema, to: all
 ```
 
-**How other AIs respond:** Every AI checks `inbox-{its-name}.md` and `inbox-all.md` at the start of every response. If `status: unread`, the agent first sets `status: claimed` + `claimed_by` + `claimed_at`, then executes the task, then marks `status: done` and sets `done_at`. See `claude-task-lifecycle-spec.md` for the full state machine, conflict resolution, and director semantics.
+**How other AIs respond:** Every AI checks `inbox-{its-name}.md` and `inbox-all.md` at the start of every response. If `status: unread`, the agent first sets `status: claimed` + `claimed_by` + `claimed_at`, then executes the task, then marks `status: done` and sets `done_at`. The installed daemon also scans inboxes and task threads, creating wake events for direct tasks and `@slug` mentions so configured adapters can activate each agent's monitor path. See `claude-task-lifecycle-spec.md` for the full state machine, conflict resolution, and director semantics.
 
 **Director rules (when reassigning or overriding):**
 

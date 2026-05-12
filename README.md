@@ -38,6 +38,7 @@ your-project/
     ├── inbox-all.md                  ← broadcast tasks for any AI
     ├── inbox-codex.md                ← tasks assigned specifically to Codex
     ├── inbox-opencode.md             ← tasks assigned specifically to OpenCode
+    ├── thread-20260512-task.md       ← agent-to-agent conversation for a task
     ├── claude-20260511-143022.md     ← Claude Code's log
     ├── cursor-20260511-141500.md     ← Cursor's log
     ├── codex-20260511-141000.md      ← Codex's log
@@ -84,9 +85,9 @@ This means the next time Claude opens a project, it sees a roster like:
 
 …and can confidently assign tasks via `/collab assign codex …` without first asking the user "is Codex on this project?".
 
-### 2. Workers react autonomously to assignments
+### 2. Workers react autonomously to assignments and mentions
 
-You never have to copy a task from Claude's window into OpenCode's window. The protocol handles it via the filesystem:
+You never have to copy a task from Claude's window into OpenCode's window. The protocol handles it via the filesystem and, when a wakeup adapter is configured, the background daemon can also activate the target worker:
 
 ```
 You → Claude: "refactor auth and have Codex publish v1.1.0"
@@ -95,7 +96,10 @@ You → Claude: "refactor auth and have Codex publish v1.1.0"
 Claude writes .ai-collab/inbox-codex.md with status: unread
        │
        ↓
-Later: you open Codex in any terminal (when you want, no rush)
+Daemon sees inbox-codex.md → writes a wake event for codex
+       │
+       ↓
+Configured adapter wakes Codex, or notify-only records the event safely
        │
        ↓
 Codex reads its rules file → reads inbox-codex.md → status: unread detected
@@ -121,6 +125,20 @@ Every worker AI's rules file (created by `/collab setup` or pasted from `referen
 These are non-negotiable rules in every snippet so workers self-orient without the user prompting.
 
 When `/collab setup` runs on a fresh project, it also seeds `.ai-collab/inbox-all.md` with a **welcome onboarding task** — the first worker AI to open the project gets a concrete first instruction instead of an empty inbox.
+
+### 2.5 Per-agent monitors and task threads
+
+The daemon treats each worker slug as addressable. Direct assignments wake `inbox-{slug}.md`; threaded conversation wakes workers through `@slug` mentions in `.ai-collab/thread-{task_id}.md`.
+
+```text
+inbox-codex.md         direct task mailbox for Codex
+inbox-opencode.md      direct task mailbox for OpenCode
+thread-{task_id}.md    append-only discussion around a task
+@codex                 wake Codex from the latest thread message
+@opencode              wake OpenCode from the latest thread message
+```
+
+Thread mentions create wake events with `source_type: thread`, `reason: thread-mention`, `source_path`, `thread_path`, and the target slug. They do not claim or mutate the inbox task. The inbox remains the canonical task state; the thread is the conversation layer agents use to ask questions, assign review, and report progress to each other.
 
 ### 3. Each project is its own isolation bubble
 
@@ -239,7 +257,7 @@ One-line overview of every AI active on this project — name, last update, and 
 
 ### `/collab assign [ai-name] [task description]`
 
-Delegate a task to another AI without leaving your Claude session. Writes `.ai-collab/inbox-{ai-name}.md` with `status: unread`. The next time you open that AI (in any IDE or terminal, in the same project directory), it reads its rules file, picks up the task from its inbox, executes it, and marks it `status: done`.
+Delegate a task to another AI without leaving your Claude session. Writes `.ai-collab/inbox-{ai-name}.md` with `status: unread`. The daemon records a wake event for that agent; with a configured adapter it can run the target CLI automatically, and with the default `notify-only` mode it records the event safely for pickup on the next response. The worker reads its rules file, picks up the task from its inbox, executes it, and marks it `status: done`.
 
 ```
 /collab assign codex publish v1.2.0 to npm and tag the release on GitHub
@@ -249,7 +267,7 @@ Delegate a task to another AI without leaving your Claude session. Writes `.ai-c
 
 The third form (`/collab assign all ...`) writes to `inbox-all.md` so every worker AI sees it.
 
-**Why this matters:** you do not have to copy a prompt from Claude's window into Codex's or OpenCode's window. The worker AI self-orients from its inbox on its first response after you open it. See [Architecture](#architecture-director-autonomous-workers-project-isolation) for the full flow.
+**Why this matters:** you do not have to copy a prompt from Claude's window into Codex's or OpenCode's window. The worker AI self-orients from its inbox, and the daemon can wake addressable agents through inboxes or `@slug` thread mentions. See [Architecture](#architecture-director-autonomous-workers-project-isolation) for the full flow.
 
 ### `/collab setup`
 
@@ -316,7 +334,7 @@ Six components keep Claude informed and able to dispatch inbox tasks:
 1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
 3. **Notification reader script** — `~/.claude/ai-collab-check-notifications.py` is invoked by the `UserPromptSubmit` hook. It uses an `fcntl` lock to coordinate with the daemon, **filters notifications by active project**, caps output to 10 items / 500 chars per message / 4 KB total, drops notifications older than 24 h, defends against malformed JSON, and always exits 0 (never blocks your prompt). All limits are tunable — see [Environment variables](#environment-variables) below.
-4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. By default it uses `notify-only`; CLI execution is opt-in via `AI_COLLAB_WAKEUP_ADAPTER=cli`.
+4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` and `thread-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; thread mentions use `reason: thread-mention`. By default it uses `notify-only`; CLI execution is opt-in via `AI_COLLAB_WAKEUP_ADAPTER=cli`.
 5. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
 6. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session

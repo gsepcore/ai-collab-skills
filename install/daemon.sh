@@ -44,6 +44,10 @@ while true; do
         [ -f "$inbox" ] || continue
         python3 "$WAKEUP_SCRIPT" "$PROJECT" "$inbox" >/dev/null 2>>"$LOG_FILE" || log "Warning: wakeup scan failed for $inbox"
       done
+      for thread in "$COLLAB_DIR"/thread-*.md; do
+        [ -f "$thread" ] || continue
+        python3 "$WAKEUP_SCRIPT" "$PROJECT" "$thread" >/dev/null 2>>"$LOG_FILE" || log "Warning: thread wakeup scan failed for $thread"
+      done
     fi
 
     for f in "$COLLAB_DIR"/*.md; do

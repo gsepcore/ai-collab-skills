@@ -6,6 +6,7 @@ Add these snippets to your project once. Each AI will then automatically partici
 1. Every AI saves a log after EVERY response — automatically, no prompting needed.
 2. Every new AI reads `CONTEXT.md` first — the single-file project brief from all logs.
 3. Every AI checks its inbox on every response — `inbox-{ai-name}.md` and `inbox-all.md` for direct task assignments from the orchestrating AI.
+4. Every AI treats `thread-{task_id}.md` as the task conversation channel — `@slug` mentions can wake the mentioned agent when the daemon and adapter are running.
 
 ---
 
@@ -16,6 +17,7 @@ All AIs write Markdown session logs to `{project-root}/.ai-collab/`.
 - Format: YAML frontmatter + standard sections (see SKILL.md for full spec)
 - Any AI with filesystem access can read any log
 - The daemon (if installed) detects new/updated logs within 15 seconds and notifies the user
+- The daemon also scans `inbox-*.md` and `thread-*.md`: unread inboxes target an agent mailbox, while `@slug` mentions in threads target that agent's monitor/adapter path.
 
 ---
 
@@ -32,6 +34,29 @@ Required frontmatter fields on every inbox file:
 - `done_at` — set when the task completes successfully.
 
 The contract for every AI: **claim before executing**, **mark done after executing**, **never overwrite another AI's claim**. The full spec (director semantics, conflict resolution, stale-claim timeouts) is in `claude-task-lifecycle-spec.md`.
+
+---
+
+## Threaded agent-to-agent conversation
+
+Threads are append-only task conversations:
+
+```text
+.ai-collab/thread-{task_id}.md
+```
+
+Use a thread when a task needs clarification, review, or handoff between agents. The inbox remains canonical for task status; the thread is the conversation layer.
+
+Rules for every agent:
+
+- If an inbox has a matching `thread-{task_id}.md`, read the latest 3 messages before acting.
+- When setting `status: blocked`, append the blocker reason to the thread.
+- When setting `status: done`, append a short final summary if the thread exists.
+- Use `@slug` to ask another agent for help or review. Example: `@codex please verify the release script`.
+- Do not edit past thread messages. Append corrections as new messages.
+- Do not write to a thread whose frontmatter says `status: closed`.
+
+The daemon watches thread updates. When the latest message mentions `@codex`, `@opencode`, `@claude`, or another registered slug, it creates a wake event for that target without changing inbox state. This is the per-agent monitor path: each agent has an addressable mailbox plus a mention-driven conversation channel.
 
 ---
 

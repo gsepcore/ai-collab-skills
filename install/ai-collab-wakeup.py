@@ -9,13 +9,20 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback
+    fcntl = None
 
 
 DEFAULT_MAX_ATTEMPTS = 3
@@ -27,6 +34,19 @@ DEFAULT_ADAPTER = "notify-only"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
 DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude")
 MAX_EVENTS = 200
+MENTION_RE = re.compile(r"(?<![\w.-])@([a-z][a-z0-9_-]{1,40})\b")
+FALLBACK_BIN_DIRS = (
+    Path("/opt/homebrew/bin"),
+    Path("/usr/local/bin"),
+    Path("/usr/bin"),
+    Path("/bin"),
+    Path.home() / ".local/bin",
+    Path.home() / ".npm-global/bin",
+)
+FALLBACK_BIN_GLOBS = (
+    ".nvm/versions/*/*/bin",
+    ".antigravity/extensions/*/bin/*",
+)
 
 
 def utc_now() -> datetime:
@@ -135,6 +155,117 @@ def update_inbox(path: Path, meta: dict[str, str], body: str) -> None:
     atomic_write(path, render_frontmatter(meta, body))
 
 
+def parse_csv_value(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip().strip("[]") for item in value.split(",") if item.strip().strip("[]")]
+
+
+def render_csv_value(items: list[str]) -> str:
+    return ", ".join(sorted(dict.fromkeys(items)))
+
+
+def thread_id_from_path(thread_path: Path) -> str:
+    stem = thread_path.stem
+    if stem.startswith("thread-"):
+        return stem[len("thread-") :]
+    return stem
+
+
+def find_mentions(message: str) -> list[str]:
+    return sorted(dict.fromkeys(match.group(1).lower() for match in MENTION_RE.finditer(message)))
+
+
+def latest_thread_message(body: str) -> dict[str, str] | None:
+    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s+(?:--|—)\s+([a-zA-Z0-9_-]+)\s*$", body))
+    if not matches:
+        return None
+
+    start = matches[-1].end()
+    end_match = re.search(r"(?m)^---\s*$", body[start:])
+    end = start + end_match.start() if end_match else len(body)
+    content = body[start:end].strip()
+    return {
+        "timestamp": matches[-1].group(1).strip(),
+        "author_slug": matches[-1].group(2).strip().lower(),
+        "content": content,
+    }
+
+
+def message_hash(message: dict[str, str]) -> str:
+    source = "\n".join([message.get("timestamp", ""), message.get("author_slug", ""), message.get("content", "")])
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
+
+
+def with_lock(path: Path):
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_path.open("a+", encoding="utf-8")
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    return lock_file
+
+
+def append_thread_message(
+    thread_path: Path,
+    *,
+    task_id: str,
+    project: str,
+    inbox_name: str,
+    author_slug: str,
+    message: str,
+    now: datetime | None = None,
+    close_thread: bool = False,
+) -> None:
+    now = now or utc_now()
+    timestamp = isoformat_z(now)
+    lock_file = with_lock(thread_path)
+    try:
+        try:
+            text = thread_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = ""
+
+        meta, body = parse_frontmatter(text)
+        if meta.get("status") == "closed" and not close_thread:
+            raise RuntimeError(f"thread is closed: {thread_path}")
+
+        participants = parse_csv_value(meta.get("participants"))
+        if author_slug not in participants:
+            participants.append(author_slug)
+
+        if not meta:
+            meta = {
+                "thread": task_id,
+                "project": project,
+                "inbox": inbox_name,
+                "created": timestamp,
+                "updated": timestamp,
+                "participants": render_csv_value(participants),
+                "status": "open",
+            }
+        else:
+            meta.setdefault("thread", task_id)
+            meta.setdefault("project", project)
+            meta.setdefault("inbox", inbox_name)
+            meta.setdefault("created", timestamp)
+            meta.setdefault("status", "open")
+            meta["updated"] = timestamp
+            meta["participants"] = render_csv_value(participants)
+
+        if close_thread:
+            meta["status"] = "closed"
+
+        clean_body = body.rstrip()
+        section = f"## {timestamp} -- {author_slug}\n\n{message.strip()}\n\n---\n"
+        new_body = f"{clean_body}\n\n{section}" if clean_body else section
+        atomic_write(thread_path, render_frontmatter(meta, new_body))
+    finally:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+
+
 def adapter_mode_from_env() -> str:
     return os.environ.get("AI_COLLAB_WAKEUP_ADAPTER", DEFAULT_ADAPTER).strip() or DEFAULT_ADAPTER
 
@@ -194,6 +325,15 @@ def executable_for(target_slug: str) -> str | None:
         found = shutil.which(candidate)
         if found:
             return found
+        for directory in FALLBACK_BIN_DIRS:
+            fallback = directory / candidate
+            if fallback.exists() and os.access(fallback, os.X_OK):
+                return str(fallback)
+        for pattern in FALLBACK_BIN_GLOBS:
+            for directory in Path.home().glob(pattern):
+                fallback = directory / candidate
+                if fallback.exists() and os.access(fallback, os.X_OK):
+                    return str(fallback)
     return None
 
 
@@ -304,6 +444,196 @@ def run_wakeup_adapter(
     }
 
 
+def dispatch_wake_event(
+    event: dict[str, Any],
+    *,
+    events_file: Path,
+    adapter_mode: str | None = None,
+    adapter_runner=subprocess.run,
+) -> dict[str, Any]:
+    append_event(events_file, event)
+    adapter_input = {
+        "project_path": event["project_path"],
+        "target_slug": event["target_slug"],
+        "inbox_path": event.get("inbox_path") or event["source_path"],
+        "task_id": event["task_id"],
+        "synthetic_prompt": event["synthetic_prompt"],
+    }
+    adapter_result = run_wakeup_adapter(adapter_input, mode=adapter_mode, runner=adapter_runner)
+    event["adapter_result"] = adapter_result
+    append_event(events_file, {**event, "event_type": "adapter_result"})
+    return adapter_result
+
+
+def close_thread_for_inbox(
+    inbox_path: Path,
+    project: str,
+    meta: dict[str, str],
+    *,
+    now: datetime | None = None,
+    log_file: Path = DEFAULT_LOG_FILE,
+) -> bool:
+    status = meta.get("status", "")
+    if status not in {"done", "failed"}:
+        return False
+
+    task_id = meta.get("task_id") or f"{project}:{inbox_path.name}"
+    thread_path = inbox_path.parent / f"thread-{task_id}.md"
+    if not thread_path.exists():
+        return False
+
+    thread_meta, _body = parse_frontmatter(thread_path.read_text(encoding="utf-8"))
+    if thread_meta.get("status") == "closed":
+        return False
+
+    attempts = meta.get("attempts", "")
+    append_thread_message(
+        thread_path,
+        task_id=task_id,
+        project=project,
+        inbox_name=inbox_path.name,
+        author_slug="daemon",
+        message=f"Task closed: status={status}. attempts={attempts}.",
+        now=now,
+        close_thread=True,
+    )
+    log(f"THREAD action=closed task_id={task_id} status={status} thread={thread_path}", log_file)
+    return True
+
+
+def process_thread(
+    thread_path: Path,
+    project: str,
+    *,
+    now: datetime | None = None,
+    events_file: Path = DEFAULT_EVENTS_FILE,
+    state_file: Path = DEFAULT_STATE_FILE,
+    log_file: Path = DEFAULT_LOG_FILE,
+    max_attempts: int | None = None,
+    adapter_mode: str | None = None,
+    adapter_runner=subprocess.run,
+) -> dict[str, Any]:
+    now = now or utc_now()
+    max_attempts = max_attempts or max_attempts_from_env()
+
+    try:
+        text = thread_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {"action": "missing", "path": str(thread_path)}
+
+    meta, body = parse_frontmatter(text)
+    if meta.get("status") == "closed":
+        return {"action": "ignored", "reason": "closed"}
+
+    message = latest_thread_message(body)
+    if not message:
+        return {"action": "ignored", "reason": "no-message"}
+
+    author_slug = message["author_slug"]
+    targets = [slug for slug in find_mentions(message["content"]) if slug != author_slug]
+    if not targets:
+        return {"action": "ignored", "reason": "no-mentions"}
+
+    task_id = meta.get("thread") or thread_id_from_path(thread_path)
+    inbox_name = meta.get("inbox", "")
+    inbox_path = str(thread_path.parent / inbox_name) if inbox_name else ""
+    msg_hash = message_hash(message)
+    timestamp = isoformat_z(now)
+    state = load_json(state_file, {})
+    if not isinstance(state, dict):
+        state = {}
+
+    results = []
+    for target_slug in targets:
+        state_key = f"thread:{task_id}:{msg_hash}:{target_slug}"
+        entry = state.get(state_key, {})
+        if entry is True:
+            entry = {"seen": True, "attempts": 0}
+        if not isinstance(entry, dict):
+            entry = {}
+
+        attempts = coerce_int(str(entry.get("attempts", "0")), 0)
+        last_attempt = parse_iso(str(entry.get("last_attempt", "")))
+        if entry.get("done") or entry.get("seen"):
+            results.append({"target_slug": target_slug, "action": "deduped"})
+            continue
+        if attempts >= max_attempts:
+            results.append({"target_slug": target_slug, "action": "failed", "attempts": attempts})
+            continue
+
+        wait_seconds = backoff_for_attempts(attempts)
+        if last_attempt and wait_seconds:
+            elapsed = (now - last_attempt).total_seconds()
+            if elapsed < wait_seconds:
+                results.append(
+                    {
+                        "target_slug": target_slug,
+                        "action": "backoff",
+                        "attempts": attempts,
+                        "wait_seconds": wait_seconds,
+                    }
+                )
+                continue
+
+        event = {
+            "task_id": task_id,
+            "project": project,
+            "project_path": str(thread_path.parent.parent),
+            "target_slug": target_slug,
+            "source_type": "thread",
+            "source_path": str(thread_path),
+            "thread_path": str(thread_path),
+            "inbox_path": inbox_path,
+            "reason": "thread-mention",
+            "message_hash": msg_hash,
+            "timestamp": timestamp,
+            "synthetic_prompt": (
+                f"You were mentioned in {thread_path} by @{author_slug}. "
+                "Read the latest thread message, respond or act if needed, and update your log."
+            ),
+        }
+        adapter_result = dispatch_wake_event(
+            event,
+            events_file=events_file,
+            adapter_mode=adapter_mode,
+            adapter_runner=adapter_runner,
+        )
+
+        action = "notified"
+        if adapter_result["status"] == "success":
+            entry = {"done": True, "attempts": attempts, "last_attempt": timestamp}
+            action = "dispatched"
+        elif adapter_result["status"] == "degraded":
+            entry = {"seen": True, "attempts": attempts, "last_attempt": timestamp}
+        else:
+            attempts += 1
+            entry = {"attempts": attempts, "last_attempt": timestamp}
+            action = "failed" if attempts >= max_attempts else "retryable"
+
+        state[state_key] = entry
+        results.append(
+            {
+                "target_slug": target_slug,
+                "action": action,
+                "attempts": attempts,
+                "adapter_result": adapter_result,
+            }
+        )
+        log(
+            "THREAD "
+            f"action={action} task_id={task_id} target={target_slug} "
+            f"adapter={adapter_result['adapter_name']} adapter_status={adapter_result['status']} "
+            f"thread={thread_path}",
+            log_file,
+        )
+
+    if len(state) > MAX_EVENTS:
+        state = dict(list(state.items())[-MAX_EVENTS:])
+    write_json(state_file, state)
+
+    return {"action": "thread-mentions", "task_id": task_id, "message_hash": msg_hash, "results": results}
+
+
 def process_inbox(
     inbox_path: Path,
     project: str,
@@ -325,6 +655,9 @@ def process_inbox(
         return {"action": "missing", "path": str(inbox_path)}
 
     meta, body = parse_frontmatter(text)
+    if meta.get("status") in {"done", "failed"}:
+        closed = close_thread_for_inbox(inbox_path, project, meta, now=now, log_file=log_file)
+        return {"action": "closed-thread" if closed else "ignored", "reason": "status", "status": meta.get("status", "")}
     if meta.get("status") != "unread":
         return {"action": "ignored", "reason": "status", "status": meta.get("status", "")}
 
@@ -337,6 +670,7 @@ def process_inbox(
         meta["status"] = "failed"
         meta["done_at"] = isoformat_z(now)
         update_inbox(inbox_path, meta, body)
+        close_thread_for_inbox(inbox_path, project, meta, now=now, log_file=log_file)
         log(f"FAILED max_attempts task_id={task_id} inbox={inbox_path}", log_file)
         return {"action": "failed", "task_id": task_id, "attempts": attempts}
 
@@ -366,8 +700,12 @@ def process_inbox(
     event = {
         "task_id": task_id,
         "project": project,
+        "project_path": str(inbox_path.parent.parent),
         "target_slug": target_slug,
+        "source_type": "inbox",
+        "source_path": str(inbox_path),
         "inbox_path": str(inbox_path),
+        "reason": "unread-inbox",
         "attempt": next_attempts,
         "timestamp": timestamp,
         "synthetic_prompt": (
@@ -375,18 +713,12 @@ def process_inbox(
             "Read it, execute it, mark it status: done, and update your log."
         ),
     }
-    append_event(events_file, event)
-
-    adapter_input = {
-        "project_path": str(inbox_path.parent.parent),
-        "target_slug": target_slug,
-        "inbox_path": str(inbox_path),
-        "task_id": task_id,
-        "synthetic_prompt": event["synthetic_prompt"],
-    }
-    adapter_result = run_wakeup_adapter(adapter_input, mode=adapter_mode, runner=adapter_runner)
-    event["adapter_result"] = adapter_result
-    append_event(events_file, {**event, "event_type": "adapter_result"})
+    adapter_result = dispatch_wake_event(
+        event,
+        events_file=events_file,
+        adapter_mode=adapter_mode,
+        adapter_runner=adapter_runner,
+    )
 
     if adapter_result["status"] == "degraded":
         state[state_key] = timestamp
@@ -414,6 +746,8 @@ def process_inbox(
             if len(state) > MAX_EVENTS:
                 state = dict(list(state.items())[-MAX_EVENTS:])
             write_json(state_file, state)
+            if current_meta.get("status") in {"done", "failed"}:
+                close_thread_for_inbox(inbox_path, project, current_meta, now=now, log_file=log_file)
             log(
                 "WAKE "
                 f"action=adapter-updated task_id={task_id} target={target_slug} attempt={attempts} "
@@ -445,6 +779,8 @@ def process_inbox(
     else:
         action = "event"
     update_inbox(inbox_path, meta, body)
+    if meta.get("status") in {"done", "failed"}:
+        close_thread_for_inbox(inbox_path, project, meta, now=now, log_file=log_file)
 
     state[state_key] = timestamp
     if len(state) > MAX_EVENTS:
@@ -468,12 +804,15 @@ def process_inbox(
 
 def main(argv: list[str]) -> int:
     if len(argv) < 3:
-        print("Usage: ai-collab-wakeup.py <project> <inbox.md>", file=sys.stderr)
+        print("Usage: ai-collab-wakeup.py <project> <inbox.md|thread.md>", file=sys.stderr)
         return 2
 
     project = argv[1]
-    inbox_path = Path(argv[2])
-    result = process_inbox(inbox_path, project)
+    path = Path(argv[2])
+    if path.name.startswith("thread-"):
+        result = process_thread(path, project)
+    else:
+        result = process_inbox(path, project)
     print(json.dumps(result, sort_keys=True))
     return 0
 
