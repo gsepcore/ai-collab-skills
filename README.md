@@ -150,12 +150,13 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-That's it. The installer sets up **all five components** automatically:
+That's it. The installer sets up **all six components** automatically:
 
 | Component | What it does | Where |
 |-----------|-------------|-------|
 | 📚 Claude Code skill | `/collab` commands available in all sessions | `~/.claude/skills/collab/` |
 | 🔄 Background daemon | Watches every `.ai-collab/` directory 24/7 | launchd (macOS) / cron (Linux) |
+| 📨 Wakeup detector | Detects unread inbox tasks and dispatches the configured adapter | `~/.claude/ai-collab-wakeup.py` |
 | 🪝 `SessionStart` hook | Loads `CONTEXT.md` + notifications on session open | `~/.claude/settings.json` |
 | 🪝 `UserPromptSubmit` hook | Shows pending AI notifications before each message | `~/.claude/settings.json` |
 | 🪝 `Stop` hook | Auto-regenerates `CONTEXT.md` after each Claude response | `~/.claude/settings.json` |
@@ -309,12 +310,13 @@ Remove stale session logs.
 
 > **This is all set up automatically by the installer.** No manual steps.
 
-Four components keep Claude informed 24/7:
+Five components keep Claude informed and able to dispatch inbox tasks:
 
 1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
 3. **Notification reader script** — `~/.claude/ai-collab-check-notifications.py` is invoked by the `UserPromptSubmit` hook. It uses an `fcntl` lock to coordinate with the daemon, **filters notifications by active project**, caps output to 10 items / 500 chars per message / 4 KB total, drops notifications older than 24 h, defends against malformed JSON, and always exits 0 (never blocks your prompt). All limits are tunable — see [Environment variables](#environment-variables) below.
-4. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
+4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. By default it uses `notify-only`; CLI execution is opt-in via `AI_COLLAB_WAKEUP_ADAPTER=cli`.
+5. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
    - `UserPromptSubmit` — runs `ai-collab-check-notifications.py` to show pending notifications for the **active project only**, zero token cost at idle
    - `Stop` — auto-regenerates `CONTEXT.md` after every Claude response using a Python script
@@ -376,6 +378,12 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_NO_DAEMON` | _(off)_ | Set to `1` to skip starting the background daemon during install (file-watching feature disabled). |
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Set to `1` (in the daemon's launchd plist `EnvironmentVariables`) to fire macOS Notification Center banners when other AIs complete tasks. Persistent layer that works even when Claude Code is closed — see [macOS notifications](#macos-notifications-survives-claude-close-mac-sleep-and-restart). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | macOS sound name (e.g. `Tink`, `Glass`, `Pop`, `Hero`) to play with each banner. Only effective when `AI_COLLAB_OS_NOTIFY=1`. Leave unset for silent banners. |
+| `AI_COLLAB_WAKEUP_ADAPTER` | `notify-only` | Wakeup adapter mode for unread inboxes. Use `notify-only` for safe event logging, or `cli` to run target CLIs (`codex`, `opencode`, `claude`) automatically. |
+| `AI_COLLAB_WAKEUP_MAX_ATTEMPTS` | `3` | Maximum wake attempts before an unread inbox auto-transitions to `failed`. |
+| `AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT` | `120` | Seconds before a CLI adapter run is considered failed. |
+| `AI_COLLAB_CODEX_BIN` | _(auto-detected)_ | Override the `codex` executable path used by the CLI adapter. |
+| `AI_COLLAB_OPENCODE_BIN` | _(auto-detected)_ | Override the `opencode` executable path used by the CLI adapter. |
+| `AI_COLLAB_CLAUDE_BIN` | _(auto-detected)_ | Override the `claude` executable path used by the CLI adapter. |
 
 ---
 

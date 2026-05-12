@@ -24,6 +24,7 @@ _spec.loader.exec_module(_mod)
 parse_frontmatter = _mod.parse_frontmatter
 render_frontmatter = _mod.render_frontmatter
 process_inbox = _mod.process_inbox
+run_wakeup_adapter = _mod.run_wakeup_adapter
 
 
 SAMPLE_INBOX = """\
@@ -81,7 +82,7 @@ class TestProcessInbox(unittest.TestCase):
         meta, _ = parse_frontmatter(self.inbox.read_text(encoding="utf-8"))
         return meta
 
-    def test_unread_produces_one_wake_event_and_updates_attempt(self):
+    def test_unread_produces_wake_event_and_updates_attempt(self):
         self.write_inbox()
         result = process_inbox(
             self.inbox,
@@ -94,14 +95,35 @@ class TestProcessInbox(unittest.TestCase):
 
         self.assertEqual(result["action"], "event")
         events = json.loads(self.events.read_text(encoding="utf-8"))
-        self.assertEqual(len(events), 1)
+        self.assertEqual(len(events), 2)
         self.assertEqual(events[0]["task_id"], "task-123")
         self.assertEqual(events[0]["target_slug"], "codex")
+        self.assertEqual(events[1]["event_type"], "adapter_result")
+        self.assertEqual(events[1]["adapter_result"]["adapter_name"], "notify-only")
 
         meta = self.read_meta()
         self.assertEqual(meta["status"], "unread")
         self.assertEqual(meta["attempts"], "1")
         self.assertEqual(meta["last_attempt"], "2026-05-12T12:00:00Z")
+
+    def test_successful_adapter_claims_inbox(self):
+        self.write_inbox()
+        result = process_inbox(
+            self.inbox,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+
+        self.assertEqual(result["action"], "claimed")
+        self.assertEqual(result["adapter_result"]["status"], "success")
+        meta = self.read_meta()
+        self.assertEqual(meta["status"], "claimed")
+        self.assertEqual(meta["claimed_by"], "mock-success")
+        self.assertEqual(meta["claimed_at"], "2026-05-12T12:00:00Z")
 
     def test_done_produces_no_event(self):
         self.write_inbox(SAMPLE_INBOX.replace("status: unread", "status: done"))
@@ -192,6 +214,70 @@ class TestProcessInbox(unittest.TestCase):
         self.assertEqual(result["action"], "failed")
         self.assertFalse(self.events.exists())
         self.assertEqual(self.read_meta()["status"], "failed")
+
+
+class TestAdapters(unittest.TestCase):
+    def test_notify_only_is_degraded(self):
+        result = run_wakeup_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "codex",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-codex.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read inbox",
+            },
+            mode="notify-only",
+        )
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["adapter_name"], "notify-only")
+
+    def test_unknown_adapter_fails(self):
+        result = run_wakeup_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "codex",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-codex.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read inbox",
+            },
+            mode="unknown",
+        )
+
+        self.assertEqual(result["status"], "failed")
+
+    def test_cli_adapter_success_uses_runner(self):
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append((command, kwargs))
+
+            class Completed:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Completed()
+
+        old_path = _mod.shutil.which
+        try:
+            _mod.shutil.which = lambda name: f"/usr/bin/{name}"
+            result = run_wakeup_adapter(
+                {
+                    "project_path": "/tmp/project",
+                    "target_slug": "opencode",
+                    "inbox_path": "/tmp/project/.ai-collab/inbox-opencode.md",
+                    "task_id": "task-123",
+                    "synthetic_prompt": "read inbox",
+                },
+                mode="cli",
+                runner=fake_runner,
+            )
+        finally:
+            _mod.shutil.which = old_path
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(calls[0][0][:3], ["/usr/bin/opencode", "run", "--dir"])
 
 
 if __name__ == "__main__":

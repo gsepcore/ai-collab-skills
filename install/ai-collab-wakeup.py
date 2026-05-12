@@ -2,13 +2,15 @@
 """
 Durable inbox wakeup detection for ai-collab.
 
-Phase B owns detection only: it turns unread inbox files into durable wake
-events with retry/backoff. Real wakeup adapters are Phase C.
+Turns unread inbox files into durable wake events, then dispatches a wakeup
+adapter. CLI execution is opt-in; the default adapter is notify-only.
 """
 from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -21,6 +23,8 @@ DEFAULT_BACKOFF_SECONDS = (5, 25, 125)
 DEFAULT_EVENTS_FILE = Path.home() / ".ai-collab-wakeup-events.json"
 DEFAULT_STATE_FILE = Path.home() / ".ai-collab-wakeup-state.json"
 DEFAULT_LOG_FILE = Path("/tmp/ai-collab-wakeup.log")
+DEFAULT_ADAPTER = "notify-only"
+DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
 MAX_EVENTS = 200
 
 
@@ -130,6 +134,120 @@ def update_inbox(path: Path, meta: dict[str, str], body: str) -> None:
     atomic_write(path, render_frontmatter(meta, body))
 
 
+def adapter_mode_from_env() -> str:
+    return os.environ.get("AI_COLLAB_WAKEUP_ADAPTER", DEFAULT_ADAPTER).strip() or DEFAULT_ADAPTER
+
+
+def adapter_timeout_from_env() -> int:
+    return max(1, coerce_int(os.environ.get("AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT"), DEFAULT_ADAPTER_TIMEOUT_SECONDS))
+
+
+def executable_for(target_slug: str) -> str | None:
+    env_key = f"AI_COLLAB_{target_slug.upper().replace('-', '_')}_BIN"
+    configured = os.environ.get(env_key)
+    if configured:
+        return configured
+
+    candidates = {
+        "codex": ["codex"],
+        "opencode": ["opencode"],
+        "claude": ["claude"],
+    }.get(target_slug, [target_slug])
+
+    for candidate in candidates:
+        found = shutil.which(candidate)
+        if found:
+            return found
+    return None
+
+
+def build_cli_command(input_data: dict[str, str]) -> list[str] | None:
+    target = input_data["target_slug"]
+    exe = executable_for(target)
+    if not exe:
+        return None
+
+    project_path = input_data["project_path"]
+    inbox_path = input_data["inbox_path"]
+    prompt = input_data["synthetic_prompt"]
+
+    if target == "codex":
+        return [
+            exe,
+            "--cd",
+            project_path,
+            "--ask-for-approval",
+            "never",
+            "--sandbox",
+            "workspace-write",
+            "exec",
+            prompt,
+        ]
+    if target == "opencode":
+        return [exe, "run", "--dir", project_path, "--file", inbox_path, prompt]
+    if target == "claude":
+        return [exe, "-p", "--permission-mode", "acceptEdits", "--add-dir", project_path, prompt]
+    return [exe, prompt]
+
+
+def run_wakeup_adapter(
+    input_data: dict[str, str],
+    *,
+    mode: str | None = None,
+    timeout: int | None = None,
+    runner=subprocess.run,
+) -> dict[str, str]:
+    mode = mode or adapter_mode_from_env()
+    timeout = timeout or adapter_timeout_from_env()
+
+    if mode == "mock-success":
+        return {"status": "success", "message": "mock adapter accepted task", "adapter_name": "mock-success"}
+    if mode == "mock-failed":
+        return {"status": "failed", "message": "mock adapter failed task", "adapter_name": "mock-failed"}
+    if mode == "notify-only":
+        return {
+            "status": "degraded",
+            "message": "wake event recorded; no active execution adapter configured",
+            "adapter_name": "notify-only",
+        }
+    if mode != "cli":
+        return {"status": "failed", "message": f"unknown adapter mode: {mode}", "adapter_name": mode}
+
+    command = build_cli_command(input_data)
+    if not command:
+        return {
+            "status": "failed",
+            "message": f"no CLI executable found for target {input_data['target_slug']}",
+            "adapter_name": "cli",
+        }
+
+    try:
+        completed = runner(
+            command,
+            cwd=input_data["project_path"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "failed", "message": f"CLI adapter timed out after {timeout}s", "adapter_name": "cli"}
+    except OSError as exc:
+        return {"status": "failed", "message": f"CLI adapter failed to start: {exc}", "adapter_name": "cli"}
+
+    if completed.returncode == 0:
+        return {"status": "success", "message": "CLI adapter accepted task", "adapter_name": "cli"}
+
+    stderr = (completed.stderr or completed.stdout or "").strip().replace("\n", " ")
+    if len(stderr) > 300:
+        stderr = stderr[:300] + "...[truncated]"
+    return {
+        "status": "failed",
+        "message": f"CLI adapter exited {completed.returncode}: {stderr}",
+        "adapter_name": "cli",
+    }
+
+
 def process_inbox(
     inbox_path: Path,
     project: str,
@@ -139,6 +257,8 @@ def process_inbox(
     state_file: Path = DEFAULT_STATE_FILE,
     log_file: Path = DEFAULT_LOG_FILE,
     max_attempts: int | None = None,
+    adapter_mode: str | None = None,
+    adapter_runner=subprocess.run,
 ) -> dict[str, Any]:
     now = now or utc_now()
     max_attempts = max_attempts or max_attempts_from_env()
@@ -201,9 +321,25 @@ def process_inbox(
     }
     append_event(events_file, event)
 
+    adapter_input = {
+        "project_path": str(inbox_path.parent.parent),
+        "target_slug": target_slug,
+        "inbox_path": str(inbox_path),
+        "task_id": task_id,
+        "synthetic_prompt": event["synthetic_prompt"],
+    }
+    adapter_result = run_wakeup_adapter(adapter_input, mode=adapter_mode, runner=adapter_runner)
+    event["adapter_result"] = adapter_result
+    append_event(events_file, {**event, "event_type": "adapter_result"})
+
     meta["attempts"] = str(next_attempts)
     meta["last_attempt"] = timestamp
-    if next_attempts >= max_attempts:
+    if adapter_result["status"] == "success":
+        meta["status"] = "claimed"
+        meta["claimed_by"] = adapter_result["adapter_name"]
+        meta["claimed_at"] = timestamp
+        action = "claimed"
+    elif next_attempts >= max_attempts:
         meta["status"] = "failed"
         meta["done_at"] = timestamp
         action = "failed"
@@ -216,8 +352,19 @@ def process_inbox(
         state = dict(list(state.items())[-MAX_EVENTS:])
     write_json(state_file, state)
 
-    log(f"WAKE action={action} task_id={task_id} target={target_slug} attempt={next_attempts} inbox={inbox_path}", log_file)
-    return {"action": action, "task_id": task_id, "attempts": next_attempts, "event": event}
+    log(
+        "WAKE "
+        f"action={action} task_id={task_id} target={target_slug} attempt={next_attempts} "
+        f"adapter={adapter_result['adapter_name']} adapter_status={adapter_result['status']} inbox={inbox_path}",
+        log_file,
+    )
+    return {
+        "action": action,
+        "task_id": task_id,
+        "attempts": next_attempts,
+        "event": event,
+        "adapter_result": adapter_result,
+    }
 
 
 def main(argv: list[str]) -> int:

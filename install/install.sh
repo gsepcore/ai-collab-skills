@@ -38,6 +38,7 @@ yellow()  { printf '\033[33m⚠\033[0m  %s\n' "$*"; }
 info()    { printf '  %s\n' "$*"; }
 ask()     { [[ -n "$YES" ]] && return 0; read -r -p "$1 [Y/n] " _ans; [[ "$_ans" =~ ^[Nn]$ ]] && return 1 || return 0; }
 need()    { command -v "$1" &>/dev/null || { echo "Error: $1 is required but not installed."; exit 1; }; }
+xml_escape() { printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g'; }
 
 # ── Detect source location ────────────────────────────────────────────────────
 # Works whether run from the cloned repo OR piped via curl
@@ -127,30 +128,46 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
   mkdir -p "$HOME/Library/LaunchAgents"
 
   # Ask about macOS Notification Center banners (proactive even when Claude is closed)
-  OS_NOTIFY_BLOCK=""
+  ENV_ITEMS=""
+  add_plist_env() {
+    local key="$1" value="$2"
+    [ -n "$value" ] || return 0
+    ENV_ITEMS="${ENV_ITEMS}        <key>${key}</key>
+        <string>$(xml_escape "$value")</string>
+"
+  }
+
   if [[ -z "$YES" ]]; then
     echo ""
     info "macOS Notification Center: fire a banner when another AI completes a task?"
     info "  Survives Claude Code closing, Mac sleep, restart, and shutdown."
     info "  You can change this later by editing the plist file."
     if ask "  Enable macOS notifications?"; then
-      OS_NOTIFY_BLOCK='    <key>EnvironmentVariables</key>
-    <dict>
-        <key>AI_COLLAB_OS_NOTIFY</key>
-        <string>1</string>
-    </dict>
-'
+      add_plist_env "AI_COLLAB_OS_NOTIFY" "1"
       green "macOS notifications enabled — banners will appear on AI activity"
     else
       info "macOS notifications disabled — set AI_COLLAB_OS_NOTIFY=1 in the plist later if you change your mind"
     fi
   elif [[ "$AI_COLLAB_OS_NOTIFY" = "1" ]]; then
-    OS_NOTIFY_BLOCK='    <key>EnvironmentVariables</key>
+    add_plist_env "AI_COLLAB_OS_NOTIFY" "1"
+  fi
+
+  # Persist optional wakeup adapter settings into launchd. launchd does not
+  # inherit the user's interactive shell env, so opt-in automation must be
+  # written here at install time or edited into the plist later.
+  add_plist_env "AI_COLLAB_WAKEUP_ADAPTER" "${AI_COLLAB_WAKEUP_ADAPTER:-}"
+  add_plist_env "AI_COLLAB_WAKEUP_MAX_ATTEMPTS" "${AI_COLLAB_WAKEUP_MAX_ATTEMPTS:-}"
+  add_plist_env "AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT" "${AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT:-}"
+  add_plist_env "AI_COLLAB_CODEX_BIN" "${AI_COLLAB_CODEX_BIN:-}"
+  add_plist_env "AI_COLLAB_OPENCODE_BIN" "${AI_COLLAB_OPENCODE_BIN:-}"
+  add_plist_env "AI_COLLAB_CLAUDE_BIN" "${AI_COLLAB_CLAUDE_BIN:-}"
+
+  ENV_BLOCK=""
+  if [[ -n "$ENV_ITEMS" ]]; then
+    ENV_BLOCK="    <key>EnvironmentVariables</key>
     <dict>
-        <key>AI_COLLAB_OS_NOTIFY</key>
-        <string>1</string>
-    </dict>
-'
+${ENV_ITEMS}    </dict>
+"
   fi
 
   cat > "$PLIST_PATH" << PLIST
@@ -160,7 +177,7 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
 <dict>
     <key>Label</key>
     <string>${PLIST_LABEL}</string>
-${OS_NOTIFY_BLOCK}    <key>ProgramArguments</key>
+${ENV_BLOCK}    <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
         <string>${CLAUDE_DIR}/ai-collab-daemon.sh</string>
