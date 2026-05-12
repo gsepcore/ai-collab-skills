@@ -437,7 +437,7 @@ def discover_opencode_ports(runner=subprocess.run) -> list[int]:
     return deduped
 
 
-def post_json(url: str, payload: dict[str, str], *, timeout: int) -> tuple[int, str]:
+def post_json(url: str, payload: dict[str, Any], *, timeout: int) -> tuple[int, str]:
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -456,14 +456,43 @@ def post_json(url: str, payload: dict[str, str], *, timeout: int) -> tuple[int, 
         return 0, str(exc)
 
 
+def get_json(url: str, *, timeout: int) -> tuple[int, Any]:
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            try:
+                return response.status, json.loads(raw)
+            except json.JSONDecodeError:
+                return response.status, raw
+    except urllib.error.HTTPError as exc:
+        text = exc.read(400).decode("utf-8", errors="replace")
+        return exc.code, text
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return 0, str(exc)
+
+
+def discover_opencode_active_session(port: int, *, timeout: int, getter=None) -> str | None:
+    getter = getter or get_json
+    status, body = getter(f"http://127.0.0.1:{port}/session", timeout=timeout)
+    if not (200 <= status < 300) or not isinstance(body, list) or not body:
+        return None
+    for session in body:
+        if isinstance(session, dict) and session.get("id"):
+            return session["id"]
+    return None
+
+
 def run_opencode_visible_adapter(
     input_data: dict[str, str],
     *,
     timeout: int,
     runner=subprocess.run,
     poster=None,
+    getter=None,
 ) -> dict[str, str]:
     poster = poster or post_json
+    getter = getter or get_json
     guardrail = visible_guardrail(input_data, "opencode-visible")
     if guardrail:
         return guardrail
@@ -484,23 +513,39 @@ def run_opencode_visible_adapter(
 
     prompt = input_data["synthetic_prompt"]
     last_error = ""
+    fast_timeout = min(timeout, 10)
     for port in ports:
+        session_id = discover_opencode_active_session(port, timeout=fast_timeout, getter=getter)
+        if not session_id:
+            last_error = f"port {port}: no active session found"
+            continue
         status, text = poster(
-            f"http://127.0.0.1:{port}/tui/append-prompt",
-            {"text": prompt},
-            timeout=min(timeout, 10),
+            f"http://127.0.0.1:{port}/session/{session_id}/prompt_async",
+            {
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": prompt,
+                        "synthetic": True,
+                    }
+                ]
+            },
+            timeout=fast_timeout,
         )
         if 200 <= status < 300:
             return {
-                "status": "degraded",
-                "message": f"prompt appended to visible OpenCode TUI on port {port}",
+                "status": "success",
+                "message": (
+                    f"synthetic prompt delivered to visible OpenCode session "
+                    f"{session_id} on port {port}"
+                ),
                 "adapter_name": "opencode-visible",
             }
-        last_error = f"port {port} returned {status}: {text}".strip()
+        last_error = f"port {port} session {session_id} returned {status}: {text}".strip()
 
     return {
         "status": "failed",
-        "message": last_error or "visible OpenCode TUI did not accept prompt",
+        "message": last_error or "visible OpenCode TUI did not accept synthetic prompt",
         "adapter_name": "opencode-visible",
     }
 

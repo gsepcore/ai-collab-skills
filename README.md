@@ -436,9 +436,9 @@ bash install/install.sh
 
 Behavior:
 
-- `@opencode` or `inbox-opencode.md` uses the OpenCode extension's local `/tui/append-prompt` endpoint.
+- `@opencode` or `inbox-opencode.md` uses the OpenCode server's `POST /session/{id}/prompt_async` endpoint with `synthetic: true`. The synthetic prompt is processed by the model but is **not rendered in the chat history** — the user only sees the agent's response in its visible tab. This is the equivalent of Claude Code's `<task-notification>` primitive for OpenCode, validated end-to-end against the live TUI.
 - `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent`.
-- If no visible panel/port exists, the adapter fails safely and normal retry/backoff applies.
+- If no visible panel/port/session exists, the adapter fails safely and normal retry/backoff applies.
 
 ---
 

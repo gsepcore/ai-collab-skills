@@ -415,6 +415,9 @@ class TestAdapters(unittest.TestCase):
             posts.append((url, payload, kwargs))
             return 200, "ok"
 
+        def fake_getter(url, **kwargs):
+            return 200, [{"id": "ses_test"}]
+
         result = _mod.run_opencode_visible_adapter(
             {
                 "project_path": "/tmp/project",
@@ -425,20 +428,25 @@ class TestAdapters(unittest.TestCase):
             },
             timeout=10,
             poster=fake_poster,
+            getter=fake_getter,
         )
 
-        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["status"], "success")
         self.assertEqual(result["adapter_name"], "opencode-visible")
-        self.assertEqual(posts[0][0], "http://127.0.0.1:12345/tui/append-prompt")
-        self.assertEqual(posts[0][1]["text"], "read visible inbox")
+        self.assertEqual(posts[0][0], "http://127.0.0.1:12345/session/ses_test/prompt_async")
+        self.assertEqual(posts[0][1]["parts"][0]["text"], "read visible inbox")
+        self.assertEqual(posts[0][1]["parts"][0]["synthetic"], True)
+        self.assertEqual(posts[0][1]["parts"][0]["type"], "text")
 
     def test_visible_adapter_routes_opencode(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
         os.environ["AI_COLLAB_OPENCODE_PORTS"] = "12345"
 
         old_post = _mod.post_json
+        old_get = _mod.get_json
         try:
             _mod.post_json = lambda url, payload, **kwargs: (200, "ok")
+            _mod.get_json = lambda url, **kwargs: (200, [{"id": "ses_test"}])
             result = run_wakeup_adapter(
                 {
                     "project_path": "/tmp/project",
@@ -451,9 +459,41 @@ class TestAdapters(unittest.TestCase):
             )
         finally:
             _mod.post_json = old_post
+            _mod.get_json = old_get
 
-        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["status"], "success")
         self.assertEqual(result["adapter_name"], "opencode-visible")
+
+    def test_opencode_visible_skips_port_without_session(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "12345,23456"
+        posts = []
+
+        def fake_poster(url, payload, **kwargs):
+            posts.append((url, payload, kwargs))
+            return 200, "ok"
+
+        responses = iter([(200, []), (200, [{"id": "ses_second"}])])
+
+        def fake_getter(url, **kwargs):
+            return next(responses)
+
+        result = _mod.run_opencode_visible_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            timeout=10,
+            poster=fake_poster,
+            getter=fake_getter,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(posts[0][0], "http://127.0.0.1:23456/session/ses_second/prompt_async")
+        self.assertEqual(len(posts), 1)
 
     def test_antigravity_chat_adapter_uses_reuse_window(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
