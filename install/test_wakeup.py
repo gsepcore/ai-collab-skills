@@ -280,7 +280,9 @@ class TestAdapters(unittest.TestCase):
             _mod.shutil.which = old_path
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(calls[0][0][:3], ["/usr/bin/opencode", "run", "--dir"])
+        self.assertEqual(calls[0][0][:3], ["/usr/bin/opencode", "run", "read inbox"])
+        self.assertIn("--dir", calls[0][0])
+        self.assertIn("--file", calls[0][0])
 
 
 if __name__ == "__main__":

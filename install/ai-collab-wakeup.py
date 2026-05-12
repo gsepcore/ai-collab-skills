@@ -185,7 +185,7 @@ def build_cli_command(input_data: dict[str, str]) -> list[str] | None:
             prompt,
         ]
     if target == "opencode":
-        return [exe, "run", "--dir", project_path, "--file", inbox_path, prompt]
+        return [exe, "run", prompt, "--dir", project_path, "--file", inbox_path]
     if target == "claude":
         return [exe, "-p", "--permission-mode", "acceptEdits", "--add-dir", project_path, prompt]
     return [exe, prompt]
