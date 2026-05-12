@@ -21,6 +21,11 @@ parse_frontmatter = _mod.parse_frontmatter
 extract_section   = _mod.extract_section
 collect_items     = _mod.collect_items
 _main             = _mod.main
+detect_team       = _mod.detect_team
+parse_team_manifest = _mod.parse_team_manifest
+find_log_mtimes   = _mod.find_log_mtimes
+render_team_section = _mod.render_team_section
+format_relative_time = _mod.format_relative_time
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -273,6 +278,151 @@ updated: 2026-05-11 14:30:00
                 os.chdir(old_cwd)
             context = (collab_dir / "CONTEXT.md").read_text()
             self.assertEqual(context.count("Use PostgreSQL"), 1, "Duplicate decisions should be deduplicated")
+
+
+class TestTeamDetection(unittest.TestCase):
+    """Verify team roster detection from rules files, logs, and TEAM.md manifest."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.root = Path(self.tmp)
+        self.collab = self.root / ".ai-collab"
+        self.collab.mkdir()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _touch(self, rel_path):
+        p = self.root / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("")
+
+    def _log(self, name, content="---\nai: Test\n---\n## Working On\nx"):
+        (self.collab / name).write_text(content)
+
+    def test_detects_cursor_from_cursorrules(self):
+        self._touch(".cursorrules")
+        team, note = detect_team(self.root, self.collab)
+        self.assertIn("cursor", team)
+        self.assertEqual(team["cursor"]["source"], ".cursorrules")
+        self.assertIsNone(team["cursor"]["last_log_mtime"])
+
+    def test_detects_windsurf_from_windsurfrules(self):
+        self._touch(".windsurfrules")
+        team, _ = detect_team(self.root, self.collab)
+        self.assertIn("windsurf", team)
+
+    def test_detects_copilot_from_github_path(self):
+        self._touch(".github/copilot-instructions.md")
+        team, _ = detect_team(self.root, self.collab)
+        self.assertIn("copilot", team)
+
+    def test_detects_aider_from_conf(self):
+        self._touch(".aider.conf.yml")
+        team, _ = detect_team(self.root, self.collab)
+        self.assertIn("aider", team)
+
+    def test_no_team_no_files(self):
+        team, note = detect_team(self.root, self.collab)
+        self.assertEqual(team, {})
+        self.assertIsNone(note)
+
+    def test_agents_md_alone_gives_note_but_no_members(self):
+        self._touch("AGENTS.md")
+        team, note = detect_team(self.root, self.collab)
+        self.assertEqual(team, {})
+        self.assertIsNotNone(note)
+        self.assertIn("AGENTS.md", note)
+        self.assertIn("opencode", note)
+
+    def test_agents_md_with_opencode_log_lists_opencode(self):
+        self._touch("AGENTS.md")
+        self._log("opencode-20260512-080000.md")
+        team, note = detect_team(self.root, self.collab)
+        self.assertIn("opencode", team)
+        self.assertEqual(team["opencode"]["source"], "AGENTS.md")
+        # note should still mention the rest (codex, aider, etc.)
+        self.assertIsNotNone(note)
+        self.assertIn("codex", note)
+        # opencode should NOT be in the note (already listed above)
+        self.assertNotIn("opencode", note)
+
+    def test_claude_log_lists_director(self):
+        self._log("claude-20260512-080000.md")
+        team, _ = detect_team(self.root, self.collab)
+        self.assertIn("claude", team)
+        self.assertEqual(team["claude"]["source"], "director (skill)")
+
+    def test_team_md_manifest_takes_precedence(self):
+        # TEAM.md says: claude, opencode, cursor
+        (self.collab / "TEAM.md").write_text(
+            "## Roster\n\n- claude\n- opencode\n- cursor\n"
+        )
+        # Also have .cursorrules and AGENTS.md that heuristic would detect — but TEAM.md wins
+        self._touch(".cursorrules")
+        self._touch("AGENTS.md")
+        team, note = detect_team(self.root, self.collab)
+        self.assertEqual(set(team.keys()), {"claude", "opencode", "cursor"})
+        self.assertTrue(all(info["source"] == "TEAM.md" for info in team.values()))
+
+    def test_team_md_with_bold_formatting(self):
+        (self.collab / "TEAM.md").write_text(
+            "## Roster\n\n- **claude** (director)\n- **opencode**\n"
+        )
+        team, _ = detect_team(self.root, self.collab)
+        self.assertEqual(set(team.keys()), {"claude", "opencode"})
+
+    def test_team_md_attaches_log_mtimes(self):
+        (self.collab / "TEAM.md").write_text("## Roster\n- opencode\n")
+        self._log("opencode-20260512-080000.md")
+        team, _ = detect_team(self.root, self.collab)
+        self.assertIsNotNone(team["opencode"]["last_log_mtime"])
+
+    def test_empty_team_md_falls_back_to_heuristic(self):
+        (self.collab / "TEAM.md").write_text("## Roster\n\n(empty)\n")
+        self._touch(".cursorrules")
+        team, _ = detect_team(self.root, self.collab)
+        self.assertIn("cursor", team)
+
+    def test_find_log_mtimes_skips_inbox_files(self):
+        self._log("inbox-opencode.md")
+        self._log("inbox-all.md")
+        self._log("opencode-20260512.md")
+        mtimes = find_log_mtimes(self.collab)
+        self.assertIn("opencode", mtimes)
+        self.assertNotIn("inbox", mtimes)
+
+    def test_render_includes_no_logs_yet_for_unwritten_ai(self):
+        self._touch(".cursorrules")
+        team, note = detect_team(self.root, self.collab)
+        import time
+        rendered = render_team_section(team, note, time.time())
+        self.assertIn("cursor", rendered)
+        self.assertIn("no logs yet", rendered)
+
+    def test_render_includes_relative_time_for_recent_log(self):
+        self._log("opencode-fresh.md")
+        team, _ = detect_team(self.root, self.collab)
+        import time
+        rendered = render_team_section(team, None, time.time())
+        self.assertIn("opencode", rendered)
+        self.assertIn("last seen", rendered)
+
+    def test_render_empty_team_shows_helpful_hint(self):
+        import time
+        rendered = render_team_section({}, None, time.time())
+        self.assertIn("No team members detected", rendered)
+        self.assertIn("/collab setup", rendered)
+
+    def test_format_relative_time(self):
+        import time
+        now = time.time()
+        self.assertEqual(format_relative_time(None, now), "no logs yet")
+        self.assertIn("s ago", format_relative_time(now - 30, now))
+        self.assertIn("min ago", format_relative_time(now - 300, now))
+        self.assertIn("h ago", format_relative_time(now - 7200, now))
+        self.assertIn("d ago", format_relative_time(now - 100000, now))
 
 
 if __name__ == "__main__":

@@ -62,6 +62,28 @@ Las otras IAs (Cursor, Windsurf, OpenCode, Codex, Copilot, Antigravity, Hermes, 
 
 Los workers *pueden* técnicamente leer logs de los demás y editar cualquier archivo, pero la delegación de tareas fluye desde Claude hacia afuera. Esto mantiene la coordinación centralizada y evita situaciones ambiguas de "quién decide aquí".
 
+### 1.5 El director conoce al equipo desde el inicio de la sesión
+
+Para que Claude delegue bien, necesita saber quién más está en el proyecto. El hook `Stop` regenera `.ai-collab/CONTEXT.md` después de cada respuesta de Claude, y `CONTEXT.md` incluye una **sección `## Team`** construida desde tres fuentes:
+
+1. **`.ai-collab/TEAM.md`** (manifest explícito, tiene precedencia) — generado por `/collab setup`. Lista cada slug pensado para participar, incluso antes de que hayan escrito un log.
+2. **Archivos de reglas únicos** en la raíz del proyecto — `.cursorrules` → cursor, `.windsurfrules` → windsurf, `.github/copilot-instructions.md` → copilot, `.aider.conf.yml` → aider.
+3. **Logs existentes** en `.ai-collab/` — cualquier `{slug}-*.md` significa que esa IA ha estado activa al menos una vez.
+
+`AGENTS.md` lo comparten OpenCode, Codex, Aider, Continue y otros — su presencia sola es ambigua, así que esas IAs solo aparecen en la sección Team una vez que han escrito un log O están listadas explícitamente en `TEAM.md`. Una nota debajo del roster te recuerda que pueden unirse más IAs compatibles con AGENTS.md.
+
+Esto significa que la próxima vez que Claude abra un proyecto, ve un roster como:
+
+```
+## Team
+- **claude** — director (Claude Code skill) · last seen 12min ago
+- **cursor** — registered via `.cursorrules` · no logs yet
+- **opencode** — registered via `AGENTS.md` · last seen 3min ago
+- **codex** — declared in `TEAM.md` · last seen 4h ago
+```
+
+…y puede asignar tareas confiadamente vía `/collab assign codex …` sin tener que preguntarte primero "¿Codex está en este proyecto?".
+
 ### 2. Los workers reaccionan autónomamente a asignaciones
 
 Nunca tienes que copiar una tarea desde la ventana de Claude a la ventana de OpenCode. El protocolo lo maneja vía filesystem:

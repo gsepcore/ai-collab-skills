@@ -82,9 +82,30 @@ First-time setup on a new project.
 3. Check if `.ai-collab/` is in `.gitignore` → if not, append it (ask first if a `.gitignore` already exists)
 4. Copy `references/PROTOCOL.md` to `{root}/.ai-collab/PROTOCOL.md`
 5. Detect which AI tools the project uses:
-   - Ask: "Which other AI tools are working on this project? (Cursor / Windsurf / Copilot / OpenCode / Codex / Other)"
+   - Ask: "Which other AI tools are working on this project? (Cursor / Windsurf / Copilot / OpenCode / Codex / Aider / Other)"
    - For each confirmed tool, read `references/protocol.md` → extract the snippet for that tool → append to the relevant rules file (`.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`, etc.) or create it
-6. **Create onboarding welcome** — if `.ai-collab/inbox-all.md` does NOT already exist, write it with this content so the first worker AI to open this project self-orients without the user prompting:
+6. **Write `.ai-collab/TEAM.md`** — explicit team manifest so every AI knows who else is on the project from the first session, even before anyone has written a log. Use the slugs the user confirmed in step 5 plus `claude` (always the director). Format:
+   ```
+   ---
+   project: {project-name}
+   declared: {ISO timestamp}
+   declared_by: Claude Code (/collab setup)
+   ---
+
+   ## Roster
+
+   - claude (director)
+   - opencode
+   - cursor
+   - codex
+   - {other slugs the user confirmed}
+
+   ## Notes
+
+   {one-line free-form note about team composition, optional}
+   ```
+   If `TEAM.md` already exists, do NOT overwrite — read it, list the current roster, and ask the user if they want to add or remove members.
+7. **Create onboarding welcome** — if `.ai-collab/inbox-all.md` does NOT already exist, write it with this content so the first worker AI to open this project self-orients without the user prompting:
    ```
    ---
    from: Claude Code (setup)
@@ -113,8 +134,8 @@ First-time setup on a new project.
    When done, change `status: unread` → `status: done` via atomic write.
    ```
    If `inbox-all.md` already exists, do NOT overwrite — tell the user it was preserved.
-7. Run `/collab write` immediately to log Claude's current context
-8. Summarize what was created — explicitly mention that the onboarding inbox is ready and that any worker AI opening this project will self-orient on first response
+8. Run `/collab write` immediately to log Claude's current context
+9. Summarize what was created — explicitly mention that the team manifest is ready, the onboarding inbox is ready, and that any worker AI opening this project will see the full roster + self-orient on first response
 
 ---
 
