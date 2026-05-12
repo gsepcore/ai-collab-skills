@@ -82,7 +82,7 @@ class TestProcessInbox(unittest.TestCase):
         meta, _ = parse_frontmatter(self.inbox.read_text(encoding="utf-8"))
         return meta
 
-    def test_unread_produces_wake_event_and_updates_attempt(self):
+    def test_notify_only_produces_wake_event_without_consuming_attempt(self):
         self.write_inbox()
         result = process_inbox(
             self.inbox,
@@ -93,7 +93,7 @@ class TestProcessInbox(unittest.TestCase):
             log_file=self.log,
         )
 
-        self.assertEqual(result["action"], "event")
+        self.assertEqual(result["action"], "notified")
         events = json.loads(self.events.read_text(encoding="utf-8"))
         self.assertEqual(len(events), 2)
         self.assertEqual(events[0]["task_id"], "task-123")
@@ -103,8 +103,8 @@ class TestProcessInbox(unittest.TestCase):
 
         meta = self.read_meta()
         self.assertEqual(meta["status"], "unread")
-        self.assertEqual(meta["attempts"], "1")
-        self.assertEqual(meta["last_attempt"], "2026-05-12T12:00:00Z")
+        self.assertEqual(meta["attempts"], "0")
+        self.assertEqual(meta["last_attempt"], "")
 
     def test_successful_adapter_claims_inbox(self):
         self.write_inbox()
@@ -152,6 +152,7 @@ class TestProcessInbox(unittest.TestCase):
             events_file=self.events,
             state_file=self.state,
             log_file=self.log,
+            adapter_mode="mock-failed",
         )
 
         self.assertEqual(result["action"], "backoff")
@@ -170,6 +171,7 @@ class TestProcessInbox(unittest.TestCase):
             events_file=self.events,
             state_file=self.state,
             log_file=self.log,
+            adapter_mode="mock-failed",
         )
 
         self.assertEqual(result["action"], "event")
@@ -188,6 +190,7 @@ class TestProcessInbox(unittest.TestCase):
             events_file=self.events,
             state_file=self.state,
             log_file=self.log,
+            adapter_mode="mock-failed",
             max_attempts=3,
         )
 

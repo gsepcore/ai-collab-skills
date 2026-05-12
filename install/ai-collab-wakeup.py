@@ -332,6 +332,25 @@ def process_inbox(
     event["adapter_result"] = adapter_result
     append_event(events_file, {**event, "event_type": "adapter_result"})
 
+    if adapter_result["adapter_name"] == "notify-only" and adapter_result["status"] == "degraded":
+        state[state_key] = timestamp
+        if len(state) > MAX_EVENTS:
+            state = dict(list(state.items())[-MAX_EVENTS:])
+        write_json(state_file, state)
+        log(
+            "WAKE "
+            f"action=notified task_id={task_id} target={target_slug} attempt={attempts} "
+            f"adapter=notify-only adapter_status=degraded inbox={inbox_path}",
+            log_file,
+        )
+        return {
+            "action": "notified",
+            "task_id": task_id,
+            "attempts": attempts,
+            "event": event,
+            "adapter_result": adapter_result,
+        }
+
     meta["attempts"] = str(next_attempts)
     meta["last_attempt"] = timestamp
     if adapter_result["status"] == "success":
