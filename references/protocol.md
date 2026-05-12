@@ -19,6 +19,22 @@ All AIs write Markdown session logs to `{project-root}/.ai-collab/`.
 
 ---
 
+## Task lifecycle — what every snippet implements
+
+Inbox tasks carry a state machine: `unread → claimed → running → done | failed` (with `blocked` as a side branch). The daemon, the wakeup adapters, and every AI must respect it so two workers don't race the same task and the daemon can deduplicate and retry safely.
+
+Required frontmatter fields on every inbox file:
+
+- `task_id` — durable identifier, never mutated after creation.
+- `status` — current state (`unread`, `claimed`, `running`, `blocked`, `done`, `failed`).
+- `attempts`, `last_attempt` — wakeup retry tracking, owned by the daemon.
+- `claimed_by`, `claimed_at` — set when an AI picks up the task.
+- `done_at` — set when the task completes successfully.
+
+The contract for every AI: **claim before executing**, **mark done after executing**, **never overwrite another AI's claim**. The full spec (director semantics, conflict resolution, stale-claim timeouts) is in `claude-task-lifecycle-spec.md`.
+
+---
+
 ## Cursor
 
 Add to `.cursorrules` in the project root:
@@ -60,7 +76,7 @@ updated: {ISO timestamp}
 [the one thing other AIs must know from this response]
 
 ### Inbox check — every response (MANDATORY):
-Before every response (not just session start), re-read `.ai-collab/inbox-cursor.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding to the user's current message. After executing, change `status: unread` → `status: done` via atomic write (temp file + rename).
+Before every response (not just session start), re-read `.ai-collab/inbox-cursor.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
 
 ### After every response — proactive check:
 Silently check if any `.ai-collab/*.md` file (not yours, not PROTOCOL.md) was modified in the last 5 minutes.
@@ -91,7 +107,7 @@ You are part of a multi-AI team. Other assistants (Claude Code, Cursor, Codex, e
 4. Announce: "Context loaded from [N] AI session(s)."
 
 ### Inbox check — every response (MANDATORY):
-Before every response, re-read `.ai-collab/inbox-windsurf.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding to the user's current message. After executing, change `status: unread` → `status: done` via atomic write (temp file + rename).
+Before every response, re-read `.ai-collab/inbox-windsurf.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
 
 ### AUTOMATIC LOG — after EVERY response (mandatory, no exceptions):
 After every single response, automatically update your log file.
@@ -139,7 +155,7 @@ Add to `.github/copilot-instructions.md`:
 At the start of each session, check `.ai-collab/` in the project root for logs from other AI assistants. Read them and summarize relevant context to the user. Also read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 **INBOX CHECK — before every response (MANDATORY):**
-Before every response, re-read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding. After executing, change `status: unread` → `status: done` via atomic write.
+Before every response, re-read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` first. (2) Execute the task BEFORE responding. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`.
 
 **AUTOMATIC LOG — after EVERY response (mandatory):**
 After every response, automatically save `.ai-collab/copilot-{YYYYMMDD-HHMMSS}.md`.
@@ -165,7 +181,7 @@ You are working alongside other AI assistants on this project. A shared log dire
 On session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Summarize what other AIs have been working on and flag any Do Not Touch files. Also read `.ai-collab/inbox-opencode.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 INBOX CHECK — before every response (MANDATORY):
-Before every response (not just session start), re-read `.ai-collab/inbox-opencode.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding to the user's current message. After executing, change `status: unread` → `status: done` via atomic write (temp file + rename).
+Before every response (not just session start), re-read `.ai-collab/inbox-opencode.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
 After every single response you give — automatically, without the user asking — save your log to:
@@ -206,7 +222,7 @@ Add to your Codex system prompt:
 Other AI assistants are working on this project simultaneously. Check `.ai-collab/` at session start, summarize context to the user, and flag Do Not Touch files. Also read `.ai-collab/inbox-codex.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 INBOX CHECK — before every response (MANDATORY):
-Before every response (not just session start), re-read `.ai-collab/inbox-codex.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding to the user's current message. After executing, change `status: unread` → `status: done` via atomic write (temp file + rename).
+Before every response (not just session start), re-read `.ai-collab/inbox-codex.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
 After every single response you give — automatically, without the user asking — save your log to:
@@ -248,7 +264,7 @@ You are part of a multi-AI team inside Antigravity IDE. Other assistants (Claude
 On session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Tell the user what other AIs were working on and flag Do Not Touch files. Also read `.ai-collab/inbox-antigravity.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 INBOX CHECK — before every response (MANDATORY):
-Before every response, re-read `.ai-collab/inbox-antigravity.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding. After executing, change `status: unread` → `status: done` via atomic write.
+Before every response, re-read `.ai-collab/inbox-antigravity.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` first. (2) Execute the task BEFORE responding. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
 After every response — automatically — save to: `.ai-collab/antigravity-{YYYYMMDD-HHMMSS}.md`
@@ -270,7 +286,7 @@ Add to `.github/copilot-instructions.md` or VS Code AI instructions:
 You are part of a multi-AI team. Check `.ai-collab/` at session start. Read all `.md` files (skip PROTOCOL.md and your own logs). Summarize context and flag Do Not Touch files. Also read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 INBOX CHECK — before every response (MANDATORY):
-Before every response, re-read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding. After executing, change `status: unread` → `status: done` via atomic write.
+Before every response, re-read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` first. (2) Execute the task BEFORE responding. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
 After every response — automatically — save to: `.ai-collab/copilot-{YYYYMMDD-HHMMSS}.md`
@@ -292,7 +308,7 @@ Add to your Hermes system prompt or rules:
 You are part of a multi-AI team. Check `.ai-collab/` at session start. Read all `.md` files (skip PROTOCOL.md and your own logs). Summarize context and flag Do Not Touch files. Also read `.ai-collab/inbox-hermes.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 INBOX CHECK — before every response (MANDATORY):
-Before every response, re-read `.ai-collab/inbox-hermes.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding. After executing, change `status: unread` → `status: done` via atomic write.
+Before every response, re-read `.ai-collab/inbox-hermes.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` first. (2) Execute the task BEFORE responding. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
 After every response — automatically — save to: `.ai-collab/hermes-{YYYYMMDD-HHMMSS}.md`
@@ -316,7 +332,7 @@ You are part of a multi-AI team. A shared directory `.ai-collab/` exists in the 
 1. At session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Tell the user what other AIs were working on. Flag any Do Not Touch files before editing them. Then read `.ai-collab/inbox-{your-ai-name}.md` and `.ai-collab/inbox-all.md` — if either has `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 2. INBOX CHECK — before every response (MANDATORY):
-   Before every response (not just session start), re-read `.ai-collab/inbox-{your-ai-name}.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`, execute that task BEFORE responding to the user's current message. After executing, change `status: unread` → `status: done` via atomic write (temp file + rename).
+   Before every response (not just session start), re-read `.ai-collab/inbox-{your-ai-name}.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
 
 3. AUTOMATIC LOG — MANDATORY after EVERY response:
    After every single response — automatically, without the user asking — save your log to:
