@@ -86,6 +86,7 @@ class TestProcessInbox(unittest.TestCase):
         return meta
 
     def test_notify_only_produces_wake_event_without_consuming_attempt(self):
+        os.environ["AI_COLLAB_WAKEUP_ADAPTER"] = "notify-only"
         self.write_inbox()
         result = process_inbox(
             self.inbox,
@@ -257,6 +258,9 @@ class TestAdapters(unittest.TestCase):
             "AI_COLLAB_WAKEUP_VISIBLE_TARGETS": os.environ.get("AI_COLLAB_WAKEUP_VISIBLE_TARGETS"),
             "AI_COLLAB_WAKEUP_DRY_RUN": os.environ.get("AI_COLLAB_WAKEUP_DRY_RUN"),
             "AI_COLLAB_OPENCODE_PORTS": os.environ.get("AI_COLLAB_OPENCODE_PORTS"),
+            "AI_COLLAB_OPENCODE_BIN": os.environ.get("AI_COLLAB_OPENCODE_BIN"),
+            "AI_COLLAB_CODEX_BIN": os.environ.get("AI_COLLAB_CODEX_BIN"),
+            "AI_COLLAB_CLAUDE_BIN": os.environ.get("AI_COLLAB_CLAUDE_BIN"),
             "AI_COLLAB_ANTIGRAVITY_BIN": os.environ.get("AI_COLLAB_ANTIGRAVITY_BIN"),
             "AI_COLLAB_ANTIGRAVITY_MODE": os.environ.get("AI_COLLAB_ANTIGRAVITY_MODE"),
         }
@@ -353,7 +357,10 @@ class TestAdapters(unittest.TestCase):
         self.assertIn("--dir", calls[0][0])
         self.assertIn("--file", calls[0][0])
 
-    def test_cli_adapter_requires_project_allowlist(self):
+    def test_cli_adapter_blocks_project_not_in_allowlist(self):
+        # When operator restricts the allowlist explicitly, projects outside
+        # the list must be blocked.
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/some/other/project"
         result = run_wakeup_adapter(
             {
                 "project_path": "/tmp/project",
@@ -368,6 +375,39 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(result["status"], "degraded")
         self.assertEqual(result["adapter_name"], "cli-guardrail")
         self.assertIn("AI_COLLAB_WAKEUP_CLI_PROJECTS", result["message"])
+
+    def test_cli_adapter_allows_project_when_allowlist_unset(self):
+        # Active-by-default: when no allowlist is configured, any project with
+        # a .ai-collab/ directory is allowed. The user opted in by installing
+        # the skill into the project.
+        os.environ["AI_COLLAB_OPENCODE_BIN"] = "/usr/bin/opencode"
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append(command)
+
+            class Completed:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Completed()
+
+        result = run_wakeup_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read inbox",
+            },
+            mode="cli",
+            runner=fake_runner,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["adapter_name"], "cli")
+        self.assertEqual(calls[0][:3], ["/usr/bin/opencode", "run", "read inbox"])
 
     def test_cli_adapter_dry_run_does_not_execute(self):
         os.environ["AI_COLLAB_WAKEUP_DRY_RUN"] = "1"
@@ -546,7 +586,8 @@ class TestAdapters(unittest.TestCase):
         self.assertIn("--add-file", calls[0][0])
         self.assertEqual(calls[0][0][-1], "read visible inbox")
 
-    def test_visible_adapter_blocks_unallowed_project(self):
+    def test_visible_adapter_blocks_project_not_in_allowlist(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/some/other/project"
         result = run_wakeup_adapter(
             {
                 "project_path": "/tmp/project",

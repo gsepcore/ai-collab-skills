@@ -257,7 +257,7 @@ One-line overview of every AI active on this project — name, last update, and 
 
 ### `/collab assign [ai-name] [task description]`
 
-Delegate a task to another AI without leaving your Claude session. Writes `.ai-collab/inbox-{ai-name}.md` with `status: unread`. The daemon records a wake event for that agent; with a configured adapter it can run the target CLI automatically, and with the default `notify-only` mode it records the event safely for pickup on the next response. The worker reads its rules file, picks up the task from its inbox, executes it, and marks it `status: done`.
+Delegate a task to another AI without leaving your Claude session. Writes `.ai-collab/inbox-{ai-name}.md` with `status: unread`. The daemon records a wake event for that agent and **by default dispatches the `visible` adapter automatically** — for OpenCode it posts a synthetic prompt to the running TUI so the agent starts working in its visible tab without you typing anything. The worker reads the inbox, executes the task, and marks it `status: done`. No manual activation needed after `curl … | bash`.
 
 ```
 /collab assign codex publish v1.2.0 to npm and tag the release on GitHub
@@ -334,7 +334,7 @@ Six components keep Claude informed and able to dispatch inbox tasks:
 1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
 3. **Notification reader script** — `~/.claude/ai-collab-check-notifications.py` is invoked by the `UserPromptSubmit` hook. It uses an `fcntl` lock to coordinate with the daemon, **filters notifications by active project**, caps output to 10 items / 500 chars per message / 4 KB total, drops notifications older than 24 h, defends against malformed JSON, and always exits 0 (never blocks your prompt). All limits are tunable — see [Environment variables](#environment-variables) below.
-4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` and `thread-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; thread mentions use `reason: thread-mention`. By default it uses `notify-only`; `visible` targets active Antigravity/OpenCode panels when possible, and `cli` runs headless CLIs.
+4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` and `thread-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; thread mentions use `reason: thread-mention`. **By default it uses `visible`** so OpenCode/Codex get invisible synthetic wakeups in their running panels with zero manual activation; you can downgrade to `cli` (headless execution) or `notify-only` (safe logging only) via `AI_COLLAB_WAKEUP_ADAPTER`.
 5. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
 6. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
@@ -409,10 +409,10 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Set to `1` (in the daemon's launchd plist `EnvironmentVariables`) to fire macOS Notification Center banners when other AIs complete tasks. Persistent layer that works even when Claude Code is closed — see [macOS notifications](#macos-notifications-survives-claude-close-mac-sleep-and-restart). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | macOS sound name (e.g. `Tink`, `Glass`, `Pop`, `Hero`) to play with each banner. Only effective when `AI_COLLAB_OS_NOTIFY=1`. Leave unset for silent banners. |
 | `AI_COLLAB_DOCTOR_STRICT` | _(off)_ | Set to `1` so `ai-collab-doctor.py` exits nonzero when required install files/settings are broken. Warnings remain non-fatal. |
-| `AI_COLLAB_WAKEUP_ADAPTER` | `notify-only` | Wakeup adapter mode. Use `notify-only` for safe event logging, `visible` for active Antigravity/OpenCode panels, `opencode-visible`, `antigravity-chat`, or `cli` for headless execution. |
+| `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Wakeup adapter mode. Default `visible` delivers synthetic prompts to active Antigravity/OpenCode panels. Other options: `opencode-visible`, `antigravity-chat`, `cli` for headless execution, or `notify-only` for safe event logging only. |
 | `AI_COLLAB_WAKEUP_MAX_ATTEMPTS` | `3` | Maximum wake attempts before an unread inbox auto-transitions to `failed`. |
 | `AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT` | `120` | Seconds before a CLI adapter run is considered failed. |
-| `AI_COLLAB_WAKEUP_CLI_PROJECTS` | _(empty)_ | Required allowlist for executable adapters (`visible`, `opencode-visible`, `antigravity-chat`, `cli`). Comma-separated project basenames or absolute paths. Use `*` only for disposable testing. |
+| `AI_COLLAB_WAKEUP_CLI_PROJECTS` | _(empty = all projects)_ | Optional allowlist for executable adapters. By default, any project with a `.ai-collab/` directory is allowed — the user opted in by setting it up there. Set this only if you want to restrict the daemon to specific projects: comma-separated basenames or absolute paths. |
 | `AI_COLLAB_WAKEUP_CLI_TARGETS` | `codex,opencode,claude` | Optional comma-separated target allowlist for CLI execution. |
 | `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode` | Optional comma-separated target allowlist for visible adapters. Falls back to `AI_COLLAB_WAKEUP_CLI_TARGETS` if set. |
 | `AI_COLLAB_WAKEUP_DRY_RUN` | _(off)_ | Set to `1` to record what would be woken without executing any CLI command. |
@@ -423,22 +423,24 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_ANTIGRAVITY_BIN` | _(auto-detected)_ | Override the `antigravity` executable used by `antigravity-chat`. |
 | `AI_COLLAB_ANTIGRAVITY_MODE` | `agent` | Mode passed to `antigravity chat --mode` for visible Codex/Antigravity wakeups. |
 
-### Visible Antigravity/OpenCode wakeup
+### Visible Antigravity/OpenCode wakeup (default since 2026-05-13)
 
-Visible wakeup tries to reach the agent panel you already have open in Antigravity:
-
-```bash
-AI_COLLAB_WAKEUP_ADAPTER=visible \
-AI_COLLAB_WAKEUP_CLI_PROJECTS=/path/to/project \
-AI_COLLAB_WAKEUP_VISIBLE_TARGETS=codex,opencode \
-bash install/install.sh
-```
+**Active by default.** A bare `curl … | bash` install enables the visible adapter for `codex` and `opencode`, allows all projects with `.ai-collab/`, and seeds the daemon `PATH` so node/nvm/homebrew binaries are reachable. No env vars required.
 
 Behavior:
 
 - `@opencode` or `inbox-opencode.md` uses the OpenCode server's `POST /session/{id}/prompt_async` endpoint with `synthetic: true`. The synthetic prompt is processed by the model but is **not rendered in the chat history** — the user only sees the agent's response in its visible tab. This is the equivalent of Claude Code's `<task-notification>` primitive for OpenCode, validated end-to-end against the live TUI.
-- `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent`.
+- `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent` for now. A first-class `codex-visible` invisible adapter is in progress.
 - If no visible panel/port/session exists, the adapter fails safely and normal retry/backoff applies.
+
+To restrict or downgrade after install, edit `~/Library/LaunchAgents/com.gsepcore.ai-collab.plist` and reload, or re-run the installer with custom env vars:
+
+```bash
+# Example: only allow a single project, downgrade to notify-only
+AI_COLLAB_WAKEUP_ADAPTER=notify-only \
+AI_COLLAB_WAKEUP_CLI_PROJECTS=/path/to/project \
+bash install/install.sh
+```
 
 ---
 

@@ -32,7 +32,7 @@ DEFAULT_BACKOFF_SECONDS = (5, 25, 125)
 DEFAULT_EVENTS_FILE = Path.home() / ".ai-collab-wakeup-events.json"
 DEFAULT_STATE_FILE = Path.home() / ".ai-collab-wakeup-state.json"
 DEFAULT_LOG_FILE = Path("/tmp/ai-collab-wakeup.log")
-DEFAULT_ADAPTER = "notify-only"
+DEFAULT_ADAPTER = "visible"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
 DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude")
 DEFAULT_VISIBLE_TARGETS = ("codex", "opencode")
@@ -301,7 +301,10 @@ def path_matches(value: str, allowed: str) -> bool:
 def cli_project_allowed(project_path: str) -> bool:
     allowed = csv_env("AI_COLLAB_WAKEUP_CLI_PROJECTS")
     if not allowed:
-        return False
+        # Default: allow any project that has a .ai-collab/ directory. This is
+        # the user-explicit signal that they want collab on this project.
+        # Operators can still restrict with AI_COLLAB_WAKEUP_CLI_PROJECTS.
+        return True
     return any(path_matches(project_path, item) for item in allowed)
 
 
@@ -562,7 +565,11 @@ def run_opencode_visible_adapter(
                 project_ports.append(port)
                 continue
         other_ports.append(port)
-    ordered_ports = project_ports + other_ports
+    # Hardening (per Cody's review 2026-05-13): once any port reports a
+    # matching project, never fall back to non-matching ports — that path
+    # could re-introduce cross-project delivery. Only use other_ports when
+    # no port can be confirmed for the target project at all.
+    ordered_ports = project_ports if project_ports else other_ports
 
     for port in ordered_ports:
         session_id = discover_opencode_active_session(
