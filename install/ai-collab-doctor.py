@@ -144,6 +144,40 @@ def check_launchd() -> list[CheckResult]:
     return [warn("daemon", "com.gsepcore.ai-collab is not loaded")]
 
 
+def check_cli_projects_allowlist(home: Path) -> list[CheckResult]:
+    # If the operator left an explicit allowlist in the plist, surface it.
+    # A common debug-time mistake is to pin the daemon to a single project
+    # and forget to open it back up. Without this check the symptom only
+    # shows in other projects ("nothing happens when I write an inbox here").
+    plist_path = home / "Library/LaunchAgents/com.gsepcore.ai-collab.plist"
+    if not plist_path.exists():
+        return []
+    try:
+        text = plist_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    marker = "<key>AI_COLLAB_WAKEUP_CLI_PROJECTS</key>"
+    idx = text.find(marker)
+    if idx == -1:
+        return [ok("wakeup-cli-projects", "no allowlist set; daemon permits all projects with .ai-collab/")]
+    rest = text[idx + len(marker) :]
+    start = rest.find("<string>")
+    end = rest.find("</string>")
+    if start == -1 or end == -1 or end <= start:
+        return []
+    value = rest[start + len("<string>") : end].strip()
+    if not value or value == "*":
+        return [ok("wakeup-cli-projects", f"allowlist={value or '(empty)'} — all projects permitted")]
+    return [
+        warn(
+            "wakeup-cli-projects",
+            f"allowlist restricts daemon to: {value}. Other projects will NOT trigger "
+            "the wakeup adapter. To open globally, edit the plist EnvironmentVariables "
+            "and set AI_COLLAB_WAKEUP_CLI_PROJECTS to '*' or remove the key, then reload.",
+        )
+    ]
+
+
 def check_codex_visible_support() -> list[CheckResult]:
     # Codex visible wakeup (inside Antigravity) is blocked upstream — the
     # extension openai.chatgpt exposes no public API, no public socket on the
@@ -172,6 +206,7 @@ def run_checks(home: Path | None = None, include_launchd: bool = True) -> list[C
     results.extend(check_optional_json_queues(root))
     if include_launchd:
         results.extend(check_launchd())
+        results.extend(check_cli_projects_allowlist(root))
     results.extend(check_codex_visible_support())
     return results
 
