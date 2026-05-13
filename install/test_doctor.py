@@ -71,6 +71,13 @@ class TestDoctor(unittest.TestCase):
         failures = [result for result in results if result.level == "FAIL"]
         self.assertTrue(any(result.name == ".ai-collab-wakeup-events.json" for result in failures))
 
+    def test_codex_visible_check_is_warn(self):
+        results = _mod.run_checks(self.home, include_launchd=False)
+        codex_visible = [result for result in results if result.name == "codex-visible"]
+        self.assertEqual(len(codex_visible), 1)
+        self.assertEqual(codex_visible[0].level, "WARN")
+        self.assertIn("degraded", codex_visible[0].message)
+
     def test_strict_exit_code_fails_on_failure_only(self):
         results = [_mod.warn("daemon", "not loaded")]
         self.assertEqual(_mod.exit_code(results, strict=True), 0)

@@ -143,6 +143,26 @@ def check_launchd() -> list[CheckResult]:
     return [warn("daemon", "com.gsepcore.ai-collab is not loaded")]
 
 
+def check_codex_visible_support() -> list[CheckResult]:
+    # Codex visible wakeup (inside Antigravity) is blocked upstream — the
+    # extension openai.chatgpt exposes no public API, no public socket on the
+    # active app-server, and no proposed VS Code API surface reachable to
+    # third-party companion extensions. Three independent reviewers (Cody,
+    # Thomas, Claude) confirmed this on 2026-05-13. This check surfaces the
+    # limitation as a WARN so a fresh installer never silently expects the
+    # invisible wakeup to reach the visible Codex tab.
+    return [
+        warn(
+            "codex-visible",
+            "degraded: invisible wakeup of the visible Antigravity Codex tab "
+            "is blocked upstream (no public API on openai.chatgpt). Available "
+            "modes for Codex today: visible (degraded, best-effort via "
+            "antigravity-chat), codex-acp (parallel invisible worker), manual "
+            "(user types 'lee tu inbox'). OpenCode/Claude unaffected.",
+        )
+    ]
+
+
 def run_checks(home: Path | None = None, include_launchd: bool = True) -> list[CheckResult]:
     root = home or Path.home()
     results: list[CheckResult] = []
@@ -151,6 +171,7 @@ def run_checks(home: Path | None = None, include_launchd: bool = True) -> list[C
     results.extend(check_optional_json_queues(root))
     if include_launchd:
         results.extend(check_launchd())
+    results.extend(check_codex_visible_support())
     return results
 
 

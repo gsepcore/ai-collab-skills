@@ -431,8 +431,28 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 Behavior:
 
 - `@opencode` or `inbox-opencode.md` uses the OpenCode server's `POST /session/{id}/prompt_async` endpoint with `synthetic: true`. The synthetic prompt is processed by the model but is **not rendered in the chat history** — the user only sees the agent's response in its visible tab. This is the equivalent of Claude Code's `<task-notification>` primitive for OpenCode, validated end-to-end against the live TUI.
-- `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent` for now. A first-class `codex-visible` invisible adapter is in progress.
+- `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent`. **Codex visible-tab wakeup remains degraded** — see "Known limitations" below.
 - If no visible panel/port/session exists, the adapter fails safely and normal retry/backoff applies.
+
+### Known limitations — Codex visible-tab wakeup
+
+On 2026-05-13 three independent reviewers (Codex, OpenCode, Claude Code) confirmed that **waking the Codex panel already open inside Antigravity is blocked upstream**. The reasons:
+
+- `openai.chatgpt` extension exposes no public API (`exportsType: undefined`).
+- The active `codex app-server` is connected only by private stdio pipes inherited from Antigravity helper processes — no public socket.
+- VS Code proposed chat APIs require an explicit allowlist that third-party companion extensions cannot enter.
+- ACP is a viable protocol, but only when spawning a *new* Codex worker — it cannot attach to the existing visible session.
+- FD hijacking is technically possible but indistinguishable from malware; refused on security grounds.
+
+Until OpenAI or Antigravity publishes a supported injection surface, Codex has three real modes today:
+
+| Mode | What it does | Tradeoff |
+|---|---|---|
+| `visible` (default) | `antigravity chat --reuse-window` best-effort | May or may not reach the visible tab. Degraded. |
+| `codex-acp` (opt-in) | Spawns a fresh ACP Codex worker, 100% reliable execution | Runs invisibly, not in the user's open panel |
+| Manual (1 click) | User types "lee tu inbox" in the tab | 100% reliable + visible, requires one human click |
+
+OpenCode and Claude Code remain fully invisible-autonomous. Full investigation: `claude-acp-active-codex-analysis.md`, `codex-bridge-blocker.md`, `codex-acp-investigation.md`, `opencode-codex-bridge-investigation.md` (these live in the `.ai-collab/` of any project where the team has investigated — they document the dead-end analysis so future contributors do not retry the same paths).
 
 ### Codex ACP wakeup (opt-in)
 
