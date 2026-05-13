@@ -108,7 +108,8 @@ First-time setup on a new project, AND safe to re-run later when a new AI joins.
    ```
 
 6. Run `/collab write` immediately to log Claude's current context.
-7. Summarize the registered agents, their containers, their models, and the exact rules files created.
+7. Start `/collab monitor` automatically for this project in the current Claude Code session. Do not ask the user to run it manually. If a monitor for this project is already active, keep it and report "monitor already active." If the current Claude Code runtime cannot launch a persistent Monitor/Task, say that clearly and rely on the installed daemon + macOS/UserPromptSubmit notifications as the fallback.
+8. Summarize the registered agents, their containers, their models, the exact rules files created, and whether the live monitor is active.
 
 **Re-run behavior:** This command is idempotent. Re-running it after a new AI joins the project will detect the new AI, append its rules block to its rules file (idempotent — skipped if already there), and merge it into `TEAM.md`. Nothing existing is overwritten or removed.
 
@@ -332,7 +333,7 @@ done_at:
 
 ## Command: /collab monitor
 
-Start a zero-cost background monitor that watches `.ai-collab/` and notifies you the instant another AI writes or updates their log.
+Start or restart the current Claude Code session's live monitor for this project. `/collab setup` must start this automatically; this command exists for recovery, debugging, or manual restart after closing/reopening Claude Code.
 
 **How it works:** Runs a persistent bash script in the background. No tokens consumed while waiting. Only activates Claude when a real change is detected.
 

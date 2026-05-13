@@ -300,6 +300,7 @@ First-time setup for a project. Run this once per project.
 - Asks which AI tools you use and generates the rules snippets
 - **Seeds `inbox-all.md` with a welcome onboarding task** — first worker AI to open this project self-orients automatically (preserved unchanged if file already exists)
 - Writes Claude's first log entry
+- Starts Claude's live `/collab monitor` automatically for this project when the Claude Code runtime supports persistent Monitor/Task execution
 
 ```
 /collab setup
@@ -307,7 +308,7 @@ First-time setup for a project. Run this once per project.
 
 ### `/collab monitor`
 
-Start a zero-cost background monitor that notifies you the instant another AI updates their log. Runs as a persistent bash script — no tokens consumed while waiting.
+Restart the live monitor for the current Claude Code session. Normal users should not need to run this after `/collab setup`; setup starts it automatically. Use this command only after closing/reopening Claude Code, debugging, or intentionally stopping the monitor.
 
 ```
 /collab monitor
@@ -494,20 +495,22 @@ bash install/install.sh
 
 ---
 
-## Live monitoring (auto-notify, zero token cost)
+## Live monitoring (auto-started by setup)
 
-To have Claude automatically notify you the instant another AI updates their log, run:
+`/collab setup` starts a **persistent bash Monitor** for the current Claude Code session when the runtime supports persistent Monitor/Task execution. It watches `.ai-collab/` every 20 seconds in the background. It consumes zero tokens while waiting — Claude only activates when a real change is detected.
 
-```
-/collab monitor
-```
-
-This starts a **persistent bash Monitor** that watches `.ai-collab/` every 20 seconds in the background. It consumes zero tokens while waiting — Claude only activates when a real change is detected. You get notified immediately, without polling and without cost.
+The installed launchd daemon is always active after install and handles filesystem notifications, inbox wakeups, and worker activation. The Claude live monitor is the extra in-session layer that makes Claude speak up immediately while that Claude Code session is open.
 
 > **Why not use `/loop` with a timer?**
 > A cron or loop fires on a fixed interval and sends a prompt to Claude every N minutes regardless of whether anything changed. That consumes input tokens each tick — even for empty checks. The Monitor approach runs as a pure bash script and only wakes Claude on an actual file change.
 
-### Stop the monitor
+### Restart or stop the monitor
+
+To restart it manually:
+
+```
+/collab monitor
+```
 
 ```
 /collab status
