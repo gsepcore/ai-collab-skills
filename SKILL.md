@@ -74,17 +74,45 @@ One-line overview of every AI active on this project.
 
 ## Command: /collab setup
 
-First-time setup on a new project.
+First-time setup on a new project, AND safe to re-run later when a new AI joins. Idempotent.
 
 **Steps:**
-1. Find project root
-2. Create `{root}/.ai-collab/` if missing
-3. Check if `.ai-collab/` is in `.gitignore` → if not, append it (ask first if a `.gitignore` already exists)
-4. Copy `references/PROTOCOL.md` to `{root}/.ai-collab/PROTOCOL.md`
-5. Detect which AI tools the project uses:
-   - Ask: "Which other AI tools are working on this project? (Cursor / Windsurf / Copilot / OpenCode / Codex / Aider / Other)"
-   - For each confirmed tool, read `references/protocol.md` → extract the snippet for that tool → append to the relevant rules file (`.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`, etc.) or create it
-6. **Write `.ai-collab/TEAM.md`** — explicit team manifest so every AI knows who else is on the project from the first session, even before anyone has written a log. Use the slugs the user confirmed in step 5 plus `claude` (always the director). Format:
+
+1. Find project root.
+2. Create `{root}/.ai-collab/` if missing.
+3. Check if `.ai-collab/` is in `.gitignore` → if not, append it (ask first if a `.gitignore` already exists).
+4. Copy `references/PROTOCOL.md` to `{root}/.ai-collab/PROTOCOL.md`.
+5. **Auto-detect which AI tools are available on this machine and likely active on this project.** Do NOT ask the user up front — detect, then summarize what you did. Detection rules:
+
+   | AI slug | Detection signals (run any combination) |
+   |---|---|
+   | `cursor` | `which cursor` exits 0 OR `ls /Applications/Cursor.app` succeeds OR `.cursorrules` already exists in project root |
+   | `windsurf` | `which windsurf` exits 0 OR `ls /Applications/Windsurf.app` succeeds OR `.windsurfrules` exists |
+   | `copilot` | `.github/copilot-instructions.md` exists OR `ls ~/.vscode/extensions \| grep -i 'github.copilot'` succeeds |
+   | `opencode` | `which opencode` exits 0 OR `AGENTS.md` exists and mentions `opencode` OR `lsof -i -P -n \| grep -E "\.opencode.*LISTEN"` finds a running TUI |
+   | `codex` | `which codex` exits 0 OR `ls ~/.antigravity/extensions \| grep -i 'openai.chatgpt'` succeeds OR `AGENTS.md` mentions `codex` |
+   | `antigravity` | `which antigravity` exits 0 OR `ls /Applications/Antigravity.app` succeeds |
+   | `aider` | `which aider` exits 0 OR `.aider.conf.yml` exists |
+
+   For each detected AI:
+   - Choose the right rules file (`.cursorrules` for cursor, `.windsurfrules` for windsurf, `.github/copilot-instructions.md` for copilot, `AGENTS.md` for opencode/codex/aider/continue, `~/.config/{tool}/rules.md` if specific).
+   - **Idempotent append:** read the file if it exists; if it already contains the marker `## AI Collab Protocol` (the exact heading from `references/protocol.md` snippets), DO NOT re-append — leave it alone. If the marker is missing, append the snippet from `references/protocol.md` after a blank line, preserving any pre-existing content.
+   - If the file does not exist, create it with the snippet as the only content.
+
+6. **Report what was done in one line per AI:**
+
+   ```
+   ✓ cursor      → .cursorrules (created)
+   ✓ opencode    → AGENTS.md (appended; pre-existing content preserved)
+   ✓ codex       → AGENTS.md (already configured, no change)
+   ✓ antigravity → AGENTS.md (appended; same file as opencode/codex)
+   ✗ windsurf    → not detected on this machine, skipped
+   ```
+
+   Then ask once at the end: "Did I miss any AI? Tell me and I'll add it." — for cases where the user has a custom AI not in the detection table.
+
+7. **Write `.ai-collab/TEAM.md`** — explicit team manifest so every AI knows who else is on the project from the first session, even before anyone has written a log. Use the slugs auto-detected in step 5 plus `claude` (always the director). Format:
+
    ```
    ---
    project: {project-name}
@@ -98,14 +126,16 @@ First-time setup on a new project.
    - opencode
    - cursor
    - codex
-   - {other slugs the user confirmed}
+   - {other slugs detected}
 
    ## Notes
 
    {one-line free-form note about team composition, optional}
    ```
-   If `TEAM.md` already exists, do NOT overwrite — read it, list the current roster, and ask the user if they want to add or remove members.
-7. **Create onboarding welcome** — if `.ai-collab/inbox-all.md` does NOT already exist, write it with this content so the first worker AI to open this project self-orients without the user prompting:
+
+   If `TEAM.md` already exists: merge — keep existing slugs, add any newly detected slugs missing from the roster, never remove existing ones without asking.
+
+8. **Create onboarding welcome** — if `.ai-collab/inbox-all.md` does NOT already exist, write it with this content so the first worker AI to open this project self-orients without the user prompting:
    ```
    ---
    from: Claude Code (setup)
@@ -134,8 +164,42 @@ First-time setup on a new project.
    When done, change `status: unread` → `status: done` via atomic write.
    ```
    If `inbox-all.md` already exists, do NOT overwrite — tell the user it was preserved.
-8. Run `/collab write` immediately to log Claude's current context
-9. Summarize what was created — explicitly mention that the team manifest is ready, the onboarding inbox is ready, and that any worker AI opening this project will see the full roster + self-orient on first response
+9. Run `/collab write` immediately to log Claude's current context.
+10. Summarize what was created — explicitly mention which AIs were auto-detected and configured, that the team manifest is ready, that the onboarding inbox is ready, and that any worker AI opening this project will see the full roster + self-orient on first response.
+
+**Re-run behavior:** This command is idempotent. Re-running it after a new AI joins the project will detect the new AI, append its rules block to its rules file (idempotent — skipped if already there), and merge it into `TEAM.md`. Nothing existing is overwritten or removed.
+
+---
+
+## Command: /collab onboard [ai-slug]
+
+Add a single AI to the project after the initial setup. Use when:
+
+- An AI was not auto-detected by `/collab setup` (e.g. installed after, custom tool, slug not in the detection table).
+- You explicitly want to register an AI before opening it in this project.
+
+**Steps:**
+
+1. Find project root.
+2. Resolve the rules file for the given slug:
+   - `cursor` → `.cursorrules`
+   - `windsurf` → `.windsurfrules`
+   - `copilot` / `vscode` → `.github/copilot-instructions.md`
+   - `opencode`, `codex`, `aider`, `continue`, `antigravity`, `hermes` → `AGENTS.md`
+   - any other slug → `AGENTS.md` (universal fallback)
+3. Look up the snippet for that slug in `references/protocol.md`.
+4. If the rules file exists and already contains `## AI Collab Protocol`, do nothing and report "already configured."
+5. Otherwise append the snippet (preserve existing content above), or create the file with the snippet if it does not exist.
+6. Merge the slug into `.ai-collab/TEAM.md` roster if missing.
+7. Report: "Onboarded `{slug}` → `{rules-file}` (created/appended/already configured)."
+
+**Example:**
+
+```
+/collab onboard cursor
+→ Onboarded cursor → .cursorrules (created)
+→ Added to TEAM.md roster
+```
 
 ---
 
