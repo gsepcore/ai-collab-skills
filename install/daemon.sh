@@ -6,6 +6,7 @@ NOTIFICATIONS_FILE="$HOME/.ai-collab-notifications.json"
 LAST_CHECK_FILE="$HOME/.ai-collab-last-check"
 LOG_FILE="/tmp/ai-collab-daemon.log"
 WAKEUP_SCRIPT="$HOME/.claude/ai-collab-wakeup.py"
+AUTO_ONBOARD_SCRIPT="$HOME/.claude/ai-collab-auto-onboard.py"
 MAX_NOTIFICATIONS=50
 
 log() { echo "[AI-COLLAB] $(date -u +"%Y-%m-%dT%H:%M:%SZ") $*" >> "$LOG_FILE"; }
@@ -62,6 +63,12 @@ while true; do
       MOD=$(STAT_MOD "$f") || continue
 
       if [ "$MOD" -gt "$LAST_CHECK" ]; then
+        # Auto-onboard newly arriving agents from their first session log.
+        # The helper is idempotent and owns rules/TEAM.md merging.
+        if [ -x "$AUTO_ONBOARD_SCRIPT" ]; then
+          python3 "$AUTO_ONBOARD_SCRIPT" "$PROJECT" "$f" >>"$LOG_FILE" 2>>"$LOG_FILE" || log "Warning: auto-onboard failed for $BASENAME"
+        fi
+
         # Capture RAW values for the macOS notification (which uses AppleScript, NOT Python escapes)
         AI_RAW=$(grep "^ai:" "$f" 2>/dev/null | head -1 | cut -d' ' -f2- | tr -d '\r\n')
         WORKING_RAW=$(grep -A2 "^## Working On" "$f" 2>/dev/null | grep -v "^## " | head -1 | tr -d '\r\n' | cut -c1-120)

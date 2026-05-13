@@ -9,9 +9,10 @@
 #    3. Summary script           → ~/.claude/ai-collab-summary.py
 #    4. Notifications script     → ~/.claude/ai-collab-check-notifications.py
 #    5. Wakeup detector script   → ~/.claude/ai-collab-wakeup.py
-#    6. Doctor script            → ~/.claude/ai-collab-doctor.py
-#    7. Background daemon        → launchd (macOS) / cron (Linux)
-#    8. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#    6. Auto-onboard script      → ~/.claude/ai-collab-auto-onboard.py
+#    7. Doctor script            → ~/.claude/ai-collab-doctor.py
+#    8. Background daemon        → launchd (macOS) / cron (Linux)
+#    9. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -109,15 +110,18 @@ copy_or_download "install/daemon.sh"                          "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-summary.py"               "$CLAUDE_DIR/ai-collab-summary.py"
 copy_or_download "install/ai-collab-check-notifications.py"   "$CLAUDE_DIR/ai-collab-check-notifications.py"
 copy_or_download "install/ai-collab-wakeup.py"                "$CLAUDE_DIR/ai-collab-wakeup.py"
+copy_or_download "install/ai-collab-auto-onboard.py"          "$CLAUDE_DIR/ai-collab-auto-onboard.py"
 copy_or_download "install/ai-collab-doctor.py"                "$CLAUDE_DIR/ai-collab-doctor.py"
 chmod +x "$CLAUDE_DIR/ai-collab-daemon.sh"
 chmod +x "$CLAUDE_DIR/ai-collab-wakeup.py"
+chmod +x "$CLAUDE_DIR/ai-collab-auto-onboard.py"
 chmod +x "$CLAUDE_DIR/ai-collab-doctor.py"
 
 green "Daemon script        → $CLAUDE_DIR/ai-collab-daemon.sh"
 green "CONTEXT.md script    → $CLAUDE_DIR/ai-collab-summary.py"
 green "Notifications script → $CLAUDE_DIR/ai-collab-check-notifications.py"
 green "Wakeup detector      → $CLAUDE_DIR/ai-collab-wakeup.py"
+green "Auto-onboard script  → $CLAUDE_DIR/ai-collab-auto-onboard.py"
 green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"
 
 # ── 3. Start background daemon ───────────────────────────────────────────────
@@ -456,6 +460,7 @@ echo "    🪝 SessionStart hook   — auto-loads context on every Claude sessio
 echo "    🪝 UserPromptSubmit    — shows notifications before each message"
 echo "    🪝 Stop hook           — auto-generates CONTEXT.md after each response"
 echo "    📨 Wakeup detector     — detects unread inbox tasks"
+echo "    🧭 Auto-onboard        — registers new agents after their first log"
 echo "    🩺 Doctor script       — verifies install health"
 echo "    📚 /collab skill       — 8 commands available in Claude Code"
 echo ""
