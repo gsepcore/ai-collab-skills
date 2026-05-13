@@ -42,6 +42,19 @@ info()    { printf '  %s\n' "$*"; }
 ask()     { [[ -n "$YES" ]] && return 0; read -r -p "$1 [Y/n] " _ans; [[ "$_ans" =~ ^[Nn]$ ]] && return 1 || return 0; }
 need()    { command -v "$1" &>/dev/null || { echo "Error: $1 is required but not installed."; exit 1; }; }
 xml_escape() { printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g'; }
+sanitize_path() {
+  local raw="$1"
+  local clean="" part
+  IFS=':' read -r -a _path_parts <<< "$raw"
+  for part in "${_path_parts[@]}"; do
+    [[ -n "$part" && -d "$part" ]] || continue
+    case ":$clean:" in
+      *":$part:"*) : ;;
+      *) clean="${clean:+$clean:}$part" ;;
+    esac
+  done
+  printf '%s' "$clean"
+}
 
 # ── Detect source location ────────────────────────────────────────────────────
 # Works whether run from the cloned repo OR piped via curl
@@ -168,7 +181,7 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
   # /homebrew binaries (opencode, codex, claude) are unreachable to the daemon
   # by default. Capture the user's current PATH plus common toolchain dirs so
   # CLI and visible adapters can spawn those binaries when triggered.
-  AI_COLLAB_DAEMON_PATH="${AI_COLLAB_DAEMON_PATH:-$PATH}"
+  AI_COLLAB_DAEMON_PATH="$(sanitize_path "${AI_COLLAB_DAEMON_PATH:-$PATH}")"
   for extra in \
     "$HOME/.nvm/versions/node/$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)/bin" \
     "/opt/homebrew/bin" \
