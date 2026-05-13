@@ -47,6 +47,18 @@ Add to your Codex system prompt:
 
 Codex snippet.
 ```
+
+---
+
+## OpenCode / Minimax
+
+Add to your OpenCode system prompt:
+
+```
+## AI Collab Protocol
+
+OpenCode snippet.
+```
 """
 
 
@@ -85,7 +97,7 @@ class TestAutoOnboard(unittest.TestCase):
         self.assertEqual(result, {"action": "appended", "slug": "cursor"})
         self.assertIn("Cursor snippet", (self.root / ".cursorrules").read_text(encoding="utf-8"))
         team = (self.collab / "TEAM.md").read_text(encoding="utf-8")
-        self.assertIn("- claude (director)", team)
+        self.assertIn("- claude-code (director)", team)
         self.assertIn("- cursor", team)
 
     def test_known_codex_uses_agents_md(self):
@@ -94,7 +106,25 @@ class TestAutoOnboard(unittest.TestCase):
         result = process_log("demo", log, now=self.now)
 
         self.assertEqual(result["action"], "appended")
-        self.assertIn("Codex snippet", (self.root / "AGENTS.md").read_text(encoding="utf-8"))
+        agents = (self.root / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("AI-COLLAB-START agent=codex", agents)
+        self.assertIn("Codex snippet", agents)
+
+    def test_shared_agents_md_can_append_multiple_agents(self):
+        opencode = self.write_log("opencode-20260513-110000.md")
+        codex = self.write_log("codex-20260513-110000.md")
+
+        process_log("demo", opencode, now=self.now)
+        process_log("demo", codex, now=self.now)
+
+        agents = (self.root / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("AI-COLLAB-START agent=opencode", agents)
+        self.assertIn("AI-COLLAB-START agent=codex", agents)
+        self.assertIn("OpenCode snippet", agents)
+        self.assertIn("Codex snippet", agents)
+        opencode_rules = (self.root / ".opencode" / "rules" / "ai-collab.md").read_text(encoding="utf-8")
+        self.assertIn("AI-COLLAB-START agent=opencode", opencode_rules)
+        self.assertIn("OpenCode snippet", opencode_rules)
 
     def test_idempotent_reprocessing_does_not_duplicate(self):
         log = self.write_log("cursor-20260513-110000.md")

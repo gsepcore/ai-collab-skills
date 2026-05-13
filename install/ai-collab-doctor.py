@@ -23,6 +23,7 @@ REQUIRED_CLAUDE_FILES = (
     ".claude/ai-collab-check-notifications.py",
     ".claude/ai-collab-wakeup.py",
     ".claude/ai-collab-auto-onboard.py",
+    ".claude/ai-collab-project-setup.py",
     ".claude/ai-collab-doctor.py",
 )
 

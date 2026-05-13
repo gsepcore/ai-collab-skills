@@ -1,17 +1,19 @@
 ---
 name: collab
-description: Enable real-time collaboration between multiple AI assistants (Claude Code, Cursor, Windsurf, Copilot, OpenCode, Codex, Gemini, etc.) working on the same project simultaneously. Use this skill when the user is working with more than one AI tool at the same time and wants them to share context, read each other's work, or avoid conflicting changes. Triggers on /collab, "what has cursor been doing", "share my context with windsurf", "what is the other AI working on", "sync with cursor", "multi-AI", "collab", "read other AI conversation", "what did the other AI do", "lee la conversacion de la otra IA", "qué hizo cursor", "comparte contexto", "sincroniza con la otra IA".
+description: Enable real-time collaboration between multiple AI coding agents (Claude Code, OpenCode, Codex, Aider, Hermes, Cursor native chat, Windsurf native chat, Copilot Chat, etc.) working on the same project simultaneously, regardless of IDE/container or LLM model. Use this skill when the user works with more than one AI agent and wants them to share context, read each other's logs, receive tasks, and avoid conflicting changes. Triggers on /collab, "what has codex been doing", "share my context with opencode", "what is the other AI working on", "sync with cursor", "multi-AI", "collab", "read other AI conversation", "lee la conversacion de la otra IA", "qué hizo codex", "comparte contexto", "sincroniza con la otra IA".
 ---
 
 # AI Collab Skill
 
-Shared filesystem protocol so every AI assistant working on the same project can read and write context in real time. No external service, no API — just a `.ai-collab/` directory inside the project.
+Shared filesystem protocol so every AI coding agent working on the same project can read and write context in real time. No external service, no API — just a `.ai-collab/` directory inside the project.
 
 ---
 
 ## How it works
 
-Each AI writes a Markdown log to `{project-root}/.ai-collab/`. Any AI with filesystem access to the project can read those logs. Claude manages its own log via this skill. Other AIs (Cursor, Windsurf, Codex, OpenCode, etc.) write via rules snippets added to the project once — see `references/protocol.md`.
+Each AI writes a Markdown log to `{project-root}/.ai-collab/`. Any AI with filesystem access to the project can read those logs. Claude manages its own log via this skill. Other agents (OpenCode, Codex, Aider, Cursor native chat, etc.) write via agent-specific rules installed by `~/.claude/ai-collab-project-setup.py`.
+
+**Conceptual model:** this skill is agent-first. `agent` is the runtime doing work, `container` is the IDE/terminal where it is visible, and `model` is metadata about the LLM behind it. Do not treat IDEs and agents as the same thing.
 
 ---
 
@@ -22,7 +24,7 @@ Show everything other AIs have written for this project.
 **Steps:**
 1. Find project root: `git rev-parse --show-toplevel 2>/dev/null || pwd`
 2. Check `{root}/.ai-collab/` — if missing or empty, say so and suggest `/collab setup`
-3. For each `.md` file except `PROTOCOL.md` and your own `claude-*.md` (sorted newest first):
+3. For each `.md` file except `PROTOCOL.md` and your own `claude-code-*.md` / legacy `claude-*.md` (sorted newest first):
    - Parse frontmatter: `ai`, `session`, `updated`
    - Print header: `## [AI name] — updated [timestamp] — [🟢 active / 🟡 idle / 🔴 stale]`
      - 🟢 active = modified < 1h ago
@@ -45,9 +47,9 @@ Save your current conversation context to the shared directory.
 **Steps:**
 1. Find project root (same as above)
 2. Create `{root}/.ai-collab/` if it doesn't exist
-3. Find if a `claude-*.md` file from this session already exists (modified < 4h) → update it; otherwise create `claude-{YYYYMMDD-HHMMSS}.md`
+3. Find if a `claude-code-*.md` file from this session already exists (modified < 4h) → update it; otherwise create `claude-code-{YYYYMMDD-HHMMSS}.md`
 4. Write the log using the Standard Format (see below) — be specific and honest, not generic
-5. Confirm: `Saved → .ai-collab/claude-{session}.md`
+5. Confirm: `Saved → .ai-collab/claude-code-{session}.md`
 
 **What to write — be concrete:**
 - What the user is working on right now (specific task, not "general development")
@@ -79,93 +81,34 @@ First-time setup on a new project, AND safe to re-run later when a new AI joins.
 **Steps:**
 
 1. Find project root.
-2. Create `{root}/.ai-collab/` if missing.
-3. Check if `.ai-collab/` is in `.gitignore` → if not, append it (ask first if a `.gitignore` already exists).
-4. Copy `references/PROTOCOL.md` to `{root}/.ai-collab/PROTOCOL.md`.
-5. **Auto-detect which AI tools are available on this machine and likely active on this project.** Do NOT ask the user up front — detect, then summarize what you did. Detection rules:
+2. Run the deterministic onboarding helper:
 
-   | AI slug | Detection signals (run any combination) |
-   |---|---|
-   | `cursor` | `which cursor` exits 0 OR `ls /Applications/Cursor.app` succeeds OR `.cursorrules` already exists in project root |
-   | `windsurf` | `which windsurf` exits 0 OR `ls /Applications/Windsurf.app` succeeds OR `.windsurfrules` exists |
-   | `copilot` | `.github/copilot-instructions.md` exists OR `ls ~/.vscode/extensions \| grep -i 'github.copilot'` succeeds |
-   | `opencode` | `which opencode` exits 0 OR `AGENTS.md` exists and mentions `opencode` OR `lsof -i -P -n \| grep -E "\.opencode.*LISTEN"` finds a running TUI |
-   | `codex` | `which codex` exits 0 OR `ls ~/.antigravity/extensions \| grep -i 'openai.chatgpt'` succeeds OR `AGENTS.md` mentions `codex` |
-   | `antigravity` | `which antigravity` exits 0 OR `ls /Applications/Antigravity.app` succeeds |
-   | `aider` | `which aider` exits 0 OR `.aider.conf.yml` exists |
-
-   For each detected AI:
-   - Choose the right rules file (`.cursorrules` for cursor, `.windsurfrules` for windsurf, `.github/copilot-instructions.md` for copilot, `AGENTS.md` for opencode/codex/aider/continue, `~/.config/{tool}/rules.md` if specific).
-   - **Idempotent append:** read the file if it exists; if it already contains the marker `## AI Collab Protocol` (the exact heading from `references/protocol.md` snippets), DO NOT re-append — leave it alone. If the marker is missing, append the snippet from `references/protocol.md` after a blank line, preserving any pre-existing content.
-   - If the file does not exist, create it with the snippet as the only content.
-
-6. **Report what was done in one line per AI:**
-
-   ```
-   ✓ cursor      → .cursorrules (created)
-   ✓ opencode    → AGENTS.md (appended; pre-existing content preserved)
-   ✓ codex       → AGENTS.md (already configured, no change)
-   ✓ antigravity → AGENTS.md (appended; same file as opencode/codex)
-   ✗ windsurf    → not detected on this machine, skipped
+   ```bash
+   python3 ~/.claude/ai-collab-project-setup.py --root "$ROOT"
    ```
 
-   Then ask once at the end: "Did I miss any AI? Tell me and I'll add it." — for cases where the user has a custom AI not in the detection table.
-
-7. **Write `.ai-collab/TEAM.md`** — explicit team manifest so every AI knows who else is on the project from the first session, even before anyone has written a log. Use the slugs auto-detected in step 5 plus `claude` (always the director). Format:
+   If the helper is not installed, fall back to the bundled copy in this repo: `install/ai-collab-project-setup.py`.
+3. The helper must ask/record:
+   - IDE/container: `antigravity`, `cursor`, `vscode`, `windsurf`, `terminal`, `other`
+   - agents: `claude-code`, `opencode`, `codex`, `aider`, `hermes`, `cursor-native`, `windsurf-native`, `copilot-chat`, or custom
+   - LLM model for each agent, e.g. `openai/gpt-5.5`, `anthropic/claude-opus-4.7`, `minimax/m2.7`
+4. Verify these files exist after setup:
+   - `.ai-collab/PROTOCOL.md`
+   - `.ai-collab/TEAM.md`
+   - `.ai-collab/agents.json`
+   - `.ai-collab/inbox-all.md`
+   - the relevant agent rules files
+5. Report what was done in one line per agent:
 
    ```
-   ---
-   project: {project-name}
-   declared: {ISO timestamp}
-   declared_by: Claude Code (/collab setup)
-   ---
-
-   ## Roster
-
-   - claude (director)
-   - opencode
-   - cursor
-   - codex
-   - {other slugs detected}
-
-   ## Notes
-
-   {one-line free-form note about team composition, optional}
+   ✓ claude-code → CLAUDE.md (created/appended)
+   ✓ opencode    → .opencode/rules/ai-collab.md + AGENTS.md (created/appended)
+   ✓ codex       → AGENTS.md (created/appended)
+   ✓ cursor-native → .cursorrules (created/appended)
    ```
 
-   If `TEAM.md` already exists: merge — keep existing slugs, add any newly detected slugs missing from the roster, never remove existing ones without asking.
-
-8. **Create onboarding welcome** — if `.ai-collab/inbox-all.md` does NOT already exist, write it with this content so the first worker AI to open this project self-orients without the user prompting:
-   ```
-   ---
-   from: Claude Code (setup)
-   to: all
-   priority: normal
-   updated: {ISO timestamp}
-   status: unread
-   ---
-
-   ## Welcome to the multi-AI team for this project
-
-   You are joining a shared collaboration protocol. The orchestrating director
-   is Claude Code. Other AIs may already be active on this codebase.
-
-   ### First-response checklist
-   1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise `.ai-collab/PROTOCOL.md`.
-   2. Check your specific inbox: `.ai-collab/inbox-{your-slug}.md` (slug = lowercase tool name).
-   3. Save your first session log at `.ai-collab/{your-slug}-{YYYYMMDD-HHMMSS}.md`.
-   4. Tell the user what role you are taking and what you read from existing logs.
-
-   ### Project context
-   - Project: {project-name}
-   - Director: Claude Code
-   - Coordination: filesystem-based via `.ai-collab/`
-
-   When done, change `status: unread` → `status: done` via atomic write.
-   ```
-   If `inbox-all.md` already exists, do NOT overwrite — tell the user it was preserved.
-9. Run `/collab write` immediately to log Claude's current context.
-10. Summarize what was created — explicitly mention which AIs were auto-detected and configured, that the team manifest is ready, that the onboarding inbox is ready, and that any worker AI opening this project will see the full roster + self-orient on first response.
+6. Run `/collab write` immediately to log Claude's current context.
+7. Summarize the registered agents, their containers, their models, and the exact rules files created.
 
 **Re-run behavior:** This command is idempotent. Re-running it after a new AI joins the project will detect the new AI, append its rules block to its rules file (idempotent — skipped if already there), and merge it into `TEAM.md`. Nothing existing is overwritten or removed.
 
@@ -181,23 +124,25 @@ Add a single AI to the project after the initial setup. Use when:
 **Steps:**
 
 1. Find project root.
-2. Resolve the rules file for the given slug:
-   - `cursor` → `.cursorrules`
-   - `windsurf` → `.windsurfrules`
-   - `copilot` / `vscode` → `.github/copilot-instructions.md`
-   - `opencode`, `codex`, `aider`, `continue`, `antigravity`, `hermes` → `AGENTS.md`
-   - any other slug → `AGENTS.md` (universal fallback)
-3. Look up the snippet for that slug in `references/protocol.md`.
-4. If the rules file exists and already contains `## AI Collab Protocol`, do nothing and report "already configured."
-5. Otherwise append the snippet (preserve existing content above), or create the file with the snippet if it does not exist.
-6. Merge the slug into `.ai-collab/TEAM.md` roster if missing.
-7. Report: "Onboarded `{slug}` → `{rules-file}` (created/appended/already configured)."
+2. Normalize legacy aliases:
+   - `cursor` → `cursor-native`
+   - `windsurf` → `windsurf-native`
+   - `copilot` / `vscode` → `copilot-chat`
+   - `antigravity` → `codex` unless the user explicitly means a native Antigravity agent
+3. Ask for container and model if they are unknown.
+4. Run:
+
+   ```bash
+   python3 ~/.claude/ai-collab-project-setup.py --root "$ROOT" --agents "$SLUG" --container "$CONTAINER" --models "$SLUG=$MODEL"
+   ```
+
+5. Report: "Onboarded `{slug}` with container `{container}` and model `{model}`."
 
 **Example:**
 
 ```
-/collab onboard cursor
-→ Onboarded cursor → .cursorrules (created)
+/collab onboard opencode
+→ Onboarded opencode → .opencode/rules/ai-collab.md + AGENTS.md (created)
 → Added to TEAM.md roster
 ```
 
@@ -221,6 +166,9 @@ Every AI writes logs in this exact format. Consistency makes logs machine-readab
 ```
 ---
 ai: [Tool name and model, e.g. "Claude Code (claude-sonnet-4-6)"]
+agent: [agent runtime slug, e.g. claude-code, opencode, codex]
+container: [IDE/terminal, e.g. antigravity, cursor, vscode, terminal]
+model: [LLM id, e.g. openai/gpt-5.5, minimax/m2.7]
 session: [YYYYMMDD-HHMMSS]
 project: [project root directory name]
 updated: [ISO 8601 timestamp]
@@ -401,7 +349,7 @@ while true; do
   for f in "$COLLAB_DIR"/*.md; do
     [ -f "$f" ] || continue
     BASENAME=$(basename "$f")
-    [[ "$BASENAME" == claude-* ]] && continue
+    [[ "$BASENAME" == claude-code-* || "$BASENAME" == claude-* ]] && continue
     [[ "$BASENAME" == PROTOCOL.md ]] && continue
     [[ "$BASENAME" == CONTEXT.md ]] && continue
     [[ "$BASENAME" == TEAM.md ]] && continue

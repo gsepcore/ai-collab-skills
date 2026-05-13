@@ -354,6 +354,12 @@ class TestTeamDetection(unittest.TestCase):
         self.assertIn("claude", team)
         self.assertEqual(team["claude"]["source"], "director (skill)")
 
+    def test_claude_code_log_lists_director(self):
+        self._log("claude-code-20260512-080000.md")
+        team, _ = detect_team(self.root, self.collab)
+        self.assertIn("claude-code", team)
+        self.assertEqual(team["claude-code"]["source"], "director (skill)")
+
     def test_team_md_manifest_takes_precedence(self):
         # TEAM.md says: claude, opencode, cursor
         (self.collab / "TEAM.md").write_text(
@@ -392,6 +398,12 @@ class TestTeamDetection(unittest.TestCase):
         mtimes = find_log_mtimes(self.collab)
         self.assertIn("opencode", mtimes)
         self.assertNotIn("inbox", mtimes)
+
+    def test_find_log_mtimes_preserves_hyphenated_agent_slugs(self):
+        self._log("claude-code-20260512-080000.md")
+        mtimes = find_log_mtimes(self.collab)
+        self.assertIn("claude-code", mtimes)
+        self.assertNotIn("claude", mtimes)
 
     def test_render_includes_no_logs_yet_for_unwritten_ai(self):
         self._touch(".cursorrules")

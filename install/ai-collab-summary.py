@@ -29,10 +29,12 @@ UNIQUE_RULES_FILES = [
 # AIs that share AGENTS.md (ambiguous — can't tell which one(s) just from the file)
 AGENTS_MD_COMPATIBLE = ["opencode", "codex", "aider", "continue", "antigravity", "hermes"]
 
-# Special-case slugs that don't need rules files (the director itself)
-DIRECTOR_SLUG = "claude"
+# Special-case slugs that don't need rules files (the director itself).
+# `claude` is kept as a legacy alias; new logs should use `claude-code`.
+DIRECTOR_SLUGS = {"claude", "claude-code"}
 
 SKIP_LOG_FILES = {"PROTOCOL.md", "CONTEXT.md", "TEAM.md"}
+LOG_RE = re.compile(r"^([a-z][a-z0-9_-]*)-\d{8}-\d{6}\.md$")
 
 
 def get_project_root():
@@ -107,12 +109,16 @@ def find_log_mtimes(collab_dir):
     for log in collab_dir.glob("*.md"):
         if log.name in SKIP_LOG_FILES or log.name.startswith("inbox-"):
             continue
-        # Split on FIRST dash; slug is everything before it
-        # e.g. "opencode-20260511-140000.md" → slug = "opencode"
-        stem = log.stem  # filename without .md
-        if "-" not in stem:
+        match = LOG_RE.match(log.name)
+        if match:
+            slug = match.group(1).lower()
+        elif "-" in log.stem:
+            # Backward compatibility for old test fixtures such as
+            # opencode-fresh.md. Timestamped logs should use LOG_RE above so
+            # hyphenated agent slugs like claude-code are preserved.
+            slug = log.stem.split("-", 1)[0].lower()
+        else:
             continue
-        slug = stem.split("-", 1)[0].lower()
         try:
             mtime = log.stat().st_mtime
         except OSError:
@@ -153,7 +159,7 @@ def detect_team(root, collab_dir):
 
     # 3. Heuristic: any slug with logs (catches AGENTS.md-sharing AIs unambiguously)
     for slug, mtime in log_mtimes.items():
-        if slug == DIRECTOR_SLUG:
+        if slug in DIRECTOR_SLUGS:
             team[slug] = {"source": "director (skill)", "last_log_mtime": mtime}
             continue
         if slug not in team:

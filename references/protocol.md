@@ -1,6 +1,20 @@
-# AI Collab Protocol — Setup for Other AI Tools
+# AI Collab Protocol — Setup for Other AI Agents
 
-Add these snippets to your project once. Each AI will then automatically participate in the shared collab protocol.
+Add these snippets to your project once. Each AI agent will then automatically participate in the shared collab protocol.
+
+**Agent-first identity model:**
+
+- `agent` is the runtime doing work: `claude-code`, `opencode`, `codex`, `aider`, `hermes`, `cursor-native`, `windsurf-native`, `copilot-chat`, or a custom slug.
+- `container` is where the agent is visible: `antigravity`, `cursor`, `vscode`, `windsurf`, `terminal`, etc.
+- `model` is the LLM behind the agent: `openai/gpt-5.5`, `minimax/m2.7`, `anthropic/claude-opus-4.7`, etc.
+
+Prefer the project onboarding helper instead of manually copying snippets:
+
+```bash
+python3 ~/.claude/ai-collab-project-setup.py
+```
+
+It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/inbox-all.md`, and the correct rules files for each selected agent.
 
 **Three rules that make this work:**
 1. Every AI saves a log after EVERY response — automatically, no prompting needed.
@@ -13,11 +27,19 @@ Add these snippets to your project once. Each AI will then automatically partici
 ## How it works
 
 All AIs write Markdown session logs to `{project-root}/.ai-collab/`.
-- File naming: `{ai-name}-{YYYYMMDD-HHMMSS}.md`
+- File naming: `{agent-slug}-{YYYYMMDD-HHMMSS}.md`
 - Format: YAML frontmatter + standard sections (see SKILL.md for full spec)
 - Any AI with filesystem access can read any log
 - The daemon (if installed) detects new/updated logs within 15 seconds and notifies the user
 - The daemon also scans `inbox-*.md` and `thread-*.md`: unread inboxes target an agent mailbox, while `@slug` mentions in threads target that agent's monitor/adapter path.
+
+Every log should include these frontmatter fields when the agent supports them:
+
+```yaml
+agent: opencode
+container: antigravity
+model: minimax/m2.7
+```
 
 ---
 

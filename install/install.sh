@@ -10,9 +10,10 @@
 #    4. Notifications script     → ~/.claude/ai-collab-check-notifications.py
 #    5. Wakeup detector script   → ~/.claude/ai-collab-wakeup.py
 #    6. Auto-onboard script      → ~/.claude/ai-collab-auto-onboard.py
-#    7. Doctor script            → ~/.claude/ai-collab-doctor.py
-#    8. Background daemon        → launchd (macOS) / cron (Linux)
-#    9. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#    7. Project onboarding       → ~/.claude/ai-collab-project-setup.py
+#    8. Doctor script            → ~/.claude/ai-collab-doctor.py
+#    9. Background daemon        → launchd (macOS) / cron (Linux)
+#   10. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -111,10 +112,12 @@ copy_or_download "install/ai-collab-summary.py"               "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-check-notifications.py"   "$CLAUDE_DIR/ai-collab-check-notifications.py"
 copy_or_download "install/ai-collab-wakeup.py"                "$CLAUDE_DIR/ai-collab-wakeup.py"
 copy_or_download "install/ai-collab-auto-onboard.py"          "$CLAUDE_DIR/ai-collab-auto-onboard.py"
+copy_or_download "install/ai-collab-project-setup.py"         "$CLAUDE_DIR/ai-collab-project-setup.py"
 copy_or_download "install/ai-collab-doctor.py"                "$CLAUDE_DIR/ai-collab-doctor.py"
 chmod +x "$CLAUDE_DIR/ai-collab-daemon.sh"
 chmod +x "$CLAUDE_DIR/ai-collab-wakeup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-auto-onboard.py"
+chmod +x "$CLAUDE_DIR/ai-collab-project-setup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-doctor.py"
 
 green "Daemon script        → $CLAUDE_DIR/ai-collab-daemon.sh"
@@ -122,6 +125,7 @@ green "CONTEXT.md script    → $CLAUDE_DIR/ai-collab-summary.py"
 green "Notifications script → $CLAUDE_DIR/ai-collab-check-notifications.py"
 green "Wakeup detector      → $CLAUDE_DIR/ai-collab-wakeup.py"
 green "Auto-onboard script  → $CLAUDE_DIR/ai-collab-auto-onboard.py"
+green "Project onboarding   → $CLAUDE_DIR/ai-collab-project-setup.py"
 green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"
 
 # ── 3. Start background daemon ───────────────────────────────────────────────
@@ -357,98 +361,39 @@ green "Stop hook          → auto-generates CONTEXT.md after every response"
 
 # ── 5. Initialize .ai-collab/ in current project (optional) ─────────────────
 echo ""
-bold "Step 5/5 — Project setup (optional)"
+bold "Step 5/5 — Project onboarding (optional)"
 
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 
 if [[ -n "$PROJECT_ROOT" ]]; then
   info "Detected project: $PROJECT_ROOT"
-  COLLAB_DIR="$PROJECT_ROOT/.ai-collab"
-
-  if ask "Set up .ai-collab/ in this project now?"; then
-    mkdir -p "$COLLAB_DIR"
-
-    # Copy PROTOCOL.md
-    if [[ $USE_LOCAL -eq 1 ]]; then
-      cp "$REPO_DIR/references/protocol.md" "$COLLAB_DIR/PROTOCOL.md"
+  if ask "Run agent-first onboarding for this project now?"; then
+    if [[ -n "$YES" ]]; then
+      python3 "$CLAUDE_DIR/ai-collab-project-setup.py" --root "$PROJECT_ROOT" --non-interactive
     else
-      download "references/protocol.md" "$COLLAB_DIR/PROTOCOL.md"
+      python3 "$CLAUDE_DIR/ai-collab-project-setup.py" --root "$PROJECT_ROOT"
     fi
-
-    # Add to .gitignore
-    GITIGNORE="$PROJECT_ROOT/.gitignore"
-    if [[ -f "$GITIGNORE" ]]; then
-      if ! grep -q "^\.ai-collab" "$GITIGNORE"; then
-        echo ".ai-collab/" >> "$GITIGNORE"
-        green "Added .ai-collab/ to .gitignore"
-      else
-        info ".ai-collab/ already in .gitignore"
-      fi
-    else
-      echo ".ai-collab/" > "$GITIGNORE"
-      green "Created .gitignore with .ai-collab/"
-    fi
-
-    # Onboarding welcome — give the first AI that opens this project
-    # a concrete unread task so the protocol kicks in automatically.
-    WELCOME_FILE="$COLLAB_DIR/inbox-all.md"
-    if [[ ! -f "$WELCOME_FILE" ]]; then
-      PROJECT_NAME=$(basename "$PROJECT_ROOT")
-      NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-      cat > "$WELCOME_FILE" << INBOX
----
-from: Claude Code (setup)
-to: all
-priority: normal
-updated: $NOW
-status: unread
----
-
-## Welcome to the multi-AI team for this project
-
-You are joining a shared collaboration protocol. The orchestrating director
-is Claude Code. Other AIs may already be active on this codebase.
-
-### First-response checklist
-1. Read \`.ai-collab/CONTEXT.md\` if it exists; otherwise read \`.ai-collab/PROTOCOL.md\`.
-2. Check your specific inbox: \`.ai-collab/inbox-{your-slug}.md\` (slug = lowercase tool name, e.g. \`cursor\`, \`opencode\`, \`codex\`, \`windsurf\`, \`copilot\`).
-3. Save your first session log at \`.ai-collab/{your-slug}-{YYYYMMDD-HHMMSS}.md\` using the standard frontmatter + sections format (see PROTOCOL.md).
-4. Tell the user what role you are taking in the team and what you read from existing logs.
-
-### Project context
-- Project: $PROJECT_NAME
-- Project root: $PROJECT_ROOT
-- Director: Claude Code
-- Coordination: filesystem-based via \`.ai-collab/\`
-
-When you have completed the onboarding, change \`status: unread\` → \`status: done\` via atomic write (temp file + rename).
-INBOX
-      green "Onboarding inbox-all.md created — first AI to open this project will self-orient"
-    else
-      info "inbox-all.md already present — onboarding message not overwritten"
-    fi
-
-    green ".ai-collab/ ready → $COLLAB_DIR/"
+    green "Project onboarded → $PROJECT_ROOT/.ai-collab/"
   fi
 else
   info "Not in a git repo — skipping project setup."
   info "Run 'git init' and then '/collab setup' inside Claude Code to set up a project."
 fi
 
-# ── Ask which AI tools to add snippets for ──────────────────────────────────
+# ── Agent setup note ────────────────────────────────────────────────────────
 echo ""
-bold "AI Tool Snippets"
-info "Add collab protocol snippets to your other AI tools:"
+bold "Agent Runtime Setup"
+info "AI Collab is agent-first: choose agents, then record their IDE/container and LLM model."
 echo ""
-info "  Cursor    → add to .cursorrules"
-info "  Windsurf  → add to .windsurfrules"
-info "  VS Code   → add to .github/copilot-instructions.md"
-info "  OpenCode  → add to system prompt"
-info "  Codex     → add to system prompt"
-info "  Other     → see SKILL.md or run /collab setup inside Claude Code"
+info "  Claude Code      → CLAUDE.md"
+info "  OpenCode         → .opencode/rules/ai-collab.md + AGENTS.md"
+info "  Codex            → AGENTS.md"
+info "  Cursor native    → .cursorrules"
+info "  Windsurf native  → .windsurfrules"
+info "  Copilot Chat     → .github/copilot-instructions.md"
 echo ""
-info "The snippets are in: $SKILL_DIR/references/protocol.md"
-info "Or run '/collab setup' in Claude Code — it will do this interactively."
+info "Run this any time inside a project:"
+info "  python3 ~/.claude/ai-collab-project-setup.py"
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
@@ -461,6 +406,7 @@ echo "    🪝 UserPromptSubmit    — shows notifications before each message"
 echo "    🪝 Stop hook           — auto-generates CONTEXT.md after each response"
 echo "    📨 Wakeup detector     — detects unread inbox tasks"
 echo "    🧭 Auto-onboard        — registers new agents after their first log"
+echo "    🧩 Project onboarding  — registers agents, IDE/container, model, rules"
 echo "    🩺 Doctor script       — verifies install health"
 echo "    📚 /collab skill       — 8 commands available in Claude Code"
 echo ""

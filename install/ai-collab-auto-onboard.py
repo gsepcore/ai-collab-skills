@@ -18,17 +18,22 @@ from pathlib import Path
 from typing import Any
 
 
-MARKER = "## AI Collab Protocol"
+START_MARKER = "<!-- AI-COLLAB-START agent={slug} -->"
+END_MARKER = "<!-- AI-COLLAB-END agent={slug} -->"
 STATE_FILE = ".auto-onboard-state.json"
 KNOWN_SLUGS = {
-    "cursor": {"heading": "Cursor", "rules": ".cursorrules"},
-    "windsurf": {"heading": "Windsurf", "rules": ".windsurfrules"},
-    "copilot": {"heading": "GitHub Copilot", "rules": ".github/copilot-instructions.md"},
-    "opencode": {"heading": "OpenCode / Minimax", "rules": "AGENTS.md"},
-    "codex": {"heading": "Codex / GPT", "rules": "AGENTS.md"},
-    "antigravity": {"heading": "Antigravity IDE", "rules": "AGENTS.md"},
-    "hermes": {"heading": "Hermes", "rules": "AGENTS.md"},
-    "aider": {"heading": "Generic / Any AI", "rules": "AGENTS.md"},
+    "cursor": {"heading": "Cursor", "rules": [".cursorrules"]},
+    "windsurf": {"heading": "Windsurf", "rules": [".windsurfrules"]},
+    "copilot": {"heading": "GitHub Copilot", "rules": [".github/copilot-instructions.md"]},
+    "cursor-native": {"heading": "Cursor", "rules": [".cursorrules"]},
+    "windsurf-native": {"heading": "Windsurf", "rules": [".windsurfrules"]},
+    "copilot-chat": {"heading": "GitHub Copilot", "rules": [".github/copilot-instructions.md"]},
+    "claude-code": {"heading": "Generic / Any AI", "rules": ["CLAUDE.md"]},
+    "opencode": {"heading": "OpenCode / Minimax", "rules": [".opencode/rules/ai-collab.md", "AGENTS.md"]},
+    "codex": {"heading": "Codex / GPT", "rules": ["AGENTS.md"]},
+    "antigravity": {"heading": "Codex / GPT", "rules": ["AGENTS.md"]},
+    "hermes": {"heading": "Hermes", "rules": ["AGENTS.md"]},
+    "aider": {"heading": "Generic / Any AI", "rules": ["AGENTS.md"]},
 }
 SKIP_FILES = {"PROTOCOL.md", "CONTEXT.md", "TEAM.md"}
 LOG_RE = re.compile(r"^([a-z][a-z0-9_-]*)-\d{8}-\d{6}\.md$")
@@ -97,20 +102,26 @@ def extract_snippet(protocol: str, heading: str) -> str | None:
 
 def append_rules_if_missing(root: Path, slug: str) -> str:
     config = KNOWN_SLUGS[slug]
-    rules_path = root / config["rules"]
-    existing = rules_path.read_text(encoding="utf-8") if rules_path.exists() else ""
-    if MARKER in existing:
-        return "noop"
-
     protocol = protocol_path().read_text(encoding="utf-8")
     snippet = extract_snippet(protocol, config["heading"])
     if not snippet:
         raise RuntimeError(f"missing protocol snippet for {slug}")
-
-    prefix = "\n\n" if existing and not existing.endswith("\n\n") else ""
-    content = existing + prefix + snippet.rstrip() + "\n"
-    atomic_write(rules_path, content)
-    return "appended"
+    wrapped = (
+        f"{START_MARKER.format(slug=slug)}\n"
+        f"{snippet.rstrip()}\n"
+        f"{END_MARKER.format(slug=slug)}"
+    )
+    changed = False
+    for rel in config["rules"]:
+        rules_path = root / rel
+        existing = rules_path.read_text(encoding="utf-8") if rules_path.exists() else ""
+        if START_MARKER.format(slug=slug) in existing:
+            continue
+        prefix = "\n\n" if existing and not existing.endswith("\n\n") else ""
+        content = existing + prefix + wrapped.rstrip() + "\n"
+        atomic_write(rules_path, content)
+        changed = True
+    return "appended" if changed else "noop"
 
 
 def parse_team_slugs(text: str) -> set[str]:
@@ -146,7 +157,7 @@ def merge_team_member(collab_dir: Path, project: str, slug: str, now: datetime) 
                     "",
                     "## Roster",
                     "",
-                    "- claude (director)",
+                    "- claude-code (director)",
                     f"- {slug}",
                     "",
                     "## Notes",
