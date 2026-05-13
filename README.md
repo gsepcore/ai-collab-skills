@@ -409,7 +409,7 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Set to `1` (in the daemon's launchd plist `EnvironmentVariables`) to fire macOS Notification Center banners when other AIs complete tasks. Persistent layer that works even when Claude Code is closed — see [macOS notifications](#macos-notifications-survives-claude-close-mac-sleep-and-restart). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | macOS sound name (e.g. `Tink`, `Glass`, `Pop`, `Hero`) to play with each banner. Only effective when `AI_COLLAB_OS_NOTIFY=1`. Leave unset for silent banners. |
 | `AI_COLLAB_DOCTOR_STRICT` | _(off)_ | Set to `1` so `ai-collab-doctor.py` exits nonzero when required install files/settings are broken. Warnings remain non-fatal. |
-| `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Wakeup adapter mode. Default `visible` delivers synthetic prompts to active Antigravity/OpenCode panels. Other options: `opencode-visible`, `antigravity-chat`, `cli` for headless execution, or `notify-only` for safe event logging only. |
+| `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Wakeup adapter mode. Default `visible` delivers synthetic prompts to active Antigravity/OpenCode panels. Other options: `opencode-visible`, `antigravity-chat`, `codex-acp` for an invisible Codex ACP worker, `cli` for headless execution, or `notify-only` for safe event logging only. |
 | `AI_COLLAB_WAKEUP_MAX_ATTEMPTS` | `3` | Maximum wake attempts before an unread inbox auto-transitions to `failed`. |
 | `AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT` | `120` | Seconds before a CLI adapter run is considered failed. |
 | `AI_COLLAB_WAKEUP_CLI_PROJECTS` | _(empty = all projects)_ | Optional allowlist for executable adapters. By default, any project with a `.ai-collab/` directory is allowed — the user opted in by setting it up there. Set this only if you want to restrict the daemon to specific projects: comma-separated basenames or absolute paths. |
@@ -419,6 +419,7 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_CODEX_BIN` | _(auto-detected)_ | Override the `codex` executable path used by the CLI adapter. |
 | `AI_COLLAB_OPENCODE_BIN` | _(auto-detected)_ | Override the `opencode` executable path used by the CLI adapter. |
 | `AI_COLLAB_CLAUDE_BIN` | _(auto-detected)_ | Override the `claude` executable path used by the CLI adapter. |
+| `AI_COLLAB_CODEX_ACP_COMMAND` | `npx -y @zed-industries/codex-acp@latest` | Override the command used by the opt-in `codex-acp` adapter. |
 | `AI_COLLAB_OPENCODE_PORTS` | _(auto-detected)_ | Optional comma-separated OpenCode TUI ports for `opencode-visible`. Normally auto-detected from running `opencode --port` processes. |
 | `AI_COLLAB_ANTIGRAVITY_BIN` | _(auto-detected)_ | Override the `antigravity` executable used by `antigravity-chat`. |
 | `AI_COLLAB_ANTIGRAVITY_MODE` | `agent` | Mode passed to `antigravity chat --mode` for visible Codex/Antigravity wakeups. |
@@ -432,6 +433,12 @@ Behavior:
 - `@opencode` or `inbox-opencode.md` uses the OpenCode server's `POST /session/{id}/prompt_async` endpoint with `synthetic: true`. The synthetic prompt is processed by the model but is **not rendered in the chat history** — the user only sees the agent's response in its visible tab. This is the equivalent of Claude Code's `<task-notification>` primitive for OpenCode, validated end-to-end against the live TUI.
 - `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent` for now. A first-class `codex-visible` invisible adapter is in progress.
 - If no visible panel/port/session exists, the adapter fails safely and normal retry/backoff applies.
+
+### Codex ACP wakeup (opt-in)
+
+`AI_COLLAB_WAKEUP_ADAPTER=codex-acp` starts a fresh invisible Codex ACP worker through `@zed-industries/codex-acp`, opens an ACP session for the project, and sends the inbox task with `session/prompt`.
+
+This is different from the visible Antigravity Codex tab: ACP gives the daemon a real JSON-RPC/stdio control path for a new Codex worker, but it does not attach to an already-open Codex panel inside Antigravity. Use it when you prefer autonomous invisible execution over visible-tab continuity.
 
 To restrict or downgrade after install, edit `~/Library/LaunchAgents/com.gsepcore.ai-collab.plist` and reload, or re-run the installer with custom env vars:
 

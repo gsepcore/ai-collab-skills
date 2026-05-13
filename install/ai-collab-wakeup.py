@@ -10,11 +10,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import select
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import hashlib
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -693,6 +696,170 @@ def run_antigravity_chat_adapter(
     }
 
 
+def codex_acp_command() -> list[str]:
+    configured = os.environ.get("AI_COLLAB_CODEX_ACP_COMMAND")
+    if configured:
+        return shlex.split(configured)
+
+    exe = executable_for("codex-acp")
+    if exe:
+        return [exe]
+
+    npx = executable_for("npx") or "npx"
+    return [npx, "-y", "@zed-industries/codex-acp@latest"]
+
+
+def build_codex_acp_messages(input_data: dict[str, str]) -> list[dict[str, Any]]:
+    prompt = (
+        f"{input_data['synthetic_prompt']}\n\n"
+        f"Project path: {input_data['project_path']}\n"
+        f"Inbox path: {input_data['inbox_path']}\n"
+        f"Task id: {input_data['task_id']}\n"
+    )
+    return [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": 1,
+                "clientInfo": {"name": "ai-collab-wakeup", "version": "0.1.0"},
+                "clientCapabilities": {
+                    "fs": {"readTextFile": False, "writeTextFile": False},
+                    "terminal": False,
+                },
+            },
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/new",
+            "params": {"cwd": input_data["project_path"], "mcpServers": []},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": "$SESSION_ID",
+                "prompt": [{"type": "text", "text": prompt}],
+            },
+        },
+    ]
+
+
+def send_acp_message(process, message: dict[str, Any]) -> None:
+    process.stdin.write(json.dumps(message) + "\n")
+    process.stdin.flush()
+
+
+def read_acp_response(process, response_id: int, deadline: float) -> dict[str, Any]:
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"codex-acp exited before response id={response_id}")
+
+        remaining = max(0.05, min(0.25, deadline - time.monotonic()))
+        ready, _write, _err = select.select([process.stdout], [], [], remaining)
+        if not ready:
+            continue
+
+        line = process.stdout.readline()
+        if not line:
+            continue
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if message.get("id") != response_id:
+            continue
+        if "error" in message:
+            raise RuntimeError(json.dumps(message["error"], sort_keys=True))
+        return message.get("result", {})
+
+    raise TimeoutError(f"timed out waiting for codex-acp response id={response_id}")
+
+
+def run_codex_acp_adapter(
+    input_data: dict[str, str],
+    *,
+    timeout: int,
+    popen=subprocess.Popen,
+) -> dict[str, str]:
+    if truthy_env("AI_COLLAB_WAKEUP_DRY_RUN"):
+        return {
+            "status": "degraded",
+            "message": "codex-acp dry-run: ACP agent not started",
+            "adapter_name": "codex-acp-dry-run",
+        }
+    if not cli_project_allowed(input_data["project_path"]):
+        return {
+            "status": "degraded",
+            "message": "codex-acp blocked: project is not in AI_COLLAB_WAKEUP_CLI_PROJECTS",
+            "adapter_name": "codex-acp-guardrail",
+        }
+    if input_data["target_slug"] != "codex":
+        return {
+            "status": "failed",
+            "message": "codex-acp adapter only supports target codex",
+            "adapter_name": "codex-acp",
+        }
+
+    command = codex_acp_command()
+    messages = build_codex_acp_messages(input_data)
+    process = None
+    try:
+        process = popen(
+            command,
+            cwd=input_data["project_path"],
+            text=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=1,
+        )
+        deadline = time.monotonic() + timeout
+        send_acp_message(process, messages[0])
+        read_acp_response(process, 1, deadline)
+        send_acp_message(process, messages[1])
+        new_session = read_acp_response(process, 2, deadline)
+        session_id = new_session.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            return {
+                "status": "failed",
+                "message": "codex-acp did not return a sessionId",
+                "adapter_name": "codex-acp",
+            }
+        messages[2]["params"]["sessionId"] = session_id
+        send_acp_message(process, messages[2])
+        read_acp_response(process, 3, deadline)
+        return {
+            "status": "success",
+            "message": f"task processed by invisible Codex ACP session {session_id}",
+            "adapter_name": "codex-acp",
+        }
+    except subprocess.TimeoutExpired:
+        return {"status": "failed", "message": f"codex-acp timed out after {timeout}s", "adapter_name": "codex-acp"}
+    except (OSError, RuntimeError, TimeoutError) as exc:
+        return {"status": "failed", "message": f"codex-acp failed: {exc}", "adapter_name": "codex-acp"}
+    finally:
+        if process is not None:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                try:
+                    if stream:
+                        stream.close()
+                except OSError:
+                    pass
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+
+
 def run_visible_adapter(
     input_data: dict[str, str],
     *,
@@ -737,6 +904,8 @@ def run_wakeup_adapter(
         return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
     if mode == "antigravity-chat":
         return run_antigravity_chat_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "codex-acp":
+        return run_codex_acp_adapter(input_data, timeout=timeout)
     if mode != "cli":
         return {"status": "failed", "message": f"unknown adapter mode: {mode}", "adapter_name": mode}
 

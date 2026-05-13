@@ -28,6 +28,7 @@ process_inbox = _mod.process_inbox
 process_thread = _mod.process_thread
 append_thread_message = _mod.append_thread_message
 run_wakeup_adapter = _mod.run_wakeup_adapter
+run_codex_acp_adapter = _mod.run_codex_acp_adapter
 
 
 SAMPLE_INBOX = """\
@@ -263,6 +264,7 @@ class TestAdapters(unittest.TestCase):
             "AI_COLLAB_CLAUDE_BIN": os.environ.get("AI_COLLAB_CLAUDE_BIN"),
             "AI_COLLAB_ANTIGRAVITY_BIN": os.environ.get("AI_COLLAB_ANTIGRAVITY_BIN"),
             "AI_COLLAB_ANTIGRAVITY_MODE": os.environ.get("AI_COLLAB_ANTIGRAVITY_MODE"),
+            "AI_COLLAB_CODEX_ACP_COMMAND": os.environ.get("AI_COLLAB_CODEX_ACP_COMMAND"),
         }
         for key in self._env:
             os.environ.pop(key, None)
@@ -585,6 +587,79 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(calls[0][0][:5], ["/usr/bin/antigravity", "chat", "--mode", "agent", "--reuse-window"])
         self.assertIn("--add-file", calls[0][0])
         self.assertEqual(calls[0][0][-1], "read visible inbox")
+
+    def test_codex_acp_builds_protocol_messages(self):
+        messages = _mod.build_codex_acp_messages(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "codex",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-codex.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read invisible inbox",
+            }
+        )
+
+        self.assertEqual([m["method"] for m in messages], ["initialize", "session/new", "session/prompt"])
+        self.assertEqual(messages[1]["params"]["cwd"], "/tmp/project")
+        self.assertEqual(messages[2]["params"]["sessionId"], "$SESSION_ID")
+        self.assertIn("Inbox path:", messages[2]["params"]["prompt"][0]["text"])
+
+    def test_codex_acp_dry_run_does_not_start_agent(self):
+        os.environ["AI_COLLAB_WAKEUP_DRY_RUN"] = "1"
+        result = run_wakeup_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "codex",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-codex.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read invisible inbox",
+            },
+            mode="codex-acp",
+        )
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["adapter_name"], "codex-acp-dry-run")
+
+    def test_codex_acp_adapter_processes_mock_agent(self):
+        with tempfile.TemporaryDirectory() as d:
+            script = Path(d) / "fake_codex_acp.py"
+            script.write_text(
+                """#!/usr/bin/env python3
+import json
+import sys
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentInfo": {"name": "fake-codex-acp"}}
+    elif method == "session/new":
+        result = {"sessionId": "ses_mock"}
+    elif method == "session/prompt":
+        result = {"stopReason": "end_turn"}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": msg.get("id"), "result": result}), flush=True)
+""",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            os.environ["AI_COLLAB_CODEX_ACP_COMMAND"] = f"{sys.executable} {script}"
+
+            result = run_codex_acp_adapter(
+                {
+                    "project_path": d,
+                    "target_slug": "codex",
+                    "inbox_path": f"{d}/.ai-collab/inbox-codex.md",
+                    "task_id": "task-123",
+                    "synthetic_prompt": "read invisible inbox",
+                },
+                timeout=5,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["adapter_name"], "codex-acp")
+        self.assertIn("ses_mock", result["message"])
 
     def test_visible_adapter_blocks_project_not_in_allowlist(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/some/other/project"
