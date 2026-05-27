@@ -55,17 +55,19 @@ your-project/
 
 Three principles make this skill work the way it does. Read these before installing — they explain the design and what to expect.
 
-### 1. Claude Code is the director
+### 1. Claude Code is the default director
 
-You interact with **Claude Code** as the orchestrating AI. Claude is the only assistant that:
+You usually interact with **Claude Code** as the orchestrating AI. Claude is the only assistant that:
 
 - Has live `UserPromptSubmit` / `Stop` / `SessionStart` hooks that surface notifications and regenerate `CONTEXT.md` automatically.
 - Owns the `/collab` slash commands — `/collab assign`, `/collab read`, `/collab monitor`, etc.
 - Writes task assignments to `.ai-collab/inbox-{ai}.md` for the worker AIs to pick up.
 
-The other AIs (OpenCode, Codex, Cursor native chat, Windsurf native chat, Copilot Chat, Hermes, etc.) are **workers**. They participate by reading their agent rules file and the `.ai-collab/` directory — no hooks, no slash commands.
+The other AIs (OpenCode, Codex, Cursor native chat, Windsurf native chat, Copilot Chat, Hermes, etc.) are **workers** by default. They participate by reading their agent rules file and the `.ai-collab/` directory — no hooks, no slash commands.
 
 Worker AIs *can* technically read each other's logs and edit any file too, but task delegation flows from Claude outward. This keeps coordination centralized and avoids ambiguous "who owns this decision" situations.
+
+For large implementation plans, the user can start a **directed run** and choose the director for that run (`claude-code`, `codex`, `opencode`, or another registered agent). The selected director gets a run lock in `.ai-collab/runs/{run_id}/director.json`; every other agent treats that run as worker-owned until the lock is released. This lets Codex direct one run while Claude Code directs another without the two overwriting each other's decisions.
 
 ### 1.5 Director knows the team from session start
 
@@ -172,7 +174,7 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-That's it. The installer sets up **all eight components** automatically:
+That's it. The installer sets up **all ten components** automatically:
 
 | Component | What it does | Where |
 |-----------|-------------|-------|
@@ -181,6 +183,7 @@ That's it. The installer sets up **all eight components** automatically:
 | 📨 Wakeup detector | Detects unread inbox tasks and dispatches the configured adapter | `~/.claude/ai-collab-wakeup.py` |
 | 🧭 Auto-onboard | Detects a new agent's first log and appends its rules snippet + TEAM entry | `~/.claude/ai-collab-auto-onboard.py` |
 | 🧩 Project onboarding | Registers agents, IDE/container, model, TEAM, inbox, and rules files | `~/.claude/ai-collab-project-setup.py` |
+| 🎛️ Run orchestrator | Creates director-selected implementation runs, safe tasks, and agent threads | `~/.claude/ai-collab-orchestrate.py` |
 | 🩺 Doctor script | Verifies installed files, hooks, daemon, and queues | `~/.claude/ai-collab-doctor.py` |
 | 🪝 `SessionStart` hook | Loads `CONTEXT.md` + notifications on session open | `~/.claude/settings.json` |
 | 🪝 `UserPromptSubmit` hook | Shows pending AI notifications before each message | `~/.claude/settings.json` |
@@ -290,6 +293,66 @@ The third form (`/collab assign all ...`) writes to `inbox-all.md` so every work
 
 **Why this matters:** you do not have to copy a prompt from Claude's window into Codex's or OpenCode's window. The worker AI self-orients from its inbox, and the daemon can wake addressable agents through inboxes or `@slug` thread mentions. See [Architecture](#architecture-director-autonomous-workers-project-isolation) for the full flow.
 
+### `/collab orchestrate`
+
+Run a large implementation as a directed multi-agent execution. The user chooses one active director for that run — for example Claude Code or Codex — and the director decomposes the work into bounded tasks, assigns owners, manages agent-to-agent questions, validates results, and writes a final summary.
+
+Directed runs are stored under:
+
+```text
+.ai-collab/runs/{run_id}/
+  PLAN.md
+  director.json
+  tasks.json
+  status.md
+  final-summary.md
+```
+
+Task conversations still use top-level `thread-{task_id}.md` files so the existing daemon can wake agents when a message mentions `@codex`, `@opencode`, or another registered slug.
+
+The helper enforces the safety rules that keep autonomy controlled:
+
+- One active director per run (`director_lock: active`)
+- One owner per task
+- Explicit allowed files and do-not-touch boundaries
+- No overwrite of active inboxes unless the user/director forces it deliberately
+- All agent questions and answers go through task threads
+- Finalization requires terminal task states and validation evidence
+
+Example:
+
+```bash
+python3 ~/.claude/ai-collab-orchestrate.py init \
+  --goal "Implement the billing settings page end to end" \
+  --director codex \
+  --agents claude-code,opencode \
+  --title billing-settings
+
+python3 ~/.claude/ai-collab-orchestrate.py add-task \
+  --run-id 20260527-120000-billing-settings \
+  --actor codex \
+  --task-id billing-ui \
+  --title "Build settings UI" \
+  --owner opencode \
+  --allowed-files "src/app/billing/**,src/components/billing/**" \
+  --description "Implement the billing settings UI and update the task thread with decisions."
+
+python3 ~/.claude/ai-collab-orchestrate.py assign \
+  --run-id 20260527-120000-billing-settings \
+  --actor codex \
+  --task-id billing-ui
+```
+
+Agents can talk to each other naturally in the task thread:
+
+```bash
+python3 ~/.claude/ai-collab-orchestrate.py thread \
+  --run-id 20260527-120000-billing-settings \
+  --task-id billing-ui \
+  --author opencode \
+  --message "@codex I need a decision: should invoice export live in this task or a follow-up?"
+```
+
 ### `/collab setup`
 
 First-time setup for a project. Run this once per project.
@@ -351,7 +414,7 @@ Remove stale session logs.
 
 > **This is all set up automatically by the installer.** No manual steps.
 
-Eight components keep Claude informed and able to dispatch inbox tasks:
+Nine components keep Claude informed and able to dispatch inbox tasks:
 
 1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
@@ -359,8 +422,9 @@ Eight components keep Claude informed and able to dispatch inbox tasks:
 4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` and `thread-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; thread mentions use `reason: thread-mention`. **By default it uses `visible`** so OpenCode/Codex get invisible synthetic wakeups in their running panels with zero manual activation; you can downgrade to `cli` (headless execution) or `notify-only` (safe logging only) via `AI_COLLAB_WAKEUP_ADAPTER`.
 5. **Project onboarding** — `~/.claude/ai-collab-project-setup.py` creates the agent-first project manifest (`TEAM.md`, `agents.json`), welcome inbox, and runtime rules files. It records agent, container, and model explicitly so a fresh project does not depend on guesswork.
 6. **Auto-onboard detector** — `~/.claude/ai-collab-auto-onboard.py` runs from the daemon when a new `{slug}-{YYYYMMDD-HHMMSS}.md` log appears. Known slugs get an agent-specific `AI-COLLAB-START agent={slug}` rules block if missing, plus a merged `.ai-collab/TEAM.md` roster entry. Unknown slugs produce a low-priority `.ai-collab/inbox-all.md` notice telling Claude Code to run `/collab onboard {slug}`. The operation is idempotent and never overwrites existing rules content.
-7. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
-8. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
+7. **Run orchestrator** — `~/.claude/ai-collab-orchestrate.py` creates `.ai-collab/runs/{run_id}/`, records the selected director, writes safe task assignments to normal inboxes, and appends task-thread messages that agents can answer naturally.
+8. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
+9. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
    - `UserPromptSubmit` — runs `ai-collab-check-notifications.py` to show pending notifications for the **active project only**, zero token cost at idle
    - `Stop` — auto-regenerates `CONTEXT.md` after every Claude response using a Python script

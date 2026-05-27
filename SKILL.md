@@ -1,6 +1,6 @@
 ---
 name: collab
-description: Enable real-time collaboration between multiple AI coding agents (Claude Code, OpenCode, Codex, Aider, Hermes, Cursor native chat, Windsurf native chat, Copilot Chat, etc.) working on the same project simultaneously, regardless of IDE/container or LLM model. Use this skill when the user works with more than one AI agent and wants them to share context, read each other's logs, receive tasks, and avoid conflicting changes. Triggers on /collab, "what has codex been doing", "share my context with opencode", "what is the other AI working on", "sync with cursor", "multi-AI", "collab", "read other AI conversation", "lee la conversacion de la otra IA", "qué hizo codex", "comparte contexto", "sincroniza con la otra IA".
+description: Enable real-time collaboration and directed implementation runs between multiple AI coding agents (Claude Code, OpenCode, Codex, Aider, Hermes, Cursor native chat, Windsurf native chat, Copilot Chat, etc.) working on the same project simultaneously, regardless of IDE/container or LLM model. Use this skill when the user works with more than one AI agent and wants them to share context, read each other's logs, receive tasks, avoid conflicting changes, or choose a director agent to plan and execute a complex multi-agent implementation through inboxes and task threads. Triggers on /collab, /collab orchestrate, "what has codex been doing", "share my context with opencode", "what is the other AI working on", "sync with cursor", "multi-AI", "collab", "read other AI conversation", "lee la conversacion de la otra IA", "qué hizo codex", "comparte contexto", "sincroniza con la otra IA", "haz un plan con varios agentes", "Codex como director".
 ---
 
 # AI Collab Skill
@@ -263,6 +263,58 @@ What is this project? What stage is it at? What should the next AI know before t
 - **Update your log when something important changes** — don't wait until end of session
 - **Announce context at session start** — tell the user what you found in other AIs' logs
 - **Language** — write all log content in English or in the language the user is using; never mix alphabets
+
+---
+
+## Command: /collab orchestrate
+
+Use this when the user gives a large implementation goal and wants multiple agents to finish the plan together. The user may choose the director for the run: `claude-code`, `codex`, `opencode`, or another registered agent. Only one director controls a given run.
+
+**Director selection rules:**
+- If the user names a director, use that agent.
+- If no director is named and you are Claude Code, default to `claude-code`.
+- If no director is named and you are Codex using this skill, default to `codex`.
+- Never create two active directors for the same run. Respect `.ai-collab/runs/{run_id}/director.json`.
+
+**State layout:**
+
+```text
+.ai-collab/runs/{run_id}/
+  PLAN.md
+  director.json
+  tasks.json
+  status.md
+  final-summary.md
+.ai-collab/thread-{task_id}.md
+.ai-collab/inbox-{agent}.md
+```
+
+**Use the deterministic helper:**
+
+```bash
+python3 ~/.claude/ai-collab-orchestrate.py init --goal "$GOAL" --director "$DIRECTOR" --agents "$AGENTS" --title "$TITLE"
+python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK" --title "$TITLE" --owner "$AGENT" --allowed-files "$FILES" --description "$DESC" --validation "$VALIDATION"
+python3 ~/.claude/ai-collab-orchestrate.py assign --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK"
+python3 ~/.claude/ai-collab-orchestrate.py thread --run-id "$RUN_ID" --task-id "$TASK" --author "$AGENT" --message "$MESSAGE"
+python3 ~/.claude/ai-collab-orchestrate.py set-task --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK" --status done --summary "$SUMMARY"
+python3 ~/.claude/ai-collab-orchestrate.py finalize --run-id "$RUN_ID" --actor "$DIRECTOR" --summary "$SUMMARY" --validation "$VALIDATION"
+```
+
+**Execution workflow:**
+1. Read `.ai-collab/CONTEXT.md`, `TEAM.md`, active inboxes, and recent logs.
+2. Create the run with the selected director and participating agents.
+3. Write a concrete `PLAN.md`: tasks, dependencies, owners, allowed files, validation.
+4. Add and assign tasks with one owner each. Never assign a task without file boundaries for code edits.
+5. Agents ask and answer questions in `thread-{task_id}.md` using normal language and `@slug` mentions. Treat these threads as the conversation with each other.
+6. Director monitors logs, inbox status, and task threads. If blocked, ask a clarifying question in the thread or reassign with an explicit reason.
+7. Before finalizing, run the validation commands appropriate to the repo. Record exact commands and outcomes.
+8. Finalize only when all tasks are `done` or explicitly `failed`, validation evidence exists, and `final-summary.md` is written.
+
+**Safety rules:**
+- Do not overwrite another agent's active inbox (`unread`, `claimed`, `running`, `blocked`, `review`) unless the user explicitly approves force.
+- Do not edit files outside a task's allowed file list without asking in the thread and receiving director approval.
+- Do not mark a task `done` unless the owning agent reported completion or the director verified the work.
+- Do not release the director lock until final validation has been recorded.
 
 ---
 

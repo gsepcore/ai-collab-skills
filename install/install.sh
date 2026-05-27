@@ -11,9 +11,10 @@
 #    5. Wakeup detector script   → ~/.claude/ai-collab-wakeup.py
 #    6. Auto-onboard script      → ~/.claude/ai-collab-auto-onboard.py
 #    7. Project onboarding       → ~/.claude/ai-collab-project-setup.py
-#    8. Doctor script            → ~/.claude/ai-collab-doctor.py
-#    9. Background daemon        → launchd (macOS) / cron (Linux)
-#   10. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#    8. Multi-agent orchestrator → ~/.claude/ai-collab-orchestrate.py
+#    9. Doctor script            → ~/.claude/ai-collab-doctor.py
+#   10. Background daemon        → launchd (macOS) / cron (Linux)
+#   11. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -126,11 +127,13 @@ copy_or_download "install/ai-collab-check-notifications.py"   "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-wakeup.py"                "$CLAUDE_DIR/ai-collab-wakeup.py"
 copy_or_download "install/ai-collab-auto-onboard.py"          "$CLAUDE_DIR/ai-collab-auto-onboard.py"
 copy_or_download "install/ai-collab-project-setup.py"         "$CLAUDE_DIR/ai-collab-project-setup.py"
+copy_or_download "install/ai-collab-orchestrate.py"           "$CLAUDE_DIR/ai-collab-orchestrate.py"
 copy_or_download "install/ai-collab-doctor.py"                "$CLAUDE_DIR/ai-collab-doctor.py"
 chmod +x "$CLAUDE_DIR/ai-collab-daemon.sh"
 chmod +x "$CLAUDE_DIR/ai-collab-wakeup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-auto-onboard.py"
 chmod +x "$CLAUDE_DIR/ai-collab-project-setup.py"
+chmod +x "$CLAUDE_DIR/ai-collab-orchestrate.py"
 chmod +x "$CLAUDE_DIR/ai-collab-doctor.py"
 
 green "Daemon script        → $CLAUDE_DIR/ai-collab-daemon.sh"
@@ -139,6 +142,7 @@ green "Notifications script → $CLAUDE_DIR/ai-collab-check-notifications.py"
 green "Wakeup detector      → $CLAUDE_DIR/ai-collab-wakeup.py"
 green "Auto-onboard script  → $CLAUDE_DIR/ai-collab-auto-onboard.py"
 green "Project onboarding   → $CLAUDE_DIR/ai-collab-project-setup.py"
+green "Run orchestrator     → $CLAUDE_DIR/ai-collab-orchestrate.py"
 green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"
 
 # ── 3. Start background daemon ───────────────────────────────────────────────
@@ -420,14 +424,16 @@ echo "    🪝 Stop hook           — auto-generates CONTEXT.md after each resp
 echo "    📨 Wakeup detector     — detects unread inbox tasks"
 echo "    🧭 Auto-onboard        — registers new agents after their first log"
 echo "    🧩 Project onboarding  — registers agents, IDE/container, model, rules"
+echo "    🎛️  Run orchestrator    — director-selected multi-agent implementation runs"
 echo "    🩺 Doctor script       — verifies install health"
-echo "    📚 /collab skill       — 8 commands available in Claude Code"
+echo "    📚 /collab skill       — collaboration commands available in Claude Code"
 echo ""
 echo "  Try it now — open Claude Code and type:"
 echo "    /collab setup          — set up a new project"
 echo "    /collab read           — see what other AIs have been working on"
 echo "    /collab write          — save your current context"
 echo "    /collab assign codex [task]  — send a task to another AI"
+echo "    /collab orchestrate    — plan and run a directed multi-agent implementation"
 echo ""
 echo "  Check install health:"
 echo "    python3 ~/.claude/ai-collab-doctor.py"

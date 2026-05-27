@@ -17,6 +17,7 @@ echo "  - ~/.claude/ai-collab-check-notifications.py"
 echo "  - ~/.claude/ai-collab-wakeup.py"
 echo "  - ~/.claude/ai-collab-auto-onboard.py"
 echo "  - ~/.claude/ai-collab-project-setup.py"
+echo "  - ~/.claude/ai-collab-orchestrate.py"
 echo "  - ~/.claude/ai-collab-doctor.py"
 echo "  - ~/.ai-collab-notifications.json"
 echo "  - ~/.ai-collab-last-check"
@@ -54,6 +55,7 @@ fi
 [ -f "$HOME/.claude/ai-collab-wakeup.py" ]               && rm -f "$HOME/.claude/ai-collab-wakeup.py"               && echo "✓ Removed ai-collab-wakeup.py"
 [ -f "$HOME/.claude/ai-collab-auto-onboard.py" ]         && rm -f "$HOME/.claude/ai-collab-auto-onboard.py"         && echo "✓ Removed ai-collab-auto-onboard.py"
 [ -f "$HOME/.claude/ai-collab-project-setup.py" ]        && rm -f "$HOME/.claude/ai-collab-project-setup.py"        && echo "✓ Removed ai-collab-project-setup.py"
+[ -f "$HOME/.claude/ai-collab-orchestrate.py" ]          && rm -f "$HOME/.claude/ai-collab-orchestrate.py"          && echo "✓ Removed ai-collab-orchestrate.py"
 [ -f "$HOME/.claude/ai-collab-doctor.py" ]               && rm -f "$HOME/.claude/ai-collab-doctor.py"               && echo "✓ Removed ai-collab-doctor.py"
 
 # Remove notification queue files

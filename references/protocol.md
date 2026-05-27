@@ -21,6 +21,7 @@ It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/inbox-all.
 2. Every new AI reads `CONTEXT.md` first — the single-file project brief from all logs.
 3. Every AI checks its inbox on every response — `inbox-{ai-name}.md` and `inbox-all.md` for direct task assignments from the orchestrating AI.
 4. Every AI treats `thread-{task_id}.md` as the task conversation channel — `@slug` mentions can wake the mentioned agent when the daemon and adapter are running.
+5. Directed implementation runs have one active director in `.ai-collab/runs/{run_id}/director.json`; all other agents respect that director for the run.
 
 ---
 
@@ -79,6 +80,30 @@ Rules for every agent:
 - Do not write to a thread whose frontmatter says `status: closed`.
 
 The daemon watches thread updates. When the latest message mentions `@codex`, `@opencode`, `@claude`, or another registered slug, it creates a wake event for that target without changing inbox state. This is the per-agent monitor path: each agent has an addressable mailbox plus a mention-driven conversation channel.
+
+---
+
+## Directed multi-agent runs
+
+For large implementation plans, the user may choose a run director (`claude-code`, `codex`, `opencode`, or another registered slug). The director uses:
+
+```text
+.ai-collab/runs/{run_id}/director.json
+.ai-collab/runs/{run_id}/PLAN.md
+.ai-collab/runs/{run_id}/tasks.json
+.ai-collab/runs/{run_id}/status.md
+.ai-collab/runs/{run_id}/final-summary.md
+```
+
+Workers must follow these rules:
+
+- If `director_lock` is `active`, do not override the run director.
+- Only work on tasks where you are the owner or where the director explicitly mentions you in the thread.
+- Stay inside the task's allowed files. Ask in `thread-{task_id}.md` before crossing boundaries.
+- Use natural conversation in task threads for questions, answers, review requests, and handoffs.
+- Keep your session log updated after every meaningful change.
+
+The deterministic helper is `python3 ~/.claude/ai-collab-orchestrate.py`.
 
 ---
 

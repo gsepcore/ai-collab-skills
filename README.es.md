@@ -50,17 +50,19 @@ tu-proyecto/
 
 Tres principios definen cómo funciona la skill. Léelos antes de instalar — explican el diseño y qué esperar.
 
-### 1. Claude Code es el director
+### 1. Claude Code es el director por defecto
 
-Tú interactúas con **Claude Code** como la IA orquestadora. Claude es la única asistente que:
+Normalmente interactúas con **Claude Code** como la IA orquestadora. Claude es la única asistente que:
 
 - Tiene hooks live `UserPromptSubmit` / `Stop` / `SessionStart` que surface notificaciones y regeneran `CONTEXT.md` automáticamente.
 - Posee los slash commands `/collab` — `/collab assign`, `/collab read`, `/collab monitor`, etc.
 - Escribe asignaciones de tareas en `.ai-collab/inbox-{ai}.md` para que los workers las recojan.
 
-Las otras IAs (Cursor, Windsurf, OpenCode, Codex, Copilot, Antigravity, Hermes, etc.) son **workers**. Participan leyendo su archivo de reglas y el directorio `.ai-collab/` — sin hooks, sin slash commands.
+Las otras IAs (Cursor, Windsurf, OpenCode, Codex, Copilot, Antigravity, Hermes, etc.) son **workers** por defecto. Participan leyendo su archivo de reglas y el directorio `.ai-collab/` — sin hooks, sin slash commands.
 
 Los workers *pueden* técnicamente leer logs de los demás y editar cualquier archivo, pero la delegación de tareas fluye desde Claude hacia afuera. Esto mantiene la coordinación centralizada y evita situaciones ambiguas de "quién decide aquí".
+
+Para planes grandes de implementación, el usuario puede iniciar un **run dirigido** y elegir el director de ese run (`claude-code`, `codex`, `opencode` u otro agente registrado). El director seleccionado recibe un lock en `.ai-collab/runs/{run_id}/director.json`; los demás agentes actúan como workers para ese run hasta que el lock se libera. Así Codex puede dirigir un run mientras Claude Code dirige otro sin pisarse.
 
 ### 1.5 El director conoce al equipo desde el inicio de la sesión
 
@@ -271,6 +273,41 @@ Delega una tarea a otra IA sin salir de tu sesión de Claude. Escribe `.ai-colla
 La tercera forma (`/collab assign all ...`) escribe en `inbox-all.md` para que cada worker la vea.
 
 **Por qué importa:** no tienes que copiar un prompt desde la ventana de Claude a la de Codex o la de OpenCode. El worker se auto-orienta desde su inbox en su primera respuesta después de que lo abras. Ver [Arquitectura](#arquitectura-director-workers-autónomos-aislamiento-por-proyecto) para el flujo completo.
+
+### `/collab orchestrate`
+
+Ejecuta una implementación grande como un run dirigido entre varios agentes. El usuario elige un solo director activo para ese run — por ejemplo Claude Code o Codex — y ese director divide el trabajo, asigna owners, gestiona preguntas entre agentes, valida el resultado y escribe el resumen final.
+
+Los runs dirigidos viven en:
+
+```text
+.ai-collab/runs/{run_id}/
+  PLAN.md
+  director.json
+  tasks.json
+  status.md
+  final-summary.md
+```
+
+Las conversaciones de tareas siguen usando `thread-{task_id}.md` en la raíz de `.ai-collab/`, para que el daemon pueda despertar agentes cuando alguien menciona `@codex`, `@opencode` u otro slug registrado.
+
+Reglas de seguridad:
+
+- Un director activo por run (`director_lock: active`)
+- Un owner por tarea
+- Archivos permitidos y do-not-touch explícitos
+- No sobrescribir inboxes activos salvo decisión forzada y deliberada
+- Preguntas y respuestas entre agentes en threads de tarea
+- Cierre solo con tareas terminales y evidencia de validación
+
+Helper:
+
+```bash
+python3 ~/.claude/ai-collab-orchestrate.py init --goal "Implementar X" --director codex --agents claude-code,opencode --title implementar-x
+python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id RUN --actor codex --task-id tarea-ui --title "UI" --owner opencode --allowed-files "src/ui/**" --description "Implementa la UI y reporta decisiones."
+python3 ~/.claude/ai-collab-orchestrate.py assign --run-id RUN --actor codex --task-id tarea-ui
+python3 ~/.claude/ai-collab-orchestrate.py thread --run-id RUN --task-id tarea-ui --author opencode --message "@codex necesito una decisión sobre el alcance."
+```
 
 ### `/collab setup`
 
