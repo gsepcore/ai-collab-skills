@@ -19,6 +19,7 @@ import tempfile
 import hashlib
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -577,7 +578,49 @@ def run_opencode_visible_adapter(
     # no port can be confirmed for the target project at all.
     ordered_ports = project_ports if project_ports else other_ports
 
+    def tui_url(port: int, path: str) -> str:
+        query = {}
+        if project_path:
+            query["directory"] = project_path
+        encoded = urllib.parse.urlencode(query)
+        suffix = f"?{encoded}" if encoded else ""
+        return f"http://127.0.0.1:{port}{path}{suffix}"
+
     for port in ordered_ports:
+        if not synthetic:
+            # True visible mode targets the active TUI prompt box, then submits
+            # it. Posting to /session/{id}/prompt_async can execute in a
+            # session that is not the one the user is currently viewing.
+            clear_status, clear_text = poster(
+                tui_url(port, "/tui/clear-prompt"),
+                {},
+                timeout=fast_timeout,
+            )
+            if not (200 <= clear_status < 300):
+                last_error = f"port {port} clear-prompt returned {clear_status}: {clear_text}".strip()
+                continue
+            append_status, append_text = poster(
+                tui_url(port, "/tui/append-prompt"),
+                {"text": prompt},
+                timeout=fast_timeout,
+            )
+            if not (200 <= append_status < 300):
+                last_error = f"port {port} append-prompt returned {append_status}: {append_text}".strip()
+                continue
+            submit_status, submit_text = poster(
+                tui_url(port, "/tui/submit-prompt"),
+                {},
+                timeout=fast_timeout,
+            )
+            if 200 <= submit_status < 300:
+                return {
+                    "status": "success",
+                    "message": f"visible prompt submitted to OpenCode TUI on port {port}",
+                    "adapter_name": adapter_name,
+                }
+            last_error = f"port {port} submit-prompt returned {submit_status}: {submit_text}".strip()
+            continue
+
         session_id = discover_opencode_active_session(
             port,
             timeout=fast_timeout,
@@ -613,7 +656,7 @@ def run_opencode_visible_adapter(
 
     return {
         "status": "failed",
-        "message": last_error or "visible OpenCode TUI did not accept synthetic prompt",
+        "message": last_error or "visible OpenCode TUI did not accept wakeup prompt",
         "adapter_name": "opencode-visible",
     }
 

@@ -480,10 +480,10 @@ class TestAdapters(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["adapter_name"], "opencode-visible")
-        self.assertEqual(posts[0][0], "http://127.0.0.1:12345/session/ses_test/prompt_async")
-        self.assertEqual(posts[0][1]["parts"][0]["text"], "read visible inbox")
-        self.assertEqual(posts[0][1]["parts"][0]["synthetic"], False)
-        self.assertEqual(posts[0][1]["parts"][0]["type"], "text")
+        self.assertEqual(posts[0][0], "http://127.0.0.1:12345/tui/clear-prompt?directory=%2Ftmp%2Fproject")
+        self.assertEqual(posts[1][0], "http://127.0.0.1:12345/tui/append-prompt?directory=%2Ftmp%2Fproject")
+        self.assertEqual(posts[1][1]["text"], "read visible inbox")
+        self.assertEqual(posts[2][0], "http://127.0.0.1:12345/tui/submit-prompt?directory=%2Ftmp%2Fproject")
 
     def test_opencode_visible_synthetic_mode_is_opt_in(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
@@ -517,6 +517,7 @@ class TestAdapters(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["adapter_name"], "opencode-synthetic")
+        self.assertEqual(posts[0][0], "http://127.0.0.1:12345/session/ses_test/prompt_async")
         self.assertEqual(posts[0][1]["parts"][0]["synthetic"], True)
 
     def test_visible_adapter_routes_opencode(self):
@@ -587,8 +588,10 @@ class TestAdapters(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(len(posts), 1)
-        self.assertEqual(posts[0][0], "http://127.0.0.1:22222/session/ses_gsep/prompt_async")
+        self.assertEqual(len(posts), 3)
+        self.assertEqual(posts[0][0], "http://127.0.0.1:22222/tui/clear-prompt?directory=%2Ftmp%2Fgsep")
+        self.assertEqual(posts[1][0], "http://127.0.0.1:22222/tui/append-prompt?directory=%2Ftmp%2Fgsep")
+        self.assertEqual(posts[2][0], "http://127.0.0.1:22222/tui/submit-prompt?directory=%2Ftmp%2Fgsep")
 
     def test_antigravity_chat_adapter_uses_reuse_window(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"

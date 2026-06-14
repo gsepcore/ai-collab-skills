@@ -281,7 +281,7 @@ One-line overview of every AI active on this project — name, last update, and 
 
 ### `/collab assign [ai-name] [task description]`
 
-Delegate a task to another AI without leaving your Claude session. Writes `.ai-collab/inbox-{ai-name}.md` with `status: unread`. The daemon records a wake event for that agent and **by default dispatches the `visible` adapter automatically** — for OpenCode it now posts a visible prompt to the running TUI so the user can see the task arrive before the worker reads the inbox, executes the task, and marks it `status: done`. No manual activation needed after `curl … | bash`.
+Delegate a task to another AI without leaving your Claude session. Writes `.ai-collab/inbox-{ai-name}.md` with `status: unread`. The daemon records a wake event for that agent and **by default dispatches the `visible` adapter automatically** — for OpenCode it now writes the prompt into the running TUI and submits it, so the user can see the task arrive before the worker reads the inbox, executes the task, and marks it `status: done`. No manual activation needed after `curl … | bash`.
 
 ```
 /collab assign codex publish v1.2.0 to npm and tag the release on GitHub
@@ -519,7 +519,7 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 
 Behavior:
 
-- `@opencode` or `inbox-opencode.md` uses the OpenCode server's `POST /session/{id}/prompt_async` endpoint. By default the wakeup prompt is **not synthetic**, so it appears in the OpenCode UI and the user can see the delegated task arrive. Set `AI_COLLAB_OPENCODE_SYNTHETIC=1` only if you explicitly prefer hidden prompts and accept that this can feel like background/headless work when no visible response appears.
+- `@opencode` or `inbox-opencode.md` uses the OpenCode TUI endpoints: `POST /tui/clear-prompt`, `POST /tui/append-prompt`, then `POST /tui/submit-prompt`. This targets the visible prompt box instead of a background session, so the user can see the delegated task arrive. Set `AI_COLLAB_OPENCODE_SYNTHETIC=1` only if you explicitly prefer hidden prompts through `POST /session/{id}/prompt_async` and accept that this can feel like background/headless work when no visible response appears.
 - `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent`. **Codex visible-tab wakeup remains degraded** — see "Known limitations" below.
 - If no visible panel/port/session exists, the adapter fails safely and normal retry/backoff applies.
 
