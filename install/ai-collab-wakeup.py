@@ -39,6 +39,7 @@ DEFAULT_ADAPTER = "visible"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
 DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude")
 DEFAULT_VISIBLE_TARGETS = ("codex", "opencode")
+OPENCODE_SYNTHETIC_ENV = "AI_COLLAB_OPENCODE_SYNTHETIC"
 MAX_EVENTS = 200
 MENTION_RE = re.compile(r"(?<![\w.-])@([a-z][a-z0-9_-]{1,40})\b")
 FALLBACK_BIN_DIRS = (
@@ -549,6 +550,8 @@ def run_opencode_visible_adapter(
         }
 
     prompt = input_data["synthetic_prompt"]
+    synthetic = truthy_env(OPENCODE_SYNTHETIC_ENV)
+    adapter_name = "opencode-synthetic" if synthetic else "opencode-visible"
     project_path = input_data.get("project_path")
     last_error = ""
     fast_timeout = min(timeout, 10)
@@ -591,7 +594,7 @@ def run_opencode_visible_adapter(
                     {
                         "type": "text",
                         "text": prompt,
-                        "synthetic": True,
+                        "synthetic": synthetic,
                     }
                 ]
             },
@@ -601,10 +604,10 @@ def run_opencode_visible_adapter(
             return {
                 "status": "success",
                 "message": (
-                    f"synthetic prompt delivered to visible OpenCode session "
-                    f"{session_id} on port {port}"
+                    f"{'synthetic' if synthetic else 'visible'} prompt delivered to "
+                    f"OpenCode session {session_id} on port {port}"
                 ),
-                "adapter_name": "opencode-visible",
+                "adapter_name": adapter_name,
             }
         last_error = f"port {port} session {session_id} returned {status}: {text}".strip()
 

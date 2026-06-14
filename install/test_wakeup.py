@@ -259,6 +259,7 @@ class TestAdapters(unittest.TestCase):
             "AI_COLLAB_WAKEUP_VISIBLE_TARGETS": os.environ.get("AI_COLLAB_WAKEUP_VISIBLE_TARGETS"),
             "AI_COLLAB_WAKEUP_DRY_RUN": os.environ.get("AI_COLLAB_WAKEUP_DRY_RUN"),
             "AI_COLLAB_OPENCODE_PORTS": os.environ.get("AI_COLLAB_OPENCODE_PORTS"),
+            "AI_COLLAB_OPENCODE_SYNTHETIC": os.environ.get("AI_COLLAB_OPENCODE_SYNTHETIC"),
             "AI_COLLAB_OPENCODE_BIN": os.environ.get("AI_COLLAB_OPENCODE_BIN"),
             "AI_COLLAB_CODEX_BIN": os.environ.get("AI_COLLAB_CODEX_BIN"),
             "AI_COLLAB_CLAUDE_BIN": os.environ.get("AI_COLLAB_CLAUDE_BIN"),
@@ -448,7 +449,7 @@ class TestAdapters(unittest.TestCase):
 
         self.assertEqual(_mod.discover_opencode_ports(runner=fake_runner), [12345, 23456])
 
-    def test_opencode_visible_posts_to_tui_port(self):
+    def test_opencode_visible_posts_visible_prompt_by_default(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
         os.environ["AI_COLLAB_OPENCODE_PORTS"] = "12345"
         posts = []
@@ -481,8 +482,42 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(result["adapter_name"], "opencode-visible")
         self.assertEqual(posts[0][0], "http://127.0.0.1:12345/session/ses_test/prompt_async")
         self.assertEqual(posts[0][1]["parts"][0]["text"], "read visible inbox")
-        self.assertEqual(posts[0][1]["parts"][0]["synthetic"], True)
+        self.assertEqual(posts[0][1]["parts"][0]["synthetic"], False)
         self.assertEqual(posts[0][1]["parts"][0]["type"], "text")
+
+    def test_opencode_visible_synthetic_mode_is_opt_in(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "12345"
+        os.environ["AI_COLLAB_OPENCODE_SYNTHETIC"] = "1"
+        posts = []
+
+        def fake_poster(url, payload, **kwargs):
+            posts.append((url, payload, kwargs))
+            return 200, "ok"
+
+        def fake_getter(url, **kwargs):
+            if "/project/current" in url:
+                return 200, {"worktree": "/tmp/project"}
+            if url.endswith("/session"):
+                return 200, [{"id": "ses_test", "directory": "/tmp/project"}]
+            return 404, ""
+
+        result = _mod.run_opencode_visible_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            timeout=10,
+            poster=fake_poster,
+            getter=fake_getter,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["adapter_name"], "opencode-synthetic")
+        self.assertEqual(posts[0][1]["parts"][0]["synthetic"], True)
 
     def test_visible_adapter_routes_opencode(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"

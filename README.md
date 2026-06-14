@@ -281,7 +281,7 @@ One-line overview of every AI active on this project — name, last update, and 
 
 ### `/collab assign [ai-name] [task description]`
 
-Delegate a task to another AI without leaving your Claude session. Writes `.ai-collab/inbox-{ai-name}.md` with `status: unread`. The daemon records a wake event for that agent and **by default dispatches the `visible` adapter automatically** — for OpenCode it posts a synthetic prompt to the running TUI so the agent starts working in its visible tab without you typing anything. The worker reads the inbox, executes the task, and marks it `status: done`. No manual activation needed after `curl … | bash`.
+Delegate a task to another AI without leaving your Claude session. Writes `.ai-collab/inbox-{ai-name}.md` with `status: unread`. The daemon records a wake event for that agent and **by default dispatches the `visible` adapter automatically** — for OpenCode it now posts a visible prompt to the running TUI so the user can see the task arrive before the worker reads the inbox, executes the task, and marks it `status: done`. No manual activation needed after `curl … | bash`.
 
 ```
 /collab assign codex publish v1.2.0 to npm and tag the release on GitHub
@@ -509,6 +509,7 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_CLAUDE_BIN` | _(auto-detected)_ | Override the `claude` executable path used by the CLI adapter. |
 | `AI_COLLAB_CODEX_ACP_COMMAND` | `npx -y @zed-industries/codex-acp@latest` | Override the command used by the opt-in `codex-acp` adapter. |
 | `AI_COLLAB_OPENCODE_PORTS` | _(auto-detected)_ | Optional comma-separated OpenCode TUI ports for `opencode-visible`. Normally auto-detected from running `opencode --port` processes. |
+| `AI_COLLAB_OPENCODE_SYNTHETIC` | _(off)_ | Set to `1` to restore hidden OpenCode wakeup prompts (`synthetic: true`). Default is off so delegated tasks appear in the OpenCode UI instead of completing behind the user's back. |
 | `AI_COLLAB_ANTIGRAVITY_BIN` | _(auto-detected)_ | Override the `antigravity` executable used by `antigravity-chat`. |
 | `AI_COLLAB_ANTIGRAVITY_MODE` | `agent` | Mode passed to `antigravity chat --mode` for visible Codex/Antigravity wakeups. |
 
@@ -518,7 +519,7 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 
 Behavior:
 
-- `@opencode` or `inbox-opencode.md` uses the OpenCode server's `POST /session/{id}/prompt_async` endpoint with `synthetic: true`. The synthetic prompt is processed by the model but is **not rendered in the chat history** — the user only sees the agent's response in its visible tab. This is the equivalent of Claude Code's `<task-notification>` primitive for OpenCode, validated end-to-end against the live TUI.
+- `@opencode` or `inbox-opencode.md` uses the OpenCode server's `POST /session/{id}/prompt_async` endpoint. By default the wakeup prompt is **not synthetic**, so it appears in the OpenCode UI and the user can see the delegated task arrive. Set `AI_COLLAB_OPENCODE_SYNTHETIC=1` only if you explicitly prefer hidden prompts and accept that this can feel like background/headless work when no visible response appears.
 - `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent`. **Codex visible-tab wakeup remains degraded** — see "Known limitations" below.
 - If no visible panel/port/session exists, the adapter fails safely and normal retry/backoff applies.
 
@@ -540,7 +541,7 @@ Until OpenAI or Antigravity publishes a supported injection surface, Codex has t
 | `codex-acp` (opt-in) | Spawns a fresh ACP Codex worker, 100% reliable execution | Runs invisibly, not in the user's open panel |
 | Manual (1 click) | User types "lee tu inbox" in the tab | 100% reliable + visible, requires one human click |
 
-OpenCode and Claude Code remain fully invisible-autonomous. Full investigation: `claude-acp-active-codex-analysis.md`, `codex-bridge-blocker.md`, `codex-acp-investigation.md`, `opencode-codex-bridge-investigation.md` (these live in the `.ai-collab/` of any project where the team has investigated — they document the dead-end analysis so future contributors do not retry the same paths).
+OpenCode and Claude Code remain automatable, but AI Collab treats visible trust as the default: OpenCode wakeups are visible unless `AI_COLLAB_OPENCODE_SYNTHETIC=1` is explicitly enabled. Full investigation: `claude-acp-active-codex-analysis.md`, `codex-bridge-blocker.md`, `codex-acp-investigation.md`, `opencode-codex-bridge-investigation.md` (these live in the `.ai-collab/` of any project where the team has investigated — they document the dead-end analysis so future contributors do not retry the same paths).
 
 ### Codex ACP wakeup (opt-in)
 
