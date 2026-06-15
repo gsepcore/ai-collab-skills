@@ -43,6 +43,11 @@ your-project/
     ├── inbox-codex.md                ← tasks assigned specifically to Codex
     ├── inbox-opencode.md             ← tasks assigned specifically to OpenCode
     ├── thread-20260512-task.md       ← agent-to-agent conversation for a task
+    ├── live/                         ← semantic observer snapshots + automatic screenshots
+    │   ├── summary.json              ← current status for every registered agent
+    │   ├── opencode.json             ← inferred live state for OpenCode
+    │   ├── opencode.agent.json       ← OpenCode's self-reported command/edit state
+    │   └── screenshots/              ← automatic screenshots, ignored by git
     ├── claude-code-20260511-143022.md ← Claude Code's log
     ├── cursor-native-20260511-141500.md ← Cursor native chat log
     ├── codex-20260511-141000.md      ← Codex's log
@@ -174,7 +179,7 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-That's it. The installer sets up **all ten components** automatically:
+That's it. The installer sets up **all eleven components** automatically:
 
 | Component | What it does | Where |
 |-----------|-------------|-------|
@@ -184,6 +189,7 @@ That's it. The installer sets up **all ten components** automatically:
 | 🧭 Auto-onboard | Detects a new agent's first log and appends its rules snippet + TEAM entry | `~/.claude/ai-collab-auto-onboard.py` |
 | 🧩 Project onboarding | Registers agents, IDE/container, model, TEAM, inbox, and rules files | `~/.claude/ai-collab-project-setup.py` |
 | 🎛️ Run orchestrator | Creates director-selected implementation runs, safe tasks, and agent threads | `~/.claude/ai-collab-orchestrate.py` |
+| 👁️ Live observer | Writes `.ai-collab/live/` semantic snapshots, alerts, and automatic screenshots | `~/.claude/ai-collab-observer.py` |
 | 🩺 Doctor script | Verifies installed files, hooks, daemon, and queues | `~/.claude/ai-collab-doctor.py` |
 | 🪝 `SessionStart` hook | Loads `CONTEXT.md` + notifications on session open | `~/.claude/settings.json` |
 | 🪝 `UserPromptSubmit` hook | Shows pending AI notifications before each message | `~/.claude/settings.json` |
@@ -414,17 +420,18 @@ Remove stale session logs.
 
 > **This is all set up automatically by the installer.** No manual steps.
 
-Nine components keep Claude informed and able to dispatch inbox tasks:
+Ten components keep Claude informed and able to dispatch inbox tasks:
 
 1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
 3. **Notification reader script** — `~/.claude/ai-collab-check-notifications.py` is invoked by the `UserPromptSubmit` hook. It uses an `fcntl` lock to coordinate with the daemon, **filters notifications by active project**, caps output to 10 items / 500 chars per message / 4 KB total, drops notifications older than 24 h, defends against malformed JSON, and always exits 0 (never blocks your prompt). All limits are tunable — see [Environment variables](#environment-variables) below.
 4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` and `thread-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; thread mentions use `reason: thread-mention`. **By default it uses `visible`** so OpenCode/Codex get invisible synthetic wakeups in their running panels with zero manual activation; you can downgrade to `cli` (headless execution) or `notify-only` (safe logging only) via `AI_COLLAB_WAKEUP_ADAPTER`.
-5. **Project onboarding** — `~/.claude/ai-collab-project-setup.py` creates the agent-first project manifest (`TEAM.md`, `agents.json`), welcome inbox, and runtime rules files. It records agent, container, and model explicitly so a fresh project does not depend on guesswork.
-6. **Auto-onboard detector** — `~/.claude/ai-collab-auto-onboard.py` runs from the daemon when a new `{slug}-{YYYYMMDD-HHMMSS}.md` log appears. Known slugs get an agent-specific `AI-COLLAB-START agent={slug}` rules block if missing, plus a merged `.ai-collab/TEAM.md` roster entry. Unknown slugs produce a low-priority `.ai-collab/inbox-all.md` notice telling Claude Code to run `/collab onboard {slug}`. The operation is idempotent and never overwrites existing rules content.
-7. **Run orchestrator** — `~/.claude/ai-collab-orchestrate.py` creates `.ai-collab/runs/{run_id}/`, records the selected director, writes safe task assignments to normal inboxes, and appends task-thread messages that agents can answer naturally.
-8. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
-9. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
+5. **Live observer** — `~/.claude/ai-collab-observer.py` writes `.ai-collab/live/{agent}.json` snapshots every daemon tick. It combines inbox status, latest logs, agent self-reports, running process hints, git dirtiness, stale-claim alerts, and automatic screenshots.
+6. **Project onboarding** — `~/.claude/ai-collab-project-setup.py` creates the agent-first project manifest (`TEAM.md`, `agents.json`), welcome inbox, and runtime rules files. It records agent, container, and model explicitly so a fresh project does not depend on guesswork.
+7. **Auto-onboard detector** — `~/.claude/ai-collab-auto-onboard.py` runs from the daemon when a new `{slug}-{YYYYMMDD-HHMMSS}.md` log appears. Known slugs get an agent-specific `AI-COLLAB-START agent={slug}` rules block if missing, plus a merged `.ai-collab/TEAM.md` roster entry. Unknown slugs produce a low-priority `.ai-collab/inbox-all.md` notice telling Claude Code to run `/collab onboard {slug}`. The operation is idempotent and never overwrites existing rules content.
+8. **Run orchestrator** — `~/.claude/ai-collab-orchestrate.py` creates `.ai-collab/runs/{run_id}/`, records the selected director, writes safe task assignments to normal inboxes, and appends task-thread messages that agents can answer naturally.
+9. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
+10. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
    - `UserPromptSubmit` — runs `ai-collab-check-notifications.py` to show pending notifications for the **active project only**, zero token cost at idle
    - `Stop` — auto-regenerates `CONTEXT.md` after every Claude response using a Python script
@@ -497,6 +504,15 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Set to `1` (in the daemon's launchd plist `EnvironmentVariables`) to fire macOS Notification Center banners when other AIs complete tasks. Persistent layer that works even when Claude Code is closed — see [macOS notifications](#macos-notifications-survives-claude-close-mac-sleep-and-restart). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | macOS sound name (e.g. `Tink`, `Glass`, `Pop`, `Hero`) to play with each banner. Only effective when `AI_COLLAB_OS_NOTIFY=1`. Leave unset for silent banners. |
 | `AI_COLLAB_DOCTOR_STRICT` | _(off)_ | Set to `1` so `ai-collab-doctor.py` exits nonzero when required install files/settings are broken. Warnings remain non-fatal. |
+| `AI_COLLAB_OBSERVER` | `1` | Enables semantic live snapshots in `.ai-collab/live/`. Set `0` to disable the observer while keeping the daemon running. |
+| `AI_COLLAB_OBSERVER_ACTIVE_SECONDS` | `300` | How recently a log or self-report must update before an agent is considered active. |
+| `AI_COLLAB_OBSERVER_STALE_CLAIM_SECONDS` | `1800` | Claimed/running inbox age before the observer emits a stale-claim director alert. |
+| `AI_COLLAB_OBSERVER_MAX_EVENTS` | `200` | Maximum observer JSONL events kept per `.ai-collab/live/{agent}.events.jsonl` file. |
+| `AI_COLLAB_OBSERVER_SCREENSHOTS` | `1` | Automatic macOS screenshots in `.ai-collab/live/screenshots/`. Set `0` to disable. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_MODE` | `frontmost` | Screenshot mode: `frontmost` captures the front window when macOS permissions allow it; `screen` captures the full screen. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` | `300` | Minimum seconds between automatic screenshots per project. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY` | `1` | Only capture when at least one agent is active/waiting/blocked/running. Set `0` to capture on every observer interval. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP` | `20` | Maximum screenshots retained per project before older PNGs are pruned. |
 | `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Wakeup adapter mode. Default `visible` targets active visible panels when supported. Other options: `opencode-visible`, `kilo-visible`, `hermes-uri`, `antigravity-chat`, `acp`, `codex-acp`, `kimi-acp`, `kilo-acp`, `hermes-acp`, `cli`, or `notify-only`. |
 | `AI_COLLAB_WAKEUP_MAX_ATTEMPTS` | `3` | Maximum wake attempts before an unread inbox auto-transitions to `failed`. |
 | `AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT` | `120` | Seconds before a CLI adapter run is considered failed. |
@@ -522,6 +538,45 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_HERMES_URI_TEMPLATE` | `vscode://layerdynamics.hermes-vscode?prompt={prompt}` | URI template for `hermes-uri`. `{prompt}` is URL-encoded and prefilled into the Hermes chat panel; the user may still need to press send. |
 | `AI_COLLAB_ANTIGRAVITY_BIN` | _(auto-detected)_ | Override the `antigravity` executable used by `antigravity-chat`. |
 | `AI_COLLAB_ANTIGRAVITY_MODE` | `agent` | Mode passed to `antigravity chat --mode` for visible Codex/Antigravity wakeups. |
+
+### Semantic live observer and screenshots
+
+The daemon now gives the director "semantic eyes" for every onboarded project. Every 15 seconds it writes live project-local state:
+
+```text
+.ai-collab/live/
+  summary.json
+  opencode.json
+  opencode.agent.json
+  opencode.agent.events.jsonl
+  opencode.events.jsonl
+  director-alerts.jsonl
+  screenshots/
+```
+
+`{agent}.json` is the observer's merged view: inbox status, current task, latest log sections, self-reported command/edit phase from `{agent}.agent.json`, recent command/test/edit events from `{agent}.agent.events.jsonl`, running process hints, git dirty files, thread mentions, and alerts. `{agent}.events.jsonl` is observer-owned history for status changes, process changes, dirty-file changes, and screenshots.
+
+The onboarding snippets instruct each agent to self-report before commands and edits:
+
+```json
+{
+  "agent": "opencode",
+  "updated": "2026-06-15T12:00:00Z",
+  "phase": "command",
+  "current_command": "python3 -m unittest install/test_wakeup.py",
+  "task_id": "20260615-opencode-fix-tests",
+  "files_in_scope": ["install/ai-collab-wakeup.py"]
+}
+```
+
+Screenshots are **on by default**. To disable them on a machine or project:
+
+```bash
+AI_COLLAB_OBSERVER_SCREENSHOTS=0 \
+bash install/install.sh
+```
+
+On macOS, the first capture may trigger the normal Screen Recording permission prompt. If permission is denied, semantic snapshots still work; only screenshot events report failure. Screenshots are throttled by `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` and pruned by `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP`.
 
 ### Visible wakeup (default)
 

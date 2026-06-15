@@ -38,6 +38,11 @@ tu-proyecto/
     ├── inbox-all.md                  ← tareas broadcast para cualquier IA
     ├── inbox-codex.md                ← tareas asignadas específicamente a Codex
     ├── inbox-opencode.md             ← tareas asignadas específicamente a OpenCode
+    ├── live/                         ← snapshots semánticos + screenshots automáticos
+    │   ├── summary.json              ← estado actual de cada agente registrado
+    │   ├── opencode.json             ← estado vivo inferido para OpenCode
+    │   ├── opencode.agent.json       ← estado reportado por OpenCode
+    │   └── screenshots/              ← capturas automáticas, ignoradas por git
     ├── claude-20260511-143022.md     ← log de Claude Code
     ├── cursor-20260511-141500.md     ← log de Cursor
     ├── codex-20260511-141000.md      ← log de Codex
@@ -119,6 +124,7 @@ Cada archivo de reglas de los workers (creado por `/collab setup` o pegado desde
 
 1. **Inbox check antes de cada respuesta** — releer `inbox-{ai}.md` e `inbox-all.md`, ejecutar cualquier tarea con `status: unread`, marcarla `status: done` vía escritura atómica.
 2. **Log automático después de cada respuesta** — guardar en `.ai-collab/{ai}-{timestamp}.md` con frontmatter y secciones estándar.
+3. **Observabilidad live durante el trabajo** — actualizar `.ai-collab/live/{ai}.agent.json` antes/después de comandos, tests, ediciones, bloqueos y handoffs.
 
 Estas reglas son no negociables en cada snippet, así los workers se auto-orientan sin que el usuario tenga que recordarles nada.
 
@@ -507,6 +513,15 @@ Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`,
 | `AI_COLLAB_NO_DAEMON` | _(off)_ | Define `1` para saltar el inicio del daemon durante install (feature de file-watching deshabilitada). |
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Define `1` (en el `EnvironmentVariables` del plist launchd del daemon) para disparar banners del Notification Center de macOS cuando otras IAs completen tareas. Capa persistente que funciona incluso con Claude Code cerrado — ver [Notificaciones macOS](#notificaciones-macos-sobreviven-cierre-de-claude-sleep-y-reinicio). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | Nombre de sonido de macOS (ej. `Tink`, `Glass`, `Pop`, `Hero`) que se reproduce con cada banner. Solo efectivo cuando `AI_COLLAB_OS_NOTIFY=1`. Sin definir = banners silenciosos. |
+| `AI_COLLAB_OBSERVER` | `1` | Activa snapshots semánticos en `.ai-collab/live/`. Define `0` para apagar el observer sin detener el daemon. |
+| `AI_COLLAB_OBSERVER_ACTIVE_SECONDS` | `300` | Ventana para considerar activo a un agente por log o self-report reciente. |
+| `AI_COLLAB_OBSERVER_STALE_CLAIM_SECONDS` | `1800` | Edad de un inbox `claimed`/`running` antes de emitir alerta de claim estancado. |
+| `AI_COLLAB_OBSERVER_MAX_EVENTS` | `200` | Máximo de eventos JSONL del observer retenidos por `.ai-collab/live/{agente}.events.jsonl`. |
+| `AI_COLLAB_OBSERVER_SCREENSHOTS` | `1` | Capturas automáticas macOS en `.ai-collab/live/screenshots/`. Define `0` para desactivarlas. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_MODE` | `frontmost` | Modo de captura: `frontmost` captura la ventana frontal si macOS lo permite; `screen` captura toda la pantalla. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` | `300` | Segundos mínimos entre capturas automáticas por proyecto. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY` | `1` | Captura solo si hay al menos un agente activo/en espera/bloqueado/ejecutando. Define `0` para capturar en cada intervalo. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP` | `20` | Máximo de PNGs retenidos por proyecto antes de borrar los más antiguos. |
 | `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Modo de wakeup. `visible` intenta usar paneles visibles cuando existe integración. Opciones: `opencode-visible`, `kilo-visible`, `hermes-uri`, `antigravity-chat`, `acp`, `codex-acp`, `kimi-acp`, `kilo-acp`, `hermes-acp`, `cli`, `notify-only`. |
 | `AI_COLLAB_WAKEUP_CLI_TARGETS` | `codex,opencode,claude,claude-code,hermes,kimi,kilo` | Allowlist opcional de agentes que pueden ejecutarse por CLI/headless. |
 | `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode,kilo,hermes` | Allowlist opcional de agentes para wakeups visibles. Si no se define, usa `AI_COLLAB_WAKEUP_CLI_TARGETS` cuando exista. |
@@ -520,6 +535,45 @@ Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`,
 | `AI_COLLAB_KIMI_ACP_COMMAND` | `kimi acp` | Comando para `kimi-acp` / `acp`. Los binarios empaquetados en extensiones de Antigravity se autodetectan. |
 | `AI_COLLAB_KILO_ACP_COMMAND` | `kilo acp` | Comando para `kilo-acp` / `acp`. |
 | `AI_COLLAB_HERMES_ACP_COMMAND` | `hermes acp` | Comando para `hermes-acp` / `acp`. |
+
+### Observer semántico y capturas automáticas
+
+El daemon también escribe "ojos semánticos" del proyecto cada 15 segundos:
+
+```text
+.ai-collab/live/
+  summary.json
+  opencode.json
+  opencode.agent.json
+  opencode.agent.events.jsonl
+  opencode.events.jsonl
+  director-alerts.jsonl
+  screenshots/
+```
+
+`{agente}.json` es la vista combinada del observer: estado del inbox, tarea actual, secciones del último log, fase/comando reportado por `{agente}.agent.json`, eventos recientes de comandos/tests/ediciones desde `{agente}.agent.events.jsonl`, pistas de procesos activos, archivos dirty en git, menciones en threads y alertas. `{agente}.events.jsonl` conserva el historial del observer para cambios de estado, procesos, archivos dirty y screenshots.
+
+Los snippets de onboarding piden a cada agente reportar antes de comandos y ediciones:
+
+```json
+{
+  "agent": "opencode",
+  "updated": "2026-06-15T12:00:00Z",
+  "phase": "command",
+  "current_command": "python3 -m unittest install/test_wakeup.py",
+  "task_id": "20260615-opencode-fix-tests",
+  "files_in_scope": ["install/ai-collab-wakeup.py"]
+}
+```
+
+Las capturas están **activas por defecto**. Para desactivarlas en una máquina o proyecto:
+
+```bash
+AI_COLLAB_OBSERVER_SCREENSHOTS=0 \
+bash install/install.sh
+```
+
+En macOS, la primera captura puede pedir permiso de Screen Recording. Si el permiso se niega, los snapshots semánticos siguen funcionando; solo fallan los eventos de screenshot. Las capturas se limitan con `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` y se podan con `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP`.
 
 ### Wakeup visible y ACP
 

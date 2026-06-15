@@ -12,9 +12,10 @@
 #    6. Auto-onboard script      → ~/.claude/ai-collab-auto-onboard.py
 #    7. Project onboarding       → ~/.claude/ai-collab-project-setup.py
 #    8. Multi-agent orchestrator → ~/.claude/ai-collab-orchestrate.py
-#    9. Doctor script            → ~/.claude/ai-collab-doctor.py
-#   10. Background daemon        → launchd (macOS) / cron (Linux)
-#   11. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#    9. Live observer            → ~/.claude/ai-collab-observer.py
+#   10. Doctor script            → ~/.claude/ai-collab-doctor.py
+#   11. Background daemon        → launchd (macOS) / cron (Linux)
+#   12. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -128,12 +129,14 @@ copy_or_download "install/ai-collab-wakeup.py"                "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-auto-onboard.py"          "$CLAUDE_DIR/ai-collab-auto-onboard.py"
 copy_or_download "install/ai-collab-project-setup.py"         "$CLAUDE_DIR/ai-collab-project-setup.py"
 copy_or_download "install/ai-collab-orchestrate.py"           "$CLAUDE_DIR/ai-collab-orchestrate.py"
+copy_or_download "install/ai-collab-observer.py"              "$CLAUDE_DIR/ai-collab-observer.py"
 copy_or_download "install/ai-collab-doctor.py"                "$CLAUDE_DIR/ai-collab-doctor.py"
 chmod +x "$CLAUDE_DIR/ai-collab-daemon.sh"
 chmod +x "$CLAUDE_DIR/ai-collab-wakeup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-auto-onboard.py"
 chmod +x "$CLAUDE_DIR/ai-collab-project-setup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-orchestrate.py"
+chmod +x "$CLAUDE_DIR/ai-collab-observer.py"
 chmod +x "$CLAUDE_DIR/ai-collab-doctor.py"
 
 green "Daemon script        → $CLAUDE_DIR/ai-collab-daemon.sh"
@@ -143,6 +146,7 @@ green "Wakeup detector      → $CLAUDE_DIR/ai-collab-wakeup.py"
 green "Auto-onboard script  → $CLAUDE_DIR/ai-collab-auto-onboard.py"
 green "Project onboarding   → $CLAUDE_DIR/ai-collab-project-setup.py"
 green "Run orchestrator     → $CLAUDE_DIR/ai-collab-orchestrate.py"
+green "Live observer        → $CLAUDE_DIR/ai-collab-observer.py"
 green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"
 
 # ── 3. Start background daemon ───────────────────────────────────────────────
@@ -215,6 +219,15 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
   add_plist_env "AI_COLLAB_OPENCODE_SYNTHETIC" "${AI_COLLAB_OPENCODE_SYNTHETIC:-}"
   add_plist_env "AI_COLLAB_ANTIGRAVITY_BIN" "${AI_COLLAB_ANTIGRAVITY_BIN:-}"
   add_plist_env "AI_COLLAB_ANTIGRAVITY_MODE" "${AI_COLLAB_ANTIGRAVITY_MODE:-}"
+  add_plist_env "AI_COLLAB_OBSERVER" "${AI_COLLAB_OBSERVER:-}"
+  add_plist_env "AI_COLLAB_OBSERVER_ACTIVE_SECONDS" "${AI_COLLAB_OBSERVER_ACTIVE_SECONDS:-}"
+  add_plist_env "AI_COLLAB_OBSERVER_STALE_CLAIM_SECONDS" "${AI_COLLAB_OBSERVER_STALE_CLAIM_SECONDS:-}"
+  add_plist_env "AI_COLLAB_OBSERVER_MAX_EVENTS" "${AI_COLLAB_OBSERVER_MAX_EVENTS:-}"
+  add_plist_env "AI_COLLAB_OBSERVER_SCREENSHOTS" "${AI_COLLAB_OBSERVER_SCREENSHOTS:-}"
+  add_plist_env "AI_COLLAB_OBSERVER_SCREENSHOT_MODE" "${AI_COLLAB_OBSERVER_SCREENSHOT_MODE:-}"
+  add_plist_env "AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL" "${AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL:-}"
+  add_plist_env "AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY" "${AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY:-}"
+  add_plist_env "AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP" "${AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP:-}"
 
   ENV_BLOCK=""
   if [[ -n "$ENV_ITEMS" ]]; then
@@ -426,6 +439,7 @@ echo "    📨 Wakeup detector     — detects unread inbox tasks"
 echo "    🧭 Auto-onboard        — registers new agents after their first log"
 echo "    🧩 Project onboarding  — registers agents, IDE/container, model, rules"
 echo "    🎛️  Run orchestrator    — director-selected multi-agent implementation runs"
+echo "    👁️  Live observer       — writes .ai-collab/live semantic state snapshots"
 echo "    🩺 Doctor script       — verifies install health"
 echo "    📚 /collab skill       — collaboration commands available in Claude Code"
 echo ""

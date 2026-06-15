@@ -13,6 +13,8 @@ Shared filesystem protocol so every AI coding agent working on the same project 
 
 Each AI writes a Markdown log to `{project-root}/.ai-collab/`. Any AI with filesystem access to the project can read those logs. Claude manages its own log via this skill. Other agents (OpenCode, Codex, Aider, Cursor native chat, etc.) write via agent-specific rules installed by `~/.claude/ai-collab-project-setup.py`.
 
+The installed daemon also writes semantic live snapshots to `{project-root}/.ai-collab/live/`. These are the "eyes" layer: current inbox/task state, latest log summary, self-reported commands/edits from each agent, process hints, git dirty files, director alerts, and automatic screenshots unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`.
+
 **Conceptual model:** this skill is agent-first. `agent` is the runtime doing work, `container` is the IDE/terminal where it is visible, and `model` is metadata about the LLM behind it. Do not treat IDEs and agents as the same thing.
 
 ---
@@ -67,10 +69,33 @@ One-line overview of every AI active on this project.
 
 **Steps:**
 1. List all `.md` files in `{root}/.ai-collab/` except `PROTOCOL.md`
-2. For each file print one line:
+2. If `{root}/.ai-collab/live/summary.json` exists, read it and prefer its status/current task/current command for each agent.
+3. For each file/live snapshot print one line:
    `[emoji] [AI name] — [filename] — last update: [relative time]`
    - 🟢 < 1h · 🟡 1–4h · 🔴 > 4h
-3. If directory empty or missing → "No sessions found. Run `/collab setup`."
+4. If directory empty or missing → "No sessions found. Run `/collab setup`."
+
+## Command: /collab observe
+
+Show the live semantic observer view for the project.
+
+**Steps:**
+1. Find project root: `git rev-parse --show-toplevel 2>/dev/null || pwd`
+2. Check `{root}/.ai-collab/live/summary.json`
+   - If missing, say "No live observer snapshots found yet. The daemon may not be installed/running, or AI_COLLAB_OBSERVER=0."
+3. Read `summary.json`, then for each agent read `{root}/.ai-collab/live/{agent}.json` if present.
+4. Print one compact block per agent:
+   - status
+   - current task id
+   - current command
+   - phase
+   - inbox status
+   - latest log path/mtime
+   - dirty files count
+   - alerts
+   - screenshot path if present
+5. Read `{root}/.ai-collab/live/director-alerts.jsonl` if present and print the latest 5 alerts first.
+6. If screenshots are not present, mention they are enabled by default but may require macOS Screen Recording permission, a supported macOS host, or `AI_COLLAB_OBSERVER_SCREENSHOTS` not being set to `0`.
 
 ---
 

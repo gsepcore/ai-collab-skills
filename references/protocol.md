@@ -22,6 +22,7 @@ It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/inbox-all.
 3. Every AI checks its inbox on every response — `inbox-{ai-name}.md` and `inbox-all.md` for direct task assignments from the orchestrating AI.
 4. Every AI treats `thread-{task_id}.md` as the task conversation channel — `@slug` mentions can wake the mentioned agent when the daemon and adapter are running.
 5. Directed implementation runs have one active director in `.ai-collab/runs/{run_id}/director.json`; all other agents respect that director for the run.
+6. Every AI keeps live observability current in `.ai-collab/live/{agent}.agent.json` before and after commands, tests, file edits, blockers, and handoffs.
 
 ---
 
@@ -33,6 +34,7 @@ All AIs write Markdown session logs to `{project-root}/.ai-collab/`.
 - Any AI with filesystem access can read any log
 - The daemon (if installed) detects new/updated logs within 15 seconds and notifies the user
 - The daemon also scans `inbox-*.md` and `thread-*.md`: unread inboxes target an agent mailbox, while `@slug` mentions in threads target that agent's monitor/adapter path.
+- The daemon also writes semantic live snapshots to `.ai-collab/live/{agent}.json`, `.ai-collab/live/summary.json`, and `.ai-collab/live/director-alerts.jsonl`. Screenshots are written under `.ai-collab/live/screenshots/` by default unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`.
 
 Every log should include these frontmatter fields when the agent supports them:
 
@@ -41,6 +43,37 @@ agent: opencode
 container: antigravity
 model: minimax/m2.7
 ```
+
+---
+
+## Live observability contract
+
+When your agent slug is `{agent}`, keep these files up to date:
+
+- `.ai-collab/live/{agent}.agent.json` — your current self-reported state.
+- `.ai-collab/live/{agent}.agent.events.jsonl` — append-only command/test/edit events you report.
+- `.ai-collab/live/{agent}.events.jsonl` — observer-owned status/process/screenshot events; do not write to this file directly.
+
+Before running a command, atomically write `.agent.json` like:
+
+```json
+{
+  "agent": "opencode",
+  "updated": "2026-06-15T12:00:00Z",
+  "phase": "command",
+  "current_command": "python3 -m unittest install/test_wakeup.py",
+  "task_id": "task-123",
+  "files_in_scope": ["install/ai-collab-wakeup.py"]
+}
+```
+
+After the command finishes, append one JSON line to `.agent.events.jsonl`:
+
+```json
+{"timestamp":"2026-06-15T12:00:10Z","agent":"opencode","event":"command","command":"python3 -m unittest install/test_wakeup.py","exit_code":0,"output_excerpt":"Ran 43 tests in 0.6s OK"}
+```
+
+Use `phase: "editing"` before file edits, `phase: "blocked"` with a `blocker` when stuck, and `phase: "idle"` or `phase: "done"` when finished. Use temp-file + rename for `.agent.json`.
 
 ---
 

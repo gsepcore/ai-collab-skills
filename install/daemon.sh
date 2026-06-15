@@ -7,6 +7,7 @@ LAST_CHECK_FILE="$HOME/.ai-collab-last-check"
 LOG_FILE="/tmp/ai-collab-daemon.log"
 WAKEUP_SCRIPT="$HOME/.claude/ai-collab-wakeup.py"
 AUTO_ONBOARD_SCRIPT="$HOME/.claude/ai-collab-auto-onboard.py"
+OBSERVER_SCRIPT="$HOME/.claude/ai-collab-observer.py"
 MAX_NOTIFICATIONS=50
 
 log() { echo "[AI-COLLAB] $(date -u +"%Y-%m-%dT%H:%M:%SZ") $*" >> "$LOG_FILE"; }
@@ -49,6 +50,14 @@ while true; do
         [ -f "$thread" ] || continue
         python3 "$WAKEUP_SCRIPT" "$PROJECT" "$thread" >/dev/null 2>>"$LOG_FILE" || log "Warning: thread wakeup scan failed for $thread"
       done
+    fi
+
+    # Live observer — writes .ai-collab/live/*.json snapshots with semantic
+    # state, process hints, git dirtiness, stale-claim alerts, and optional
+    # screenshots. It is project-local and can be disabled with
+    # AI_COLLAB_OBSERVER=0.
+    if [ -x "$OBSERVER_SCRIPT" ] && [ "${AI_COLLAB_OBSERVER:-1}" != "0" ]; then
+      python3 "$OBSERVER_SCRIPT" "$COLLAB_DIR" >/dev/null 2>>"$LOG_FILE" || log "Warning: observer scan failed for $COLLAB_DIR"
     fi
 
     for f in "$COLLAB_DIR"/*.md; do

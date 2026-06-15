@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -248,6 +249,8 @@ def build_snippet(agent: str, container: str, model: str, project: str) -> str:
     role = AGENT_CATALOG.get(agent, AGENT_CATALOG["generic"])["role"]
     inbox = f".ai-collab/inbox-{agent}.md"
     log_path = f".ai-collab/{agent}-{{YYYYMMDD-HHMMSS}}.md"
+    live_report = f".ai-collab/live/{agent}.agent.json"
+    live_events = f".ai-collab/live/{agent}.agent.events.jsonl"
     return f"""{START_MARKER.format(agent=agent)}
 ## AI Collab Protocol
 
@@ -264,7 +267,8 @@ Mandatory behavior:
 2. Read `.ai-collab/TEAM.md` to know the registered agents, their containers, models, and rule files.
 3. Read your direct inbox `{inbox}` and `.ai-collab/inbox-all.md`. If either has `status: unread`, claim it before doing any other work, execute it, then mark it `status: done`.
 4. Before editing files, read the latest logs and respect every `Do Not Touch (Avoid Conflicts)` section.
-5. After every response, create or update your session log at `{log_path}`.
+5. Keep live observability updated in `{live_report}` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
+6. After every response, create or update your session log at `{log_path}`.
 
 Inbox claim contract:
 - Change `status: unread` to `status: claimed`.
@@ -296,6 +300,14 @@ Required log sections:
 - `## Do Not Touch (Avoid Conflicts)`
 - `## Handoff Note`
 
+Live observability contract:
+- Before running a shell command, atomically write `{live_report}` with JSON fields: `agent`, `project`, `updated`, `phase: "command"`, `current_command`, `task_id` if any, and `files_in_scope`.
+- After the command finishes, append one JSON line to `{live_events}` with: `timestamp`, `agent`, `event: "command"`, `command`, `exit_code`, and a short `output_excerpt` when available.
+- Before editing files, update `{live_report}` with `phase: "editing"` and `files_in_scope`.
+- When blocked, set `phase: "blocked"` and include `blocker`.
+- When idle or finished, set `phase: "idle"` or `phase: "done"` with a concise `summary`.
+- Use atomic writes for `{live_report}` (temp file + rename). Append-only is OK for `{live_events}`.
+
 Write only in English or the user's language. Do not mix unrelated languages.
 {END_MARKER.format(agent=agent)}
 """
@@ -303,8 +315,19 @@ Write only in English or the user's language. Do not mix unrelated languages.
 
 def append_snippet(path: Path, agent: str, snippet: str) -> str:
     start = START_MARKER.format(agent=agent)
+    end = END_MARKER.format(agent=agent)
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     if start in existing:
+        pattern = re.compile(
+            re.escape(start) + r".*?" + re.escape(end),
+            flags=re.DOTALL,
+        )
+        updated = pattern.sub(snippet.rstrip(), existing, count=1)
+        if updated != existing:
+            if not updated.endswith("\n"):
+                updated += "\n"
+            atomic_write(path, updated)
+            return "updated"
         return "unchanged"
     content = existing
     if content and not content.endswith("\n\n"):

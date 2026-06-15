@@ -67,6 +67,8 @@ class TestProjectSetup(unittest.TestCase):
         rules = (self.root / ".opencode" / "rules" / "ai-collab.md").read_text(encoding="utf-8")
         self.assertIn("AI-COLLAB-START agent=opencode", rules)
         self.assertIn("inbox-opencode.md", rules)
+        self.assertIn(".ai-collab/live/opencode.agent.json", rules)
+        self.assertIn(".ai-collab/live/opencode.agent.events.jsonl", rules)
 
     def test_idempotent_rerun_does_not_duplicate_snippets(self):
         self.setup()
@@ -78,6 +80,20 @@ class TestProjectSetup(unittest.TestCase):
         team = (self.root / ".ai-collab" / "TEAM.md").read_text(encoding="utf-8")
         self.assertEqual(team.count("- opencode"), 1)
         self.assertEqual(team.count("- codex"), 1)
+
+    def test_rerun_updates_managed_snippet_without_duplication(self):
+        self.setup()
+        agents_md = self.root / "AGENTS.md"
+        original = agents_md.read_text(encoding="utf-8")
+        older = original.replace("Live observability contract:", "Older live contract:")
+        agents_md.write_text(older, encoding="utf-8")
+
+        self.setup()
+
+        updated = agents_md.read_text(encoding="utf-8")
+        self.assertIn("Live observability contract:", updated)
+        self.assertNotIn("Older live contract:", updated)
+        self.assertEqual(updated.count("AI-COLLAB-START agent=opencode"), 1)
 
     def test_legacy_aliases_normalize_to_agent_runtime_names(self):
         self.setup(agents=("cursor", "windsurf", "copilot", "antigravity"), models={})
