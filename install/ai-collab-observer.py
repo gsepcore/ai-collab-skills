@@ -686,6 +686,14 @@ def maybe_capture_screenshot(
         completed = run_command(command, root, runner=runner, timeout=15)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"status": "failed", "reason": f"screencapture failed: {exc}"}
+    fallback_reason = ""
+    if completed.returncode != 0 and mode == "project" and rect:
+        fallback_reason = truncate((completed.stderr or completed.stdout or "rect capture failed").strip(), 500)
+        command = ["screencapture", "-x", str(path)]
+        try:
+            completed = run_command(command, root, runner=runner, timeout=15)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"status": "failed", "reason": f"screencapture fallback failed: {exc}"}
     if completed.returncode != 0:
         reason = truncate((completed.stderr or completed.stdout or "screencapture failed").strip(), 500)
         return {"status": "failed", "reason": reason}
@@ -703,6 +711,9 @@ def maybe_capture_screenshot(
         "window": window,
         "active_agents": active_agents,
     }
+    if fallback_reason:
+        marker["fallback"] = "screen-after-project-window-match"
+        marker["rect_error"] = fallback_reason
     write_json(screenshots_dir / ".last.json", marker)
     prune_screenshots(screenshots_dir, env_int("AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP", DEFAULT_MAX_SCREENSHOTS, 1))
     return {"status": "captured", **marker}

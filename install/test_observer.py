@@ -221,6 +221,26 @@ Implementing live observation.
         self.assertIn("no visible window matched", summary["screenshot"]["reason"])
         self.assertEqual(calls, [])
 
+    def test_project_screenshot_falls_back_after_project_window_match(self):
+        calls = []
+
+        def runner(command, **kwargs):
+            if command[:2] == ["osascript", "-e"]:
+                return Completed(stdout=f"Antigravity IDE\t{self.root.name}\t0,0,2048,1280\n")
+            if command[:2] == ["screencapture", "-x"]:
+                calls.append(command)
+                if "-R" in command:
+                    return Completed(returncode=1, stderr="could not create image from rect")
+                Path(command[-1]).write_bytes(b"png")
+                return Completed()
+            return self.fake_runner(command, **kwargs)
+
+        summary = _mod.observe_project(self.collab, now=self.now, runner=runner, system="Darwin")
+
+        self.assertEqual(summary["screenshot"]["status"], "captured")
+        self.assertEqual(summary["screenshot"]["fallback"], "screen-after-project-window-match")
+        self.assertEqual(len(calls), 2)
+
     def test_screenshots_can_be_disabled_with_env(self):
         os.environ["AI_COLLAB_OBSERVER_SCREENSHOTS"] = "0"
 
