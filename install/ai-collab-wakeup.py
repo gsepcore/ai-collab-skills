@@ -7,6 +7,7 @@ adapter. CLI execution is opt-in; the default adapter is notify-only.
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -21,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import base64
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,8 +40,8 @@ DEFAULT_STATE_FILE = Path.home() / ".ai-collab-wakeup-state.json"
 DEFAULT_LOG_FILE = Path("/tmp/ai-collab-wakeup.log")
 DEFAULT_ADAPTER = "visible"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
-DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude")
-DEFAULT_VISIBLE_TARGETS = ("codex", "opencode")
+DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude", "claude-code", "hermes", "kimi", "kilo")
+DEFAULT_VISIBLE_TARGETS = ("codex", "opencode", "kilo", "hermes")
 OPENCODE_SYNTHETIC_ENV = "AI_COLLAB_OPENCODE_SYNTHETIC"
 MAX_EVENTS = 200
 MENTION_RE = re.compile(r"(?<![\w.-])@([a-z][a-z0-9_-]{1,40})\b")
@@ -53,7 +55,10 @@ FALLBACK_BIN_DIRS = (
 )
 FALLBACK_BIN_GLOBS = (
     ".nvm/versions/*/*/bin",
+    ".antigravity/extensions/*/bin",
     ".antigravity/extensions/*/bin/*",
+    ".antigravity-ide/extensions/*/bin",
+    ".antigravity-ide/extensions/*/bin/*",
 )
 
 
@@ -361,7 +366,11 @@ def executable_for(target_slug: str) -> str | None:
         "codex": ["codex"],
         "opencode": ["opencode"],
         "claude": ["claude"],
+        "claude-code": ["claude"],
         "antigravity": ["antigravity"],
+        "hermes": ["hermes"],
+        "kimi": ["kimi", "kimi-cli"],
+        "kilo": ["kilo"],
     }.get(target_slug, [target_slug])
 
     for candidate in candidates:
@@ -373,9 +382,13 @@ def executable_for(target_slug: str) -> str | None:
             if fallback.exists() and os.access(fallback, os.X_OK):
                 return str(fallback)
         for pattern in FALLBACK_BIN_GLOBS:
-            for directory in Path.home().glob(pattern):
+            matches = glob.glob(pattern) if Path(pattern).is_absolute() else [str(path) for path in Path.home().glob(pattern)]
+            for match in matches:
+                directory = Path(match)
+                if directory.name == candidate and directory.exists() and os.access(directory, os.X_OK) and directory.is_file():
+                    return str(directory)
                 fallback = directory / candidate
-                if fallback.exists() and os.access(fallback, os.X_OK):
+                if fallback.exists() and os.access(fallback, os.X_OK) and fallback.is_file():
                     return str(fallback)
     return None
 
@@ -405,8 +418,12 @@ def build_cli_command(input_data: dict[str, str]) -> list[str] | None:
         ]
     if target == "opencode":
         return [exe, "run", prompt, "--dir", project_path, "--file", inbox_path]
-    if target == "claude":
+    if target in {"claude", "claude-code"}:
         return [exe, "-p", "--permission-mode", "acceptEdits", "--add-dir", project_path, prompt]
+    if target == "kimi":
+        return [exe, prompt]
+    if target == "kilo":
+        return [exe, "run", prompt, project_path]
     return [exe, prompt]
 
 
@@ -445,12 +462,40 @@ def discover_opencode_ports(runner=subprocess.run) -> list[int]:
     return deduped
 
 
-def post_json(url: str, payload: dict[str, Any], *, timeout: int) -> tuple[int, str]:
+def discover_kilo_ports(runner=subprocess.run) -> list[int]:
+    ports: list[int] = []
+    for value in csv_env("AI_COLLAB_KILO_PORTS"):
+        try:
+            ports.append(int(value))
+        except ValueError:
+            continue
+
+    commands = ps_commands(runner=runner)
+    for match in re.finditer(r"\bkilo\b.*?(?:--port(?:=|\s+))(\d+)", commands):
+        ports.append(int(match.group(1)))
+
+    deduped: list[int] = []
+    for port in ports:
+        if port not in deduped and 0 < port < 65536:
+            deduped.append(port)
+    return deduped
+
+
+def post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    timeout: int,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, str]:
     body = json.dumps(payload).encode("utf-8")
+    request_headers = {"Content-Type": "application/json"}
+    if headers:
+        request_headers.update(headers)
     request = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=request_headers,
         method="POST",
     )
     try:
@@ -478,6 +523,17 @@ def get_json(url: str, *, timeout: int) -> tuple[int, Any]:
         return exc.code, text
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         return 0, str(exc)
+
+
+def auth_headers_from_env(prefix: str) -> dict[str, str]:
+    bearer = os.environ.get(f"AI_COLLAB_{prefix}_BEARER_TOKEN")
+    if bearer:
+        return {"Authorization": f"Bearer {bearer}"}
+    basic = os.environ.get(f"AI_COLLAB_{prefix}_BASIC_AUTH")
+    if basic:
+        encoded = base64.b64encode(basic.encode("utf-8")).decode("ascii")
+        return {"Authorization": f"Basic {encoded}"}
+    return {}
 
 
 def opencode_port_project(port: int, *, timeout: int, getter=None) -> str | None:
@@ -661,6 +717,92 @@ def run_opencode_visible_adapter(
     }
 
 
+def run_kilo_visible_adapter(
+    input_data: dict[str, str],
+    *,
+    timeout: int,
+    runner=subprocess.run,
+    poster=None,
+) -> dict[str, str]:
+    poster = poster or post_json
+    guardrail = visible_guardrail(input_data, "kilo-visible")
+    if guardrail:
+        return guardrail
+    if input_data["target_slug"] != "kilo":
+        return {
+            "status": "failed",
+            "message": "kilo-visible adapter only supports target kilo",
+            "adapter_name": "kilo-visible",
+        }
+
+    ports = discover_kilo_ports(runner=runner)
+    if not ports:
+        return {
+            "status": "failed",
+            "message": "no visible Kilo server port found; open the Kilo panel first",
+            "adapter_name": "kilo-visible",
+        }
+
+    prompt = input_data["synthetic_prompt"]
+    project_path = input_data.get("project_path")
+    fast_timeout = min(timeout, 10)
+    headers = auth_headers_from_env("KILO")
+    last_error = ""
+
+    def tui_url(port: int, path: str) -> str:
+        query = {}
+        if project_path:
+            query["directory"] = project_path
+        encoded = urllib.parse.urlencode(query)
+        suffix = f"?{encoded}" if encoded else ""
+        return f"http://127.0.0.1:{port}{path}{suffix}"
+
+    for port in ports:
+        clear_status, clear_text = poster(
+            tui_url(port, "/tui/clear-prompt"),
+            {},
+            timeout=fast_timeout,
+            headers=headers,
+        )
+        if clear_status == 401:
+            last_error = (
+                f"port {port} requires auth; set AI_COLLAB_KILO_BASIC_AUTH or "
+                "AI_COLLAB_KILO_BEARER_TOKEN"
+            )
+            continue
+        if not (200 <= clear_status < 300):
+            last_error = f"port {port} clear-prompt returned {clear_status}: {clear_text}".strip()
+            continue
+        append_status, append_text = poster(
+            tui_url(port, "/tui/append-prompt"),
+            {"text": prompt},
+            timeout=fast_timeout,
+            headers=headers,
+        )
+        if not (200 <= append_status < 300):
+            last_error = f"port {port} append-prompt returned {append_status}: {append_text}".strip()
+            continue
+        submit_status, submit_text = poster(
+            tui_url(port, "/tui/submit-prompt"),
+            {},
+            timeout=fast_timeout,
+            headers=headers,
+        )
+        if 200 <= submit_status < 300:
+            return {
+                "status": "success",
+                "message": f"visible prompt submitted to Kilo TUI on port {port}",
+                "adapter_name": "kilo-visible",
+            }
+        last_error = f"port {port} submit-prompt returned {submit_status}: {submit_text}".strip()
+
+    return {
+        "status": "failed",
+        "message": last_error or "visible Kilo TUI did not accept wakeup prompt",
+        "adapter_name": "kilo-visible",
+    }
+
+
 def antigravity_executable() -> str | None:
     configured = os.environ.get("AI_COLLAB_ANTIGRAVITY_BIN")
     if configured:
@@ -755,7 +897,21 @@ def codex_acp_command() -> list[str]:
     return [npx, "-y", "@zed-industries/codex-acp@latest"]
 
 
-def build_codex_acp_messages(input_data: dict[str, str]) -> list[dict[str, Any]]:
+def acp_command_for(target_slug: str) -> list[str] | None:
+    configured = os.environ.get(f"AI_COLLAB_{target_slug.upper().replace('-', '_')}_ACP_COMMAND")
+    if configured:
+        return shlex.split(configured)
+    if target_slug == "codex":
+        return codex_acp_command()
+    exe = executable_for(target_slug)
+    if not exe:
+        return None
+    if target_slug in {"hermes", "kimi", "kilo"}:
+        return [exe, "acp"]
+    return None
+
+
+def build_acp_messages(input_data: dict[str, str]) -> list[dict[str, Any]]:
     prompt = (
         f"{input_data['synthetic_prompt']}\n\n"
         f"Project path: {input_data['project_path']}\n"
@@ -792,6 +948,10 @@ def build_codex_acp_messages(input_data: dict[str, str]) -> list[dict[str, Any]]
             },
         },
     ]
+
+
+def build_codex_acp_messages(input_data: dict[str, str]) -> list[dict[str, Any]]:
+    return build_acp_messages(input_data)
 
 
 def send_acp_message(process, message: dict[str, Any]) -> None:
@@ -906,6 +1066,141 @@ def run_codex_acp_adapter(
                     process.kill()
 
 
+def run_acp_adapter(
+    input_data: dict[str, str],
+    *,
+    timeout: int,
+    popen=subprocess.Popen,
+) -> dict[str, str]:
+    target = input_data["target_slug"]
+    if target == "codex":
+        return run_codex_acp_adapter(input_data, timeout=timeout, popen=popen)
+    if truthy_env("AI_COLLAB_WAKEUP_DRY_RUN"):
+        return {
+            "status": "degraded",
+            "message": f"{target}-acp dry-run: ACP agent not started",
+            "adapter_name": f"{target}-acp-dry-run",
+        }
+    if not cli_project_allowed(input_data["project_path"]):
+        return {
+            "status": "degraded",
+            "message": f"{target}-acp blocked: project is not in AI_COLLAB_WAKEUP_CLI_PROJECTS",
+            "adapter_name": f"{target}-acp-guardrail",
+        }
+    if target not in {"hermes", "kimi", "kilo"}:
+        return {
+            "status": "failed",
+            "message": f"ACP adapter has no implementation for target {target}",
+            "adapter_name": "acp",
+        }
+
+    command = acp_command_for(target)
+    if not command:
+        return {
+            "status": "failed",
+            "message": f"no ACP command found for target {target}",
+            "adapter_name": f"{target}-acp",
+        }
+
+    messages = build_acp_messages(input_data)
+    process = None
+    try:
+        process = popen(
+            command,
+            cwd=input_data["project_path"],
+            text=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=1,
+        )
+        deadline = time.monotonic() + timeout
+        send_acp_message(process, messages[0])
+        read_acp_response(process, 1, deadline)
+        send_acp_message(process, messages[1])
+        new_session = read_acp_response(process, 2, deadline)
+        session_id = new_session.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            return {
+                "status": "failed",
+                "message": f"{target}-acp did not return a sessionId",
+                "adapter_name": f"{target}-acp",
+            }
+        messages[2]["params"]["sessionId"] = session_id
+        send_acp_message(process, messages[2])
+        read_acp_response(process, 3, deadline)
+        return {
+            "status": "success",
+            "message": f"task processed by {target} ACP session {session_id}",
+            "adapter_name": f"{target}-acp",
+        }
+    except subprocess.TimeoutExpired:
+        return {"status": "failed", "message": f"{target}-acp timed out after {timeout}s", "adapter_name": f"{target}-acp"}
+    except (OSError, RuntimeError, TimeoutError) as exc:
+        return {"status": "failed", "message": f"{target}-acp failed: {exc}", "adapter_name": f"{target}-acp"}
+    finally:
+        if process is not None:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                try:
+                    if stream:
+                        stream.close()
+                except OSError:
+                    pass
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+
+
+def run_hermes_uri_adapter(
+    input_data: dict[str, str],
+    *,
+    timeout: int,
+    runner=subprocess.run,
+) -> dict[str, str]:
+    guardrail = visible_guardrail(input_data, "hermes-uri")
+    if guardrail:
+        return guardrail
+    if input_data["target_slug"] != "hermes":
+        return {
+            "status": "failed",
+            "message": "hermes-uri adapter only supports target hermes",
+            "adapter_name": "hermes-uri",
+        }
+
+    template = os.environ.get(
+        "AI_COLLAB_HERMES_URI_TEMPLATE",
+        "vscode://layerdynamics.hermes-vscode?prompt={prompt}",
+    )
+    uri = template.format(prompt=urllib.parse.quote(input_data["synthetic_prompt"], safe=""))
+    try:
+        completed = runner(
+            ["open", uri],
+            cwd=input_data["project_path"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "failed", "message": f"hermes URI open timed out after {timeout}s", "adapter_name": "hermes-uri"}
+    except OSError as exc:
+        return {"status": "failed", "message": f"hermes URI open failed: {exc}", "adapter_name": "hermes-uri"}
+
+    if completed.returncode == 0:
+        return {
+            "status": "degraded",
+            "message": "Hermes chat opened/prefilled via URI; user may need to press send",
+            "adapter_name": "hermes-uri",
+        }
+    stderr = (completed.stderr or completed.stdout or "").strip().replace("\n", " ")
+    if len(stderr) > 300:
+        stderr = stderr[:300] + "...[truncated]"
+    return {"status": "failed", "message": f"hermes URI open exited {completed.returncode}: {stderr}", "adapter_name": "hermes-uri"}
+
+
 def run_visible_adapter(
     input_data: dict[str, str],
     *,
@@ -915,6 +1210,10 @@ def run_visible_adapter(
     target = input_data["target_slug"]
     if target == "opencode":
         return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if target == "kilo":
+        return run_kilo_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if target == "hermes":
+        return run_hermes_uri_adapter(input_data, timeout=timeout, runner=runner)
     if target in {"codex", "antigravity"}:
         return run_antigravity_chat_adapter(input_data, timeout=timeout, runner=runner)
     return {
@@ -950,8 +1249,19 @@ def run_wakeup_adapter(
         return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
     if mode == "antigravity-chat":
         return run_antigravity_chat_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "kilo-visible":
+        return run_kilo_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "hermes-uri":
+        return run_hermes_uri_adapter(input_data, timeout=timeout, runner=runner)
     if mode == "codex-acp":
         return run_codex_acp_adapter(input_data, timeout=timeout)
+    if mode == "acp":
+        return run_acp_adapter(input_data, timeout=timeout)
+    if mode in {"hermes-acp", "kimi-acp", "kilo-acp"}:
+        expected = mode.removesuffix("-acp")
+        if input_data["target_slug"] != expected:
+            return {"status": "failed", "message": f"{mode} only supports target {expected}", "adapter_name": mode}
+        return run_acp_adapter(input_data, timeout=timeout)
     if mode != "cli":
         return {"status": "failed", "message": f"unknown adapter mode: {mode}", "adapter_name": mode}
 

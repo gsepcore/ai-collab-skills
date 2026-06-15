@@ -29,6 +29,7 @@ process_thread = _mod.process_thread
 append_thread_message = _mod.append_thread_message
 run_wakeup_adapter = _mod.run_wakeup_adapter
 run_codex_acp_adapter = _mod.run_codex_acp_adapter
+run_acp_adapter = _mod.run_acp_adapter
 
 
 SAMPLE_INBOX = """\
@@ -324,6 +325,27 @@ class TestAdapters(unittest.TestCase):
                 _mod.FALLBACK_BIN_DIRS = old_dirs
                 _mod.FALLBACK_BIN_GLOBS = old_globs
 
+    def test_executable_for_checks_packaged_extension_binary_dirs(self):
+        old_path = _mod.shutil.which
+        old_dirs = _mod.FALLBACK_BIN_DIRS
+        old_globs = _mod.FALLBACK_BIN_GLOBS
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            packaged = root / "moonshot.kimi" / "bin" / "kimi"
+            packaged.mkdir(parents=True)
+            exe = packaged / "kimi"
+            exe.write_text("#!/bin/sh\n", encoding="utf-8")
+            exe.chmod(0o755)
+            try:
+                _mod.shutil.which = lambda name: None
+                _mod.FALLBACK_BIN_DIRS = ()
+                _mod.FALLBACK_BIN_GLOBS = (str(root / "*" / "bin" / "*"),)
+                self.assertEqual(_mod.executable_for("kimi"), str(exe))
+            finally:
+                _mod.shutil.which = old_path
+                _mod.FALLBACK_BIN_DIRS = old_dirs
+                _mod.FALLBACK_BIN_GLOBS = old_globs
+
     def test_cli_adapter_success_uses_runner(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
         calls = []
@@ -484,6 +506,56 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(posts[1][0], "http://127.0.0.1:12345/tui/append-prompt?directory=%2Ftmp%2Fproject")
         self.assertEqual(posts[1][1]["text"], "read visible inbox")
         self.assertEqual(posts[2][0], "http://127.0.0.1:12345/tui/submit-prompt?directory=%2Ftmp%2Fproject")
+
+    def test_kilo_visible_posts_visible_prompt_with_auth_header(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
+        os.environ["AI_COLLAB_KILO_PORTS"] = "34567"
+        os.environ["AI_COLLAB_KILO_BASIC_AUTH"] = "user:pass"
+        posts = []
+
+        def fake_poster(url, payload, **kwargs):
+            posts.append((url, payload, kwargs))
+            return 200, "ok"
+
+        result = _mod.run_kilo_visible_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "kilo",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-kilo.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            timeout=10,
+            poster=fake_poster,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["adapter_name"], "kilo-visible")
+        self.assertEqual(posts[0][0], "http://127.0.0.1:34567/tui/clear-prompt?directory=%2Ftmp%2Fproject")
+        self.assertEqual(posts[1][1]["text"], "read visible inbox")
+        self.assertIn("Authorization", posts[0][2]["headers"])
+
+    def test_kilo_visible_reports_auth_hint_on_401(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
+        os.environ["AI_COLLAB_KILO_PORTS"] = "34567"
+
+        def fake_poster(url, payload, **kwargs):
+            return 401, "Unauthorized"
+
+        result = _mod.run_kilo_visible_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "kilo",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-kilo.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            timeout=10,
+            poster=fake_poster,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("AI_COLLAB_KILO_BASIC_AUTH", result["message"])
 
     def test_opencode_visible_synthetic_mode_is_opt_in(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
@@ -698,6 +770,77 @@ for line in sys.stdin:
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["adapter_name"], "codex-acp")
         self.assertIn("ses_mock", result["message"])
+
+    def test_generic_acp_adapter_processes_kimi_mock_agent(self):
+        with tempfile.TemporaryDirectory() as d:
+            script = Path(d) / "fake_kimi_acp.py"
+            script.write_text(
+                """#!/usr/bin/env python3
+import json
+import sys
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentInfo": {"name": "fake-kimi-acp"}}
+    elif method == "session/new":
+        result = {"sessionId": "ses_kimi"}
+    elif method == "session/prompt":
+        result = {"stopReason": "end_turn"}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": msg.get("id"), "result": result}), flush=True)
+""",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            os.environ["AI_COLLAB_KIMI_ACP_COMMAND"] = f"{sys.executable} {script}"
+
+            result = run_acp_adapter(
+                {
+                    "project_path": d,
+                    "target_slug": "kimi",
+                    "inbox_path": f"{d}/.ai-collab/inbox-kimi.md",
+                    "task_id": "task-123",
+                    "synthetic_prompt": "read invisible inbox",
+                },
+                timeout=5,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["adapter_name"], "kimi-acp")
+        self.assertIn("ses_kimi", result["message"])
+
+    def test_hermes_uri_adapter_prefills_prompt(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
+        os.environ["AI_COLLAB_HERMES_URI_TEMPLATE"] = "test://hermes?prompt={prompt}"
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append((command, kwargs))
+
+            class Completed:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Completed()
+
+        result = _mod.run_hermes_uri_adapter(
+            {
+                "project_path": "/tmp/project",
+                "target_slug": "hermes",
+                "inbox_path": "/tmp/project/.ai-collab/inbox-hermes.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "hello visible",
+            },
+            timeout=5,
+            runner=fake_runner,
+        )
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(calls[0][0], ["open", "test://hermes?prompt=hello%20visible"])
 
     def test_visible_adapter_blocks_project_not_in_allowlist(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/some/other/project"

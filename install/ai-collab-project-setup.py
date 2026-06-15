@@ -57,6 +57,18 @@ AGENT_CATALOG: dict[str, dict[str, Any]] = {
         "rules": ["AGENTS.md"],
         "detect": [["hermes"]],
     },
+    "kimi": {
+        "display": "Kimi Code",
+        "role": "worker",
+        "rules": ["AGENTS.md"],
+        "detect": [["kimi"], ["kimi-cli"]],
+    },
+    "kilo": {
+        "display": "Kilo Code",
+        "role": "worker",
+        "rules": ["AGENTS.md"],
+        "detect": [["kilo"]],
+    },
     "cursor-native": {
         "display": "Cursor native chat",
         "role": "worker",
@@ -92,6 +104,8 @@ ALIASES = {
     "copilot": "copilot-chat",
     "vscode": "copilot-chat",
     "antigravity": "codex",
+    "kimi-code": "kimi",
+    "kilo-code": "kilo",
 }
 
 CONTAINER_CHOICES = ["antigravity", "cursor", "vscode", "windsurf", "terminal", "zed", "jetbrains", "other"]

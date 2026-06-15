@@ -91,6 +91,19 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("- copilot-chat", team)
         self.assertIn("- codex", team)
 
+    def test_kimi_and_kilo_onboard_as_first_class_agents(self):
+        self.setup(agents=("kimi-code", "kilo-code", "hermes"), models={"kimi": "moonshot/kimi-k2", "kilo": "kilo/default"})
+
+        agents_md = (self.root / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("AI-COLLAB-START agent=kimi", agents_md)
+        self.assertIn("AI-COLLAB-START agent=kilo", agents_md)
+        self.assertIn("AI-COLLAB-START agent=hermes", agents_md)
+        team = (self.root / ".ai-collab" / "TEAM.md").read_text(encoding="utf-8")
+        self.assertIn("- kimi", team)
+        self.assertIn("- kilo", team)
+        self.assertIn("| kimi | worker | antigravity | moonshot/kimi-k2 |", team)
+        self.assertIn("| kilo | worker | antigravity | kilo/default |", team)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -497,30 +497,43 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Set to `1` (in the daemon's launchd plist `EnvironmentVariables`) to fire macOS Notification Center banners when other AIs complete tasks. Persistent layer that works even when Claude Code is closed — see [macOS notifications](#macos-notifications-survives-claude-close-mac-sleep-and-restart). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | macOS sound name (e.g. `Tink`, `Glass`, `Pop`, `Hero`) to play with each banner. Only effective when `AI_COLLAB_OS_NOTIFY=1`. Leave unset for silent banners. |
 | `AI_COLLAB_DOCTOR_STRICT` | _(off)_ | Set to `1` so `ai-collab-doctor.py` exits nonzero when required install files/settings are broken. Warnings remain non-fatal. |
-| `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Wakeup adapter mode. Default `visible` delivers synthetic prompts to active Antigravity/OpenCode panels. Other options: `opencode-visible`, `antigravity-chat`, `codex-acp` for an invisible Codex ACP worker, `cli` for headless execution, or `notify-only` for safe event logging only. |
+| `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Wakeup adapter mode. Default `visible` targets active visible panels when supported. Other options: `opencode-visible`, `kilo-visible`, `hermes-uri`, `antigravity-chat`, `acp`, `codex-acp`, `kimi-acp`, `kilo-acp`, `hermes-acp`, `cli`, or `notify-only`. |
 | `AI_COLLAB_WAKEUP_MAX_ATTEMPTS` | `3` | Maximum wake attempts before an unread inbox auto-transitions to `failed`. |
 | `AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT` | `120` | Seconds before a CLI adapter run is considered failed. |
 | `AI_COLLAB_WAKEUP_CLI_PROJECTS` | _(empty = all projects)_ | Optional allowlist for executable adapters. By default, any project with a `.ai-collab/` directory is allowed — the user opted in by setting it up there. Set this only if you want to restrict the daemon to specific projects: comma-separated basenames or absolute paths. |
-| `AI_COLLAB_WAKEUP_CLI_TARGETS` | `codex,opencode,claude` | Optional comma-separated target allowlist for CLI execution. |
-| `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode` | Optional comma-separated target allowlist for visible adapters. Falls back to `AI_COLLAB_WAKEUP_CLI_TARGETS` if set. |
+| `AI_COLLAB_WAKEUP_CLI_TARGETS` | `codex,opencode,claude,claude-code,hermes,kimi,kilo` | Optional comma-separated target allowlist for CLI execution. |
+| `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode,kilo,hermes` | Optional comma-separated target allowlist for visible adapters. Falls back to `AI_COLLAB_WAKEUP_CLI_TARGETS` if set. |
 | `AI_COLLAB_WAKEUP_DRY_RUN` | _(off)_ | Set to `1` to record what would be woken without executing any CLI command. |
 | `AI_COLLAB_CODEX_BIN` | _(auto-detected)_ | Override the `codex` executable path used by the CLI adapter. |
 | `AI_COLLAB_OPENCODE_BIN` | _(auto-detected)_ | Override the `opencode` executable path used by the CLI adapter. |
 | `AI_COLLAB_CLAUDE_BIN` | _(auto-detected)_ | Override the `claude` executable path used by the CLI adapter. |
+| `AI_COLLAB_KIMI_BIN` | _(auto-detected)_ | Override the `kimi` executable path used by CLI/ACP adapters. Packaged Antigravity extension binaries are auto-detected. |
+| `AI_COLLAB_KILO_BIN` | _(auto-detected)_ | Override the `kilo` executable path used by CLI/ACP adapters. Packaged Antigravity extension binaries are auto-detected. |
+| `AI_COLLAB_HERMES_BIN` | _(auto-detected)_ | Override the `hermes` executable path used by the ACP adapter. |
 | `AI_COLLAB_CODEX_ACP_COMMAND` | `npx -y @zed-industries/codex-acp@latest` | Override the command used by the opt-in `codex-acp` adapter. |
+| `AI_COLLAB_KIMI_ACP_COMMAND` | `kimi acp` | Override the command used by `kimi-acp` / generic `acp`. |
+| `AI_COLLAB_KILO_ACP_COMMAND` | `kilo acp` | Override the command used by `kilo-acp` / generic `acp`. |
+| `AI_COLLAB_HERMES_ACP_COMMAND` | `hermes acp` | Override the command used by `hermes-acp` / generic `acp`. |
 | `AI_COLLAB_OPENCODE_PORTS` | _(auto-detected)_ | Optional comma-separated OpenCode TUI ports for `opencode-visible`. Normally auto-detected from running `opencode --port` processes. |
 | `AI_COLLAB_OPENCODE_SYNTHETIC` | _(off)_ | Set to `1` to restore hidden OpenCode wakeup prompts (`synthetic: true`). Default is off so delegated tasks appear in the OpenCode UI instead of completing behind the user's back. |
+| `AI_COLLAB_KILO_PORTS` | _(auto-detected)_ | Optional comma-separated Kilo server ports for `kilo-visible`. Normally auto-detected from running `kilo serve --port` processes. |
+| `AI_COLLAB_KILO_BASIC_AUTH` | _(empty)_ | Optional `user:password` for local Kilo servers that return HTTP 401. |
+| `AI_COLLAB_KILO_BEARER_TOKEN` | _(empty)_ | Optional bearer token for local Kilo servers that require token auth. |
+| `AI_COLLAB_HERMES_URI_TEMPLATE` | `vscode://layerdynamics.hermes-vscode?prompt={prompt}` | URI template for `hermes-uri`. `{prompt}` is URL-encoded and prefilled into the Hermes chat panel; the user may still need to press send. |
 | `AI_COLLAB_ANTIGRAVITY_BIN` | _(auto-detected)_ | Override the `antigravity` executable used by `antigravity-chat`. |
 | `AI_COLLAB_ANTIGRAVITY_MODE` | `agent` | Mode passed to `antigravity chat --mode` for visible Codex/Antigravity wakeups. |
 
-### Visible Antigravity/OpenCode wakeup (default since 2026-05-13)
+### Visible wakeup (default)
 
-**Active by default.** A bare `curl … | bash` install enables the visible adapter for `codex` and `opencode`, allows all projects with `.ai-collab/`, and seeds the daemon `PATH` so node/nvm/homebrew binaries are reachable. No env vars required.
+**Active by default.** A bare `curl … | bash` install enables the visible adapter for supported panels, allows all projects with `.ai-collab/`, and seeds the daemon `PATH` so node/nvm/homebrew/extension binaries are reachable. No env vars required for OpenCode.
 
 Behavior:
 
 - `@opencode` or `inbox-opencode.md` uses the OpenCode TUI endpoints: `POST /tui/clear-prompt`, `POST /tui/append-prompt`, then `POST /tui/submit-prompt`. This targets the visible prompt box instead of a background session, so the user can see the delegated task arrive. Set `AI_COLLAB_OPENCODE_SYNTHETIC=1` only if you explicitly prefer hidden prompts through `POST /session/{id}/prompt_async` and accept that this can feel like background/headless work when no visible response appears.
+- `@kilo` or `inbox-kilo.md` uses the same visible TUI endpoint pattern when a Kilo server is open. If Kilo returns HTTP 401, set `AI_COLLAB_KILO_BASIC_AUTH` or `AI_COLLAB_KILO_BEARER_TOKEN`.
+- `@hermes` or `inbox-hermes.md` can open/prefill the Hermes chat through `AI_COLLAB_HERMES_URI_TEMPLATE`. This is visible but may require the user to press send.
 - `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent`. **Codex visible-tab wakeup remains degraded** — see "Known limitations" below.
+- `@kimi` supports ACP/CLI wakeups, but no verified visible-panel injection endpoint has been found yet.
 - If no visible panel/port/session exists, the adapter fails safely and normal retry/backoff applies.
 
 ### Known limitations — Codex visible-tab wakeup

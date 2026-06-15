@@ -507,6 +507,27 @@ Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`,
 | `AI_COLLAB_NO_DAEMON` | _(off)_ | Define `1` para saltar el inicio del daemon durante install (feature de file-watching deshabilitada). |
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Define `1` (en el `EnvironmentVariables` del plist launchd del daemon) para disparar banners del Notification Center de macOS cuando otras IAs completen tareas. Capa persistente que funciona incluso con Claude Code cerrado — ver [Notificaciones macOS](#notificaciones-macos-sobreviven-cierre-de-claude-sleep-y-reinicio). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | Nombre de sonido de macOS (ej. `Tink`, `Glass`, `Pop`, `Hero`) que se reproduce con cada banner. Solo efectivo cuando `AI_COLLAB_OS_NOTIFY=1`. Sin definir = banners silenciosos. |
+| `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Modo de wakeup. `visible` intenta usar paneles visibles cuando existe integración. Opciones: `opencode-visible`, `kilo-visible`, `hermes-uri`, `antigravity-chat`, `acp`, `codex-acp`, `kimi-acp`, `kilo-acp`, `hermes-acp`, `cli`, `notify-only`. |
+| `AI_COLLAB_WAKEUP_CLI_TARGETS` | `codex,opencode,claude,claude-code,hermes,kimi,kilo` | Allowlist opcional de agentes que pueden ejecutarse por CLI/headless. |
+| `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode,kilo,hermes` | Allowlist opcional de agentes para wakeups visibles. Si no se define, usa `AI_COLLAB_WAKEUP_CLI_TARGETS` cuando exista. |
+| `AI_COLLAB_WAKEUP_DRY_RUN` | _(off)_ | Define `1` para registrar qué se despertaría sin ejecutar comandos. |
+| `AI_COLLAB_OPENCODE_PORTS` | _(auto-detectado)_ | Puertos TUI de OpenCode para `opencode-visible`. Normalmente se detectan desde procesos `opencode --port`. |
+| `AI_COLLAB_OPENCODE_SYNTHETIC` | _(off)_ | Define `1` para volver al wakeup oculto de OpenCode (`synthetic: true`). Por defecto está apagado para que la tarea aparezca en la UI visible. |
+| `AI_COLLAB_KILO_PORTS` | _(auto-detectado)_ | Puertos del servidor Kilo para `kilo-visible`. Normalmente se detectan desde procesos `kilo serve --port`. |
+| `AI_COLLAB_KILO_BASIC_AUTH` | _(vacío)_ | `usuario:password` opcional para servidores locales de Kilo que devuelven HTTP 401. |
+| `AI_COLLAB_KILO_BEARER_TOKEN` | _(vacío)_ | Bearer token opcional para servidores locales de Kilo que requieren token. |
+| `AI_COLLAB_HERMES_URI_TEMPLATE` | `vscode://layerdynamics.hermes-vscode?prompt={prompt}` | Plantilla URI para `hermes-uri`. `{prompt}` se codifica y se prellena en el panel Hermes; puede requerir que el usuario presione enviar. |
+| `AI_COLLAB_KIMI_ACP_COMMAND` | `kimi acp` | Comando para `kimi-acp` / `acp`. Los binarios empaquetados en extensiones de Antigravity se autodetectan. |
+| `AI_COLLAB_KILO_ACP_COMMAND` | `kilo acp` | Comando para `kilo-acp` / `acp`. |
+| `AI_COLLAB_HERMES_ACP_COMMAND` | `hermes acp` | Comando para `hermes-acp` / `acp`. |
+
+### Wakeup visible y ACP
+
+- `opencode` usa los endpoints TUI visibles (`clear-prompt`, `append-prompt`, `submit-prompt`) para que la tarea aparezca en pantalla.
+- `kilo` usa el mismo patrón visible cuando el servidor local acepta auth; si responde 401, configura `AI_COLLAB_KILO_BASIC_AUTH` o `AI_COLLAB_KILO_BEARER_TOKEN`.
+- `hermes` puede abrir/prellenar el chat con URI visible (`hermes-uri`), y también puede usar ACP si existe el binario `hermes`.
+- `kimi` soporta ACP (`kimi acp`) y CLI; todavía no hay endpoint visible verificado para inyectar en el panel ya abierto.
+- `claude` / `claude-code` funciona por CLI; despertar exactamente el panel visible depende de Remote Control/IDE y no se trata como garantizado.
 
 ### Desinstalar el daemon
 
