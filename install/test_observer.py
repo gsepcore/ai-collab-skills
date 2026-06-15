@@ -110,7 +110,7 @@ Implementing live observation.
         if command[:3] == ["git", "status", "--porcelain=v1"]:
             return Completed(stdout=" M install/ai-collab-observer.py\n M README.md\n")
         if command[:2] == ["ps", "-axo"]:
-            return Completed(stdout="123 00:01 opencode run tests --dir demo\n")
+            return Completed(stdout=f"123 00:01 opencode run tests --dir {self.root}\n")
         return Completed(returncode=1, stderr="unexpected command")
 
     def test_observer_writes_semantic_snapshot_and_alerts(self):
@@ -164,10 +164,32 @@ Implementing live observation.
         self.assertEqual(snapshot["current_command"], "python3 -m unittest install/test_observer.py")
         self.assertEqual(snapshot["reported_events"][0]["event"], "command")
 
+    def test_process_snapshot_filters_processes_from_other_projects(self):
+        other = self.root.parent / "other-project"
+
+        def runner(command, **kwargs):
+            if command[:2] == ["ps", "-axo"]:
+                return Completed(
+                    stdout=(
+                        f"111 00:01 opencode --port 111 --dir {other}\n"
+                        "/Applications/Codex.app/Contents/MacOS/Codex\n"
+                        f"222 00:02 opencode --port 222 --dir {self.root}\n"
+                    )
+                )
+            return Completed(returncode=1)
+
+        processes = _mod.process_snapshot(self.root, ["opencode", "codex"], runner=runner)
+
+        self.assertEqual(len(processes["opencode"]), 1)
+        self.assertIn(str(self.root), processes["opencode"][0]["command"])
+        self.assertEqual(processes["codex"], [])
+
     def test_screenshots_enabled_by_default(self):
         calls = []
 
         def runner(command, **kwargs):
+            if command[:2] == ["osascript", "-e"]:
+                return Completed(stdout=f"Antigravity IDE\t{self.root.name}\t10,20,800,600\n")
             if command[:2] == ["screencapture", "-x"]:
                 calls.append(command)
                 Path(command[-1]).write_bytes(b"png")
@@ -178,7 +200,26 @@ Implementing live observation.
 
         self.assertEqual(summary["screenshot"]["status"], "captured")
         self.assertEqual(len(calls), 1)
+        self.assertIn("-R", calls[0])
+        self.assertIn("10,20,800,600", calls[0])
         self.assertTrue(Path(summary["screenshot"]["path"]).exists())
+
+    def test_project_screenshot_skips_other_project_window(self):
+        calls = []
+
+        def runner(command, **kwargs):
+            if command[:2] == ["osascript", "-e"]:
+                return Completed(stdout="Antigravity IDE\tFounder Engineering\t10,20,800,600\n")
+            if command[:2] == ["screencapture", "-x"]:
+                calls.append(command)
+                return Completed()
+            return self.fake_runner(command, **kwargs)
+
+        summary = _mod.observe_project(self.collab, now=self.now, runner=runner, system="Darwin")
+
+        self.assertEqual(summary["screenshot"]["status"], "skipped")
+        self.assertIn("no visible window matched", summary["screenshot"]["reason"])
+        self.assertEqual(calls, [])
 
     def test_screenshots_can_be_disabled_with_env(self):
         os.environ["AI_COLLAB_OBSERVER_SCREENSHOTS"] = "0"
@@ -193,6 +234,8 @@ Implementing live observation.
         calls = []
 
         def runner(command, **kwargs):
+            if command[:2] == ["osascript", "-e"]:
+                return Completed(stdout=f"Antigravity IDE\t{self.root.name}\t10,20,800,600\n")
             if command[:2] == ["screencapture", "-x"]:
                 calls.append(command)
                 Path(command[-1]).write_bytes(b"png")

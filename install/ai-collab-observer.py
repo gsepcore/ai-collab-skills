@@ -19,6 +19,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -47,7 +49,6 @@ KNOWN_AGENT_PATTERNS: dict[str, tuple[str, ...]] = {
     "windsurf-native": (r"\bWindsurf(?:\.app)?\b",),
     "copilot-chat": (r"\bCode(?:\.app)?\b", r"\bVisual Studio Code\b"),
 }
-CLI_PROCESS_AGENTS = {"claude-code", "opencode", "codex", "aider", "hermes", "kimi", "kilo"}
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -332,19 +333,94 @@ def git_state(root: Path, runner: Runner = subprocess.run) -> dict[str, Any]:
     return state
 
 
-def classify_process(command: str, agents: list[str], root: Path) -> str | None:
+def project_signals(root: Path) -> set[str]:
+    root = root.resolve()
+    normalized_path = re.sub(r"[^A-Za-z0-9]+", "_", str(root)).strip("_")
+    normalized_name = re.sub(r"[^A-Za-z0-9]+", "_", root.name).strip("_")
+    signals = {
+        str(root),
+        root.name,
+        root.name.replace("-", "_"),
+        root.name.replace("-", " "),
+        normalized_path,
+        f"file_{normalized_path}",
+        normalized_name,
+    }
+    return {signal.lower() for signal in signals if signal}
+
+
+def command_mentions_project(command: str, root: Path) -> bool:
+    lowered = command.lower()
+    return any(signal in lowered for signal in project_signals(root))
+
+
+def get_json(url: str, *, timeout: int = 2) -> tuple[int, Any]:
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            text = response.read().decode("utf-8", errors="replace")
+            try:
+                return response.status, json.loads(text)
+            except json.JSONDecodeError:
+                return response.status, text
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return 0, str(exc)
+
+
+def path_matches_root(value: Any, root: Path) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        candidate = Path(value).expanduser().resolve()
+    except OSError:
+        return False
+    return candidate == root.resolve()
+
+
+def opencode_process_matches_project(command: str, root: Path, getter=get_json) -> bool:
+    match = re.search(r"(?:--port(?:=|\s+))(\d+)", command)
+    if not match:
+        return False
+    port = int(match.group(1))
+    if not (0 < port < 65536):
+        return False
+    status, body = getter(f"http://127.0.0.1:{port}/project/current", timeout=2)
+    if status != 200 or not isinstance(body, dict):
+        return False
+    for key in ("worktree", "directory", "path", "root"):
+        if path_matches_root(body.get(key), root):
+            return True
+    return False
+
+
+def process_matches_project(agent: str, command: str, root: Path, getter=get_json) -> bool:
+    if command_mentions_project(command, root):
+        return True
+    if agent == "opencode":
+        return opencode_process_matches_project(command, root, getter=getter)
+    return False
+
+
+def classify_process(command: str, agents: list[str], root: Path, getter=get_json) -> str | None:
     if "ai-collab-observer.py" in command:
         return None
     for agent in agents:
         patterns = KNOWN_AGENT_PATTERNS.get(agent, (rf"\b{re.escape(agent)}\b",))
         if any(re.search(pattern, command, flags=re.IGNORECASE) for pattern in patterns):
-            if agent not in CLI_PROCESS_AGENTS and str(root) not in command:
+            if not process_matches_project(agent, command, root, getter=getter):
                 continue
             return agent
     return None
 
 
-def process_snapshot(root: Path, agents: list[str], runner: Runner = subprocess.run) -> dict[str, list[dict[str, str]]]:
+def process_snapshot(
+    root: Path,
+    agents: list[str],
+    runner: Runner = subprocess.run,
+    getter=get_json,
+) -> dict[str, list[dict[str, str]]]:
     by_agent = {agent: [] for agent in agents}
     try:
         completed = run_command(["ps", "-axo", "pid=,etime=,command="], root, runner=runner)
@@ -360,7 +436,7 @@ def process_snapshot(root: Path, agents: list[str], runner: Runner = subprocess.
         if len(parts) < 3:
             continue
         pid, elapsed, command = parts
-        agent = classify_process(command, agents, root)
+        agent = classify_process(command, agents, root, getter=getter)
         if not agent:
             continue
         by_agent.setdefault(agent, []).append(
@@ -495,6 +571,54 @@ def frontmost_rect(root: Path, runner: Runner) -> str | None:
     return f"{x},{y},{width},{height}"
 
 
+def parse_window_rows(text: str) -> list[dict[str, str]]:
+    windows: list[dict[str, str]] = []
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        app, title, rect = parts
+        if re.match(r"^-?\d+,-?\d+,\d+,\d+$", rect):
+            windows.append({"app": app, "title": title, "rect": rect})
+    return windows
+
+
+def project_window_rect(root: Path, runner: Runner) -> tuple[str | None, dict[str, str]]:
+    script = r'''
+tell application "System Events"
+  set output to ""
+  repeat with proc in (processes whose visible is true)
+    try
+      set procName to name of proc
+      repeat with win in windows of proc
+        try
+          set winName to name of win
+          set {x, y} to position of win
+          set {w, h} to size of win
+          if w > 0 and h > 0 then
+            set output to output & procName & tab & winName & tab & x & "," & y & "," & w & "," & h & linefeed
+          end if
+        end try
+      end repeat
+    end try
+  end repeat
+  return output
+end tell
+'''
+    try:
+        completed = run_command(["osascript", "-e", script], root, runner=runner, timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, {}
+    if completed.returncode != 0:
+        return None, {}
+    signals = project_signals(root)
+    for window in parse_window_rows(completed.stdout):
+        haystack = f"{window['app']} {window['title']}".lower()
+        if any(signal in haystack for signal in signals):
+            return window["rect"], window
+    return None, {}
+
+
 def maybe_capture_screenshot(
     root: Path,
     live_dir: Path,
@@ -530,13 +654,29 @@ def maybe_capture_screenshot(
         }
     screenshots_dir = live_dir / "screenshots"
     screenshots_dir.mkdir(parents=True, exist_ok=True)
-    mode = os.environ.get("AI_COLLAB_OBSERVER_SCREENSHOT_MODE", "frontmost").strip().lower()
-    if mode not in {"frontmost", "screen"}:
-        mode = "frontmost"
+    mode = os.environ.get("AI_COLLAB_OBSERVER_SCREENSHOT_MODE", "project").strip().lower()
+    if mode not in {"project", "frontmost", "screen"}:
+        mode = "project"
     timestamp = now.strftime("%Y%m%d-%H%M%S")
     path = screenshots_dir / f"{timestamp}-{mode}.png"
     command = ["screencapture", "-x"]
     rect = None
+    window: dict[str, str] = {}
+    if mode == "project":
+        rect, window = project_window_rect(root, runner)
+        if not rect:
+            marker = {
+                "captured_at": isoformat_z(now),
+                "path": "",
+                "mode": mode,
+                "rect": "",
+                "active_agents": active_agents,
+                "status": "skipped",
+                "reason": f"no visible window matched project {root.name}",
+            }
+            write_json(screenshots_dir / ".last.json", marker)
+            return marker
+        command.extend(["-R", rect])
     if mode == "frontmost":
         rect = frontmost_rect(root, runner)
         if rect:
@@ -560,6 +700,7 @@ def maybe_capture_screenshot(
         "path": str(path),
         "mode": mode,
         "rect": rect or "",
+        "window": window,
         "active_agents": active_agents,
     }
     write_json(screenshots_dir / ".last.json", marker)

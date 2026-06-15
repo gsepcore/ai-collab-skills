@@ -518,7 +518,7 @@ Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`,
 | `AI_COLLAB_OBSERVER_STALE_CLAIM_SECONDS` | `1800` | Edad de un inbox `claimed`/`running` antes de emitir alerta de claim estancado. |
 | `AI_COLLAB_OBSERVER_MAX_EVENTS` | `200` | Máximo de eventos JSONL del observer retenidos por `.ai-collab/live/{agente}.events.jsonl`. |
 | `AI_COLLAB_OBSERVER_SCREENSHOTS` | `1` | Capturas automáticas macOS en `.ai-collab/live/screenshots/`. Define `0` para desactivarlas. |
-| `AI_COLLAB_OBSERVER_SCREENSHOT_MODE` | `frontmost` | Modo de captura: `frontmost` captura la ventana frontal si macOS lo permite; `screen` captura toda la pantalla. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_MODE` | `project` | Modo de captura: `project` captura una ventana visible cuyo título coincide con el proyecto actual; `frontmost` captura la ventana frontal; `screen` captura toda la pantalla. |
 | `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` | `300` | Segundos mínimos entre capturas automáticas por proyecto. |
 | `AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY` | `1` | Captura solo si hay al menos un agente activo/en espera/bloqueado/ejecutando. Define `0` para capturar en cada intervalo. |
 | `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP` | `20` | Máximo de PNGs retenidos por proyecto antes de borrar los más antiguos. |
@@ -551,7 +551,7 @@ El daemon también escribe "ojos semánticos" del proyecto cada 15 segundos:
   screenshots/
 ```
 
-`{agente}.json` es la vista combinada del observer: estado del inbox, tarea actual, secciones del último log, fase/comando reportado por `{agente}.agent.json`, eventos recientes de comandos/tests/ediciones desde `{agente}.agent.events.jsonl`, pistas de procesos activos, archivos dirty en git, menciones en threads y alertas. `{agente}.events.jsonl` conserva el historial del observer para cambios de estado, procesos, archivos dirty y screenshots.
+`{agente}.json` es la vista combinada del observer: estado del inbox, tarea actual, secciones del último log, fase/comando reportado por `{agente}.agent.json`, eventos recientes de comandos/tests/ediciones desde `{agente}.agent.events.jsonl`, pistas de procesos filtradas por proyecto, archivos dirty en git, menciones en threads y alertas. `{agente}.events.jsonl` conserva el historial del observer para cambios de estado, procesos, archivos dirty y screenshots.
 
 Los snippets de onboarding piden a cada agente reportar antes de comandos y ediciones:
 
@@ -573,7 +573,7 @@ AI_COLLAB_OBSERVER_SCREENSHOTS=0 \
 bash install/install.sh
 ```
 
-En macOS, la primera captura puede pedir permiso de Screen Recording. Si el permiso se niega, los snapshots semánticos siguen funcionando; solo fallan los eventos de screenshot. Las capturas se limitan con `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` y se podan con `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP`.
+En macOS, la primera captura puede pedir permiso de Screen Recording. Si el permiso se niega, los snapshots semánticos siguen funcionando; solo fallan los eventos de screenshot. Las capturas son project-aware por defecto: si la ventana visible de Antigravity/Codex/OpenCode pertenece a otro proyecto, el observer registra `status: skipped` en vez de capturar el workspace equivocado. Las capturas se limitan con `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` y se podan con `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP`.
 
 ### Wakeup visible y ACP
 

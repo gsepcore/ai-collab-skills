@@ -34,7 +34,7 @@ All AIs write Markdown session logs to `{project-root}/.ai-collab/`.
 - Any AI with filesystem access can read any log
 - The daemon (if installed) detects new/updated logs within 15 seconds and notifies the user
 - The daemon also scans `inbox-*.md` and `thread-*.md`: unread inboxes target an agent mailbox, while `@slug` mentions in threads target that agent's monitor/adapter path.
-- The daemon also writes semantic live snapshots to `.ai-collab/live/{agent}.json`, `.ai-collab/live/summary.json`, and `.ai-collab/live/director-alerts.jsonl`. Screenshots are written under `.ai-collab/live/screenshots/` by default unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`.
+- The daemon also writes semantic live snapshots to `.ai-collab/live/{agent}.json`, `.ai-collab/live/summary.json`, and `.ai-collab/live/director-alerts.jsonl`. Process hints and screenshots are project-scoped: the default screenshot mode captures only a visible window matching the current project and skips unrelated workspaces. Screenshots are written under `.ai-collab/live/screenshots/` by default unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`.
 
 Every log should include these frontmatter fields when the agent supports them:
 
