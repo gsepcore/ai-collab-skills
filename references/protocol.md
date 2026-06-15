@@ -34,7 +34,7 @@ All AIs write Markdown session logs to `{project-root}/.ai-collab/`.
 - Any AI with filesystem access can read any log
 - The daemon (if installed) detects new/updated logs within 15 seconds and notifies the user
 - The daemon also scans `inbox-*.md` and `thread-*.md`: unread inboxes target an agent mailbox, while `@slug` mentions in threads target that agent's monitor/adapter path.
-- The daemon also writes semantic live snapshots to `.ai-collab/live/{agent}.json`, `.ai-collab/live/summary.json`, and `.ai-collab/live/director-alerts.jsonl`. Process hints and screenshots are project-scoped: the default screenshot mode captures only a visible window matching the current project and skips unrelated workspaces. Screenshots are written under `.ai-collab/live/screenshots/` by default unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`.
+- The daemon also writes semantic live snapshots to `.ai-collab/live/{agent}.json`, `.ai-collab/live/summary.json`, `.ai-collab/live/health.json`, and `.ai-collab/live/director-alerts.jsonl`. Process hints and screenshots are project-scoped: the default screenshot mode captures only a visible window matching the current project fingerprint and skips unrelated workspaces. Screenshots and `.semantic.json` sidecars are written under `.ai-collab/live/screenshots/` by default unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`.
 
 Every log should include these frontmatter fields when the agent supports them:
 
@@ -53,6 +53,7 @@ When your agent slug is `{agent}`, keep these files up to date:
 - `.ai-collab/live/{agent}.agent.json` — your current self-reported state.
 - `.ai-collab/live/{agent}.agent.events.jsonl` — append-only command/test/edit events you report.
 - `.ai-collab/live/{agent}.events.jsonl` — observer-owned status/process/screenshot events; do not write to this file directly.
+- `.ai-collab/live/health.json` and `.ai-collab/live/screenshots/*.semantic.json` — observer-owned health/vision diagnostics; read them if useful, but do not write them directly.
 
 Before running a command, atomically write `.agent.json` like:
 

@@ -13,7 +13,7 @@ Shared filesystem protocol so every AI coding agent working on the same project 
 
 Each AI writes a Markdown log to `{project-root}/.ai-collab/`. Any AI with filesystem access to the project can read those logs. Claude manages its own log via this skill. Other agents (OpenCode, Codex, Aider, Cursor native chat, etc.) write via agent-specific rules installed by `~/.claude/ai-collab-project-setup.py`.
 
-The installed daemon also writes semantic live snapshots to `{project-root}/.ai-collab/live/`. These are the project-scoped "eyes" layer: current inbox/task state, latest log summary, self-reported commands/edits from each agent, process hints tied to the current project, git dirty files, director alerts, and automatic project-window screenshots unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`.
+The installed daemon also writes semantic live snapshots to `{project-root}/.ai-collab/live/`. These are the project-scoped "eyes" layer: current inbox/task state, latest log summary, self-reported commands/edits from each agent, process hints tied to the current project, git dirty files, director alerts, `health.json`, automatic project-window screenshots, and `.semantic.json` screenshot sidecars unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`.
 
 **Conceptual model:** this skill is agent-first. `agent` is the runtime doing work, `container` is the IDE/terminal where it is visible, and `model` is metadata about the LLM behind it. Do not treat IDEs and agents as the same thing.
 
@@ -94,8 +94,17 @@ Show the live semantic observer view for the project.
    - dirty files count
    - alerts
    - screenshot path if present
-5. Read `{root}/.ai-collab/live/director-alerts.jsonl` if present and print the latest 5 alerts first.
-6. If screenshots are not present, mention they are enabled by default but require a visible window matching the current project, macOS Screen Recording permission, a supported macOS host, and `AI_COLLAB_OBSERVER_SCREENSHOTS` not being set to `0`.
+5. Read `{root}/.ai-collab/live/health.json` if present and report:
+   - overall health
+   - screenshot/window/OCR checks that are not `ok`
+   - recommendations
+6. If the latest screenshot has a `semantic.path`, read that sidecar and summarize:
+   - project match
+   - OCR status
+   - inferred state (`error`, `waiting-for-input`, `testing`, `editing`, `running`, `unknown`, etc.)
+   - text excerpt if present
+7. Read `{root}/.ai-collab/live/director-alerts.jsonl` if present and print the latest 5 alerts first.
+8. If screenshots are not present, mention they are enabled by default but require a visible window matching the current project fingerprint, macOS Screen Recording permission, a supported macOS host, and `AI_COLLAB_OBSERVER_SCREENSHOTS` not being set to `0`.
 
 ---
 

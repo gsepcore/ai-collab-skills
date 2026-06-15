@@ -40,9 +40,10 @@ tu-proyecto/
     ├── inbox-opencode.md             ← tareas asignadas específicamente a OpenCode
     ├── live/                         ← snapshots semánticos + screenshots automáticos
     │   ├── summary.json              ← estado actual de cada agente registrado
+    │   ├── health.json               ← diagnóstico del observer/screenshots/OCR
     │   ├── opencode.json             ← estado vivo inferido para OpenCode
     │   ├── opencode.agent.json       ← estado reportado por OpenCode
-    │   └── screenshots/              ← capturas automáticas, ignoradas por git
+    │   └── screenshots/              ← PNGs + sidecars .semantic.json, ignorados por git
     ├── claude-20260511-143022.md     ← log de Claude Code
     ├── cursor-20260511-141500.md     ← log de Cursor
     ├── codex-20260511-141000.md      ← log de Codex
@@ -520,8 +521,11 @@ Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`,
 | `AI_COLLAB_OBSERVER_SCREENSHOTS` | `1` | Capturas automáticas macOS en `.ai-collab/live/screenshots/`. Define `0` para desactivarlas. |
 | `AI_COLLAB_OBSERVER_SCREENSHOT_MODE` | `project` | Modo de captura: `project` captura una ventana visible cuyo título coincide con el proyecto actual; `frontmost` captura la ventana frontal; `screen` captura toda la pantalla. |
 | `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` | `300` | Segundos mínimos entre capturas automáticas por proyecto. |
-| `AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY` | `1` | Captura solo si hay al menos un agente activo/en espera/bloqueado/ejecutando. Define `0` para capturar en cada intervalo. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY` | `0` | Define `1` para capturar solo si hay al menos un agente activo/en espera/bloqueado/ejecutando. Por defecto `0` mantiene las capturas del proyecto activas en cada intervalo. |
 | `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP` | `20` | Máximo de PNGs retenidos por proyecto antes de borrar los más antiguos. |
+| `AI_COLLAB_OBSERVER_SEMANTIC_OCR` | `1` | Activa OCR local opcional para sidecars de screenshots cuando `tesseract` existe. Sin OCR, la visión semántica usa metadata de ventanas/procesos/git. |
+| `AI_COLLAB_OBSERVER_TESSERACT_BIN` | _(auto-detectado)_ | Override del binario `tesseract` usado para OCR local. |
+| `AI_COLLAB_PROJECT_ALIASES` | _(vacío)_ | Aliases opcionales del proyecto, separados por coma/punto y coma/nueva línea, que deben contar como workspace actual al matchear ventanas/procesos. Útil cuando el título del IDE no coincide con el repo. |
 | `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Modo de wakeup. `visible` intenta usar paneles visibles cuando existe integración. Opciones: `opencode-visible`, `kilo-visible`, `hermes-uri`, `antigravity-chat`, `acp`, `codex-acp`, `kimi-acp`, `kilo-acp`, `hermes-acp`, `cli`, `notify-only`. |
 | `AI_COLLAB_WAKEUP_CLI_TARGETS` | `codex,opencode,claude,claude-code,hermes,kimi,kilo` | Allowlist opcional de agentes que pueden ejecutarse por CLI/headless. |
 | `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode,kilo,hermes` | Allowlist opcional de agentes para wakeups visibles. Si no se define, usa `AI_COLLAB_WAKEUP_CLI_TARGETS` cuando exista. |
@@ -547,11 +551,20 @@ El daemon también escribe "ojos semánticos" del proyecto cada 15 segundos:
   opencode.agent.json
   opencode.agent.events.jsonl
   opencode.events.jsonl
+  health.json
   director-alerts.jsonl
   screenshots/
+    20260615-120000-project.png
+    20260615-120000-project.semantic.json
 ```
 
 `{agente}.json` es la vista combinada del observer: estado del inbox, tarea actual, secciones del último log, fase/comando reportado por `{agente}.agent.json`, eventos recientes de comandos/tests/ediciones desde `{agente}.agent.events.jsonl`, pistas de procesos filtradas por proyecto, archivos dirty en git, menciones en threads y alertas. `{agente}.events.jsonl` conserva el historial del observer para cambios de estado, procesos, archivos dirty y screenshots.
+
+`summary.json` incluye un fingerprint del proyecto (`project_identity`) construido desde la ruta absoluta del repo, nombre del repo, repo remoto git y aliases opcionales en `AI_COLLAB_PROJECT_ALIASES`. Las pistas de proceso solo se aceptan si el comando, endpoint local o cwd del proceso coincide con ese fingerprint. Eso mantiene aislados varios Antigravity/proyectos abiertos a la vez.
+
+`health.json` es el doctor del observer para este proyecto. Registra modo de screenshot, intervalo, fallos de Screen Recording/acceso a ventanas, disponibilidad de OCR, último intento de captura y recomendaciones concretas. Si macOS devuelve errores como `could not create image from display`, el fallo queda registrado ahí en vez de dejar una captura vieja como si fuera actual.
+
+Cada intento de screenshot también escribe un sidecar `.semantic.json`. Cuando existe `tesseract` local, incluye texto OCR e inferencia simple de estado como `error`, `waiting-for-input`, `testing`, `editing` o `running`. Sin OCR, el sidecar registra título/app/rect de ventana, agentes activos, match del proyecto y estado metadata-only.
 
 Los snippets de onboarding piden a cada agente reportar antes de comandos y ediciones:
 
@@ -573,7 +586,7 @@ AI_COLLAB_OBSERVER_SCREENSHOTS=0 \
 bash install/install.sh
 ```
 
-En macOS, la primera captura puede pedir permiso de Screen Recording. Si el permiso se niega, los snapshots semánticos siguen funcionando; solo fallan los eventos de screenshot. Las capturas son project-aware por defecto: si la ventana visible de Antigravity/Codex/OpenCode pertenece a otro proyecto, el observer registra `status: skipped` en vez de capturar el workspace equivocado. Las capturas se limitan con `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` y se podan con `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP`.
+En macOS, la primera captura puede pedir permiso de Screen Recording. Si el permiso se niega, los snapshots semánticos siguen funcionando; los intentos de screenshot reportan `status: failed`, `health.json` explica el problema probable de permisos, y el sidecar semántico queda en modo degradado. Las capturas son project-aware y always-on por defecto: en cada intervalo, el observer captura solo una ventana visible Antigravity/Codex/OpenCode que coincida con el fingerprint del proyecto actual. Si la ventana visible pertenece a otro proyecto, registra `status: skipped` en vez de capturar el workspace equivocado. Las capturas se limitan con `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` y se podan con `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP`.
 
 ### Wakeup visible y ACP
 

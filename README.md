@@ -45,9 +45,10 @@ your-project/
     ├── thread-20260512-task.md       ← agent-to-agent conversation for a task
     ├── live/                         ← semantic observer snapshots + automatic screenshots
     │   ├── summary.json              ← current status for every registered agent
+    │   ├── health.json               ← observer/screenshot/OCR health diagnostics
     │   ├── opencode.json             ← inferred live state for OpenCode
     │   ├── opencode.agent.json       ← OpenCode's self-reported command/edit state
-    │   └── screenshots/              ← automatic screenshots, ignored by git
+    │   └── screenshots/              ← PNGs + .semantic.json sidecars, ignored by git
     ├── claude-code-20260511-143022.md ← Claude Code's log
     ├── cursor-native-20260511-141500.md ← Cursor native chat log
     ├── codex-20260511-141000.md      ← Codex's log
@@ -426,7 +427,7 @@ Ten components keep Claude informed and able to dispatch inbox tasks:
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
 3. **Notification reader script** — `~/.claude/ai-collab-check-notifications.py` is invoked by the `UserPromptSubmit` hook. It uses an `fcntl` lock to coordinate with the daemon, **filters notifications by active project**, caps output to 10 items / 500 chars per message / 4 KB total, drops notifications older than 24 h, defends against malformed JSON, and always exits 0 (never blocks your prompt). All limits are tunable — see [Environment variables](#environment-variables) below.
 4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` and `thread-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; thread mentions use `reason: thread-mention`. **By default it uses `visible`** so OpenCode/Codex get invisible synthetic wakeups in their running panels with zero manual activation; you can downgrade to `cli` (headless execution) or `notify-only` (safe logging only) via `AI_COLLAB_WAKEUP_ADAPTER`.
-5. **Live observer** — `~/.claude/ai-collab-observer.py` writes `.ai-collab/live/{agent}.json` snapshots every daemon tick. It combines inbox status, latest logs, agent self-reports, running process hints, git dirtiness, stale-claim alerts, and automatic screenshots.
+5. **Live observer** — `~/.claude/ai-collab-observer.py` writes `.ai-collab/live/{agent}.json`, `summary.json`, `health.json`, screenshot PNGs, and `.semantic.json` sidecars every daemon tick. It combines inbox status, latest logs, agent self-reports, running process hints tied to the project fingerprint, git dirtiness, stale-claim alerts, OCR/metadata vision, and project-scoped automatic screenshots.
 6. **Project onboarding** — `~/.claude/ai-collab-project-setup.py` creates the agent-first project manifest (`TEAM.md`, `agents.json`), welcome inbox, and runtime rules files. It records agent, container, and model explicitly so a fresh project does not depend on guesswork.
 7. **Auto-onboard detector** — `~/.claude/ai-collab-auto-onboard.py` runs from the daemon when a new `{slug}-{YYYYMMDD-HHMMSS}.md` log appears. Known slugs get an agent-specific `AI-COLLAB-START agent={slug}` rules block if missing, plus a merged `.ai-collab/TEAM.md` roster entry. Unknown slugs produce a low-priority `.ai-collab/inbox-all.md` notice telling Claude Code to run `/collab onboard {slug}`. The operation is idempotent and never overwrites existing rules content.
 8. **Run orchestrator** — `~/.claude/ai-collab-orchestrate.py` creates `.ai-collab/runs/{run_id}/`, records the selected director, writes safe task assignments to normal inboxes, and appends task-thread messages that agents can answer naturally.
@@ -511,8 +512,11 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_OBSERVER_SCREENSHOTS` | `1` | Automatic macOS screenshots in `.ai-collab/live/screenshots/`. Set `0` to disable. |
 | `AI_COLLAB_OBSERVER_SCREENSHOT_MODE` | `project` | Screenshot mode: `project` captures a visible window whose title matches the current project; `frontmost` captures the front window; `screen` captures the full screen. |
 | `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` | `300` | Minimum seconds between automatic screenshots per project. |
-| `AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY` | `1` | Only capture when at least one agent is active/waiting/blocked/running. Set `0` to capture on every observer interval. |
+| `AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY` | `0` | Set `1` to capture only when at least one agent is active/waiting/blocked/running. Default `0` keeps project-window screenshots always active on each interval. |
 | `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP` | `20` | Maximum screenshots retained per project before older PNGs are pruned. |
+| `AI_COLLAB_OBSERVER_SEMANTIC_OCR` | `1` | Enables optional local OCR for screenshot sidecars when `tesseract` is available. Without OCR, semantic vision degrades to window/process/git metadata. |
+| `AI_COLLAB_OBSERVER_TESSERACT_BIN` | _(auto-detected)_ | Override the `tesseract` binary used for local OCR. |
+| `AI_COLLAB_PROJECT_ALIASES` | _(empty)_ | Optional comma/semicolon/newline-separated project aliases that should count as the current workspace when matching windows/processes. Useful when an IDE title differs from the repo name. |
 | `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Wakeup adapter mode. Default `visible` targets active visible panels when supported. Other options: `opencode-visible`, `kilo-visible`, `hermes-uri`, `antigravity-chat`, `acp`, `codex-acp`, `kimi-acp`, `kilo-acp`, `hermes-acp`, `cli`, or `notify-only`. |
 | `AI_COLLAB_WAKEUP_MAX_ATTEMPTS` | `3` | Maximum wake attempts before an unread inbox auto-transitions to `failed`. |
 | `AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT` | `120` | Seconds before a CLI adapter run is considered failed. |
@@ -550,11 +554,20 @@ The daemon now gives the director "semantic eyes" for every onboarded project. E
   opencode.agent.json
   opencode.agent.events.jsonl
   opencode.events.jsonl
+  health.json
   director-alerts.jsonl
   screenshots/
+    20260615-120000-project.png
+    20260615-120000-project.semantic.json
 ```
 
 `{agent}.json` is the observer's merged view: inbox status, current task, latest log sections, self-reported command/edit phase from `{agent}.agent.json`, recent command/test/edit events from `{agent}.agent.events.jsonl`, project-scoped process hints, git dirty files, thread mentions, and alerts. `{agent}.events.jsonl` is observer-owned history for status changes, process changes, dirty-file changes, and screenshots.
+
+`summary.json` includes a project fingerprint (`project_identity`) built from the absolute repo path, repo name, git remote repo name, and optional `AI_COLLAB_PROJECT_ALIASES`. Process hints are accepted only when the command, local endpoint, or process cwd matches that fingerprint. This is what keeps multiple Antigravity windows/projects isolated.
+
+`health.json` is the observer doctor for the project. It records screenshot mode, interval, Screen Recording/window-access failures, OCR availability, the last screenshot attempt, and concrete recommendations. If macOS returns errors such as `could not create image from display`, the failure is recorded there instead of leaving an old screenshot looking current.
+
+Each screenshot attempt also writes a `.semantic.json` sidecar. When local `tesseract` exists, the sidecar includes OCR text and simple state inference such as `error`, `waiting-for-input`, `testing`, `editing`, or `running`. Without OCR, the sidecar still records window title/app/rect, active agents, project match, and metadata-only state.
 
 The onboarding snippets instruct each agent to self-report before commands and edits:
 
@@ -576,7 +589,7 @@ AI_COLLAB_OBSERVER_SCREENSHOTS=0 \
 bash install/install.sh
 ```
 
-On macOS, the first capture may trigger the normal Screen Recording permission prompt. If permission is denied, semantic snapshots still work; only screenshot events report failure. Screenshots are project-aware by default: if the front visible Antigravity/Codex/OpenCode window belongs to another project, the observer records `status: skipped` instead of capturing the wrong workspace. Screenshots are throttled by `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` and pruned by `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP`.
+On macOS, the first capture may trigger the normal Screen Recording permission prompt. If permission is denied, semantic snapshots still work; screenshot attempts report `status: failed`, `health.json` explains the likely permission issue, and the semantic sidecar records degraded metadata. Screenshots are project-aware and always-on by default: on each interval, the observer captures only a visible Antigravity/Codex/OpenCode window matching the current project fingerprint. If the visible window belongs to another project, it records `status: skipped` instead of capturing the wrong workspace. Screenshots are throttled by `AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL` and pruned by `AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP`.
 
 ### Visible wakeup (default)
 

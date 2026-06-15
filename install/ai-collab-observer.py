@@ -16,6 +16,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,8 @@ from typing import Any, Callable
 
 
 SCHEMA_VERSION = "ai-collab.live.v1"
+HEALTH_SCHEMA_VERSION = "ai-collab.health.v1"
+VISION_SCHEMA_VERSION = "ai-collab.vision.v1"
 SKIP_MD = {"PROTOCOL.md", "CONTEXT.md", "TEAM.md"}
 LOG_RE = re.compile(r"^([a-z][a-z0-9_-]*)-\d{8}-\d{6}\.md$")
 MENTION_RE = re.compile(r"(?<![\w.-])@([a-z][a-z0-9_-]{1,40})\b")
@@ -333,20 +336,106 @@ def git_state(root: Path, runner: Runner = subprocess.run) -> dict[str, Any]:
     return state
 
 
-def project_signals(root: Path) -> set[str]:
+def git_config_path(root: Path) -> Path | None:
+    dot_git = root / ".git"
+    if dot_git.is_dir():
+        return dot_git / "config"
+    if not dot_git.is_file():
+        return None
+    try:
+        text = dot_git.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = re.search(r"^gitdir:\s*(.+)$", text, flags=re.IGNORECASE | re.MULTILINE)
+    if not match:
+        return None
+    git_dir = Path(match.group(1).strip())
+    if not git_dir.is_absolute():
+        git_dir = (root / git_dir).resolve()
+    return git_dir / "config"
+
+
+def git_remote_urls(root: Path) -> list[str]:
+    config_path = git_config_path(root)
+    if not config_path:
+        return []
+    try:
+        text = config_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    urls: list[str] = []
+    for match in re.finditer(r"^\s*url\s*=\s*(.+?)\s*$", text, flags=re.MULTILINE):
+        url = match.group(1).strip()
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def remote_signal_parts(url: str) -> set[str]:
+    cleaned = url.strip().rstrip("/")
+    if cleaned.endswith(".git"):
+        cleaned = cleaned[:-4]
+    tail = re.split(r"[/:\s]+", cleaned)
+    parts: set[str] = set()
+    if tail:
+        repo = tail[-1]
+        if repo:
+            parts.add(repo)
+            parts.add(repo.replace("-", "_"))
+            parts.add(repo.replace("_", "-"))
+            parts.add(repo.replace("-", " "))
+    return parts
+
+
+def env_project_aliases() -> set[str]:
+    raw = os.environ.get("AI_COLLAB_PROJECT_ALIASES", "")
+    if not raw.strip():
+        return set()
+    aliases: set[str] = set()
+    for part in re.split(r"[,;\n]", raw):
+        value = part.strip()
+        if value:
+            aliases.add(value)
+    return aliases
+
+
+def normalize_signal(value: str) -> set[str]:
+    cleaned = value.strip()
+    if not cleaned:
+        return set()
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", cleaned).strip("_")
+    spaced = re.sub(r"[^A-Za-z0-9]+", " ", cleaned).strip()
+    values = {cleaned, cleaned.replace("-", "_"), cleaned.replace("_", "-")}
+    if normalized:
+        values.add(normalized)
+        values.add(f"file_{normalized}")
+    if spaced:
+        values.add(spaced)
+    return {item.lower() for item in values if item and len(item) >= 3}
+
+
+def project_identity(root: Path) -> dict[str, Any]:
     root = root.resolve()
-    normalized_path = re.sub(r"[^A-Za-z0-9]+", "_", str(root)).strip("_")
-    normalized_name = re.sub(r"[^A-Za-z0-9]+", "_", root.name).strip("_")
-    signals = {
-        str(root),
-        root.name,
-        root.name.replace("-", "_"),
-        root.name.replace("-", " "),
-        normalized_path,
-        f"file_{normalized_path}",
-        normalized_name,
+    raw_signals: set[str] = {str(root), root.name}
+    remote_urls = git_remote_urls(root)
+    for url in remote_urls:
+        raw_signals.update(remote_signal_parts(url))
+    raw_signals.update(env_project_aliases())
+
+    signals: set[str] = set()
+    for value in raw_signals:
+        signals.update(normalize_signal(value))
+    return {
+        "root": str(root),
+        "name": root.name,
+        "aliases": sorted(env_project_aliases()),
+        "git_remotes": remote_urls,
+        "signals": sorted(signals),
     }
-    return {signal.lower() for signal in signals if signal}
+
+
+def project_signals(root: Path) -> set[str]:
+    return set(project_identity(root)["signals"])
 
 
 def command_mentions_project(command: str, root: Path) -> bool:
@@ -376,7 +465,36 @@ def path_matches_root(value: Any, root: Path) -> bool:
         candidate = Path(value).expanduser().resolve()
     except OSError:
         return False
-    return candidate == root.resolve()
+    resolved_root = root.resolve()
+    return candidate == resolved_root or resolved_root in candidate.parents
+
+
+def parse_lsof_cwd(stdout: str) -> str:
+    for line in stdout.splitlines():
+        if line.startswith("n"):
+            return line[1:].strip()
+    return ""
+
+
+def process_cwd(pid: str, root: Path, runner: Runner = subprocess.run, system: str | None = None) -> str:
+    current_system = system or platform.system()
+    try:
+        if current_system == "Darwin":
+            completed = run_command(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"], root, runner=runner, timeout=3)
+            if completed.returncode == 0:
+                return parse_lsof_cwd(completed.stdout)
+        else:
+            completed = run_command(["readlink", f"/proc/{pid}/cwd"], root, runner=runner, timeout=3)
+            if completed.returncode == 0:
+                return completed.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return ""
+
+
+def process_cwd_matches_project(pid: str, root: Path, runner: Runner = subprocess.run, system: str | None = None) -> bool:
+    cwd = process_cwd(pid, root, runner=runner, system=system)
+    return path_matches_root(cwd, root)
 
 
 def opencode_process_matches_project(command: str, root: Path, getter=get_json) -> bool:
@@ -395,21 +513,39 @@ def opencode_process_matches_project(command: str, root: Path, getter=get_json) 
     return False
 
 
-def process_matches_project(agent: str, command: str, root: Path, getter=get_json) -> bool:
+def process_matches_project(
+    agent: str,
+    pid: str,
+    command: str,
+    root: Path,
+    runner: Runner = subprocess.run,
+    getter=get_json,
+    system: str | None = None,
+) -> bool:
     if command_mentions_project(command, root):
+        return True
+    if pid and process_cwd_matches_project(pid, root, runner=runner, system=system):
         return True
     if agent == "opencode":
         return opencode_process_matches_project(command, root, getter=getter)
     return False
 
 
-def classify_process(command: str, agents: list[str], root: Path, getter=get_json) -> str | None:
+def classify_process(
+    pid: str,
+    command: str,
+    agents: list[str],
+    root: Path,
+    runner: Runner = subprocess.run,
+    getter=get_json,
+    system: str | None = None,
+) -> str | None:
     if "ai-collab-observer.py" in command:
         return None
     for agent in agents:
         patterns = KNOWN_AGENT_PATTERNS.get(agent, (rf"\b{re.escape(agent)}\b",))
         if any(re.search(pattern, command, flags=re.IGNORECASE) for pattern in patterns):
-            if not process_matches_project(agent, command, root, getter=getter):
+            if not process_matches_project(agent, pid, command, root, runner=runner, getter=getter, system=system):
                 continue
             return agent
     return None
@@ -420,6 +556,7 @@ def process_snapshot(
     agents: list[str],
     runner: Runner = subprocess.run,
     getter=get_json,
+    system: str | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     by_agent = {agent: [] for agent in agents}
     try:
@@ -436,7 +573,7 @@ def process_snapshot(
         if len(parts) < 3:
             continue
         pid, elapsed, command = parts
-        agent = classify_process(command, agents, root, getter=getter)
+        agent = classify_process(pid, command, agents, root, runner=runner, getter=getter, system=system)
         if not agent:
             continue
         by_agent.setdefault(agent, []).append(
@@ -549,6 +686,11 @@ def prune_screenshots(screenshots_dir: Path, max_keep: int) -> None:
             path.unlink()
         except OSError:
             pass
+        semantic = path.with_suffix(".semantic.json")
+        try:
+            semantic.unlink()
+        except OSError:
+            pass
 
 
 def frontmost_rect(root: Path, runner: Runner) -> str | None:
@@ -619,6 +761,242 @@ end tell
     return None, {}
 
 
+def tesseract_bin() -> str:
+    configured = os.environ.get("AI_COLLAB_OBSERVER_TESSERACT_BIN", "").strip()
+    if configured:
+        return configured
+    return shutil.which("tesseract") or ""
+
+
+def infer_visual_state(text: str, screenshot_status: str) -> tuple[str, list[str]]:
+    haystack = text.lower()
+    signals: list[str] = []
+    patterns = [
+        ("error", ("traceback", "exception", "error:", "failed", "panic", "fatal")),
+        ("waiting-for-input", ("waiting", "press enter", "continue?", "confirm", "y/n", "input")),
+        ("testing", ("pytest", "unittest", "tests", "passing", "failing")),
+        ("editing", ("diff", "modified", "staged", "unstaged", "save", "insert")),
+        ("running", ("running", "installing", "building", "executing", "compiling")),
+    ]
+    if screenshot_status == "failed":
+        return "capture-failed", ["screenshot failed"]
+    if screenshot_status == "skipped":
+        return "not-visible", ["project window not visible"]
+    for state, needles in patterns:
+        matched = [needle for needle in needles if needle in haystack]
+        if matched:
+            signals.extend(matched[:5])
+            return state, signals
+    return "unknown", signals
+
+
+def semantic_summary(window: dict[str, str], state: str, ocr_status: str, text_excerpt: str) -> str:
+    title = window.get("title", "") if isinstance(window, dict) else ""
+    app = window.get("app", "") if isinstance(window, dict) else ""
+    subject = " ".join(part for part in (app, title) if part).strip() or "no visible project window"
+    if text_excerpt:
+        return truncate(f"{subject}; state={state}; visible text: {text_excerpt}", 500)
+    return truncate(f"{subject}; state={state}; ocr={ocr_status}", 500)
+
+
+def write_visual_semantics(
+    *,
+    root: Path,
+    marker: dict[str, Any],
+    semantic_path: Path,
+    now: datetime,
+    runner: Runner = subprocess.run,
+) -> dict[str, Any]:
+    screenshot_path = marker.get("path", "")
+    screenshot_status = str(marker.get("status", "captured"))
+    window = marker.get("window") if isinstance(marker.get("window"), dict) else {}
+    image_path = Path(screenshot_path) if screenshot_path else None
+    ocr_enabled = env_bool("AI_COLLAB_OBSERVER_SEMANTIC_OCR", True)
+    ocr: dict[str, Any] = {"status": "skipped", "engine": "", "text": "", "reason": ""}
+
+    if screenshot_status != "captured":
+        ocr["reason"] = f"screenshot {screenshot_status}"
+    elif not image_path or not image_path.exists():
+        ocr["status"] = "unavailable"
+        ocr["reason"] = "screenshot image missing"
+    elif not ocr_enabled:
+        ocr["reason"] = "OCR disabled"
+    else:
+        binary = tesseract_bin()
+        if not binary:
+            ocr["status"] = "unavailable"
+            ocr["reason"] = "tesseract not found"
+        else:
+            ocr["engine"] = binary
+            try:
+                completed = run_command([binary, str(image_path), "stdout", "--psm", "6"], root, runner=runner, timeout=20)
+                if completed.returncode == 0:
+                    text = truncate(completed.stdout.strip(), 4000)
+                    ocr.update({"status": "ok", "text": text, "reason": ""})
+                else:
+                    ocr.update({"status": "failed", "reason": truncate(completed.stderr or completed.stdout or "OCR failed", 500)})
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                ocr.update({"status": "failed", "reason": truncate(str(exc), 500)})
+
+    text_excerpt = truncate(str(ocr.get("text", "")), 500)
+    combined_text = " ".join(
+        str(part)
+        for part in (
+            ocr.get("text", ""),
+            window.get("app", ""),
+            window.get("title", ""),
+            marker.get("reason", ""),
+        )
+        if part
+    )
+    state, signals = infer_visual_state(combined_text, screenshot_status)
+    project_match = bool(window) and any(
+        signal in f"{window.get('app', '')} {window.get('title', '')}".lower()
+        for signal in project_signals(root)
+    )
+    semantic_status = "ok" if ocr.get("status") == "ok" else "metadata-only"
+    if screenshot_status == "failed":
+        semantic_status = "degraded"
+    elif screenshot_status == "skipped":
+        semantic_status = "skipped"
+
+    data = {
+        "schema": VISION_SCHEMA_VERSION,
+        "project": root.name,
+        "project_path": str(root.resolve()),
+        "captured_at": marker.get("captured_at") or isoformat_z(now),
+        "screenshot_path": screenshot_path,
+        "screenshot_status": screenshot_status,
+        "mode": marker.get("mode", ""),
+        "rect": marker.get("rect", ""),
+        "window": window,
+        "active_agents": marker.get("active_agents", []),
+        "project_match": project_match,
+        "ocr": ocr,
+        "semantic": {
+            "status": semantic_status,
+            "state": state,
+            "signals": signals,
+            "text_excerpt": text_excerpt,
+            "summary": semantic_summary(window, state, str(ocr.get("status", "")), text_excerpt),
+        },
+    }
+    write_json(semantic_path, data)
+    return {
+        "status": semantic_status,
+        "path": str(semantic_path),
+        "state": state,
+        "ocr_status": ocr.get("status", ""),
+    }
+
+
+def screenshot_failure_kind(reason: str) -> str:
+    lowered = reason.lower()
+    if any(token in lowered for token in ("not authorized", "permission", "privacy", "screen recording", "could not create image from display")):
+        return "screen-recording-blocked"
+    if "rect" in lowered or "window" in lowered:
+        return "window-capture-failed"
+    return "capture-failed"
+
+
+def build_health(
+    *,
+    root: Path,
+    live_dir: Path,
+    now: datetime,
+    screenshot: dict[str, Any] | None,
+    system: str | None = None,
+) -> dict[str, Any]:
+    current_system = system or platform.system()
+    screenshots_enabled = env_bool("AI_COLLAB_OBSERVER_SCREENSHOTS", True)
+    active_only = env_bool("AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY", False)
+    mode = os.environ.get("AI_COLLAB_OBSERVER_SCREENSHOT_MODE", "project").strip().lower() or "project"
+    ocr_binary = tesseract_bin()
+    screenshot_status = str((screenshot or {}).get("status", "not-run"))
+    screenshot_reason = str((screenshot or {}).get("reason", ""))
+
+    checks: dict[str, Any] = {
+        "observer": {"status": "ok", "message": "observer ran"},
+        "project_identity": {"status": "ok", "signals": project_identity(root)["signals"][:20]},
+        "window_access": {"status": "unknown", "message": "not checked this tick"},
+        "screen_capture": {"status": "unknown", "message": "not checked this tick"},
+        "semantic_ocr": {
+            "status": "ok" if ocr_binary else "degraded",
+            "engine": ocr_binary,
+            "message": "tesseract available" if ocr_binary else "tesseract not found; semantic vision uses window/process metadata",
+        },
+    }
+    recommendations: list[str] = []
+
+    if current_system != "Darwin":
+        checks["screen_capture"] = {
+            "status": "unsupported",
+            "message": "automatic screenshots currently use macOS screencapture",
+        }
+    elif not screenshots_enabled:
+        checks["screen_capture"] = {"status": "off", "message": "AI_COLLAB_OBSERVER_SCREENSHOTS=0"}
+    elif screenshot_status == "captured":
+        checks["screen_capture"] = {"status": "ok", "message": "last capture succeeded"}
+    elif screenshot_status == "skipped":
+        checks["screen_capture"] = {"status": "degraded", "message": screenshot_reason or "capture skipped"}
+        if "no visible window matched" in screenshot_reason:
+            checks["window_access"] = {"status": "ok", "message": "window list available; project window not visible"}
+    elif screenshot_status == "failed":
+        kind = screenshot_failure_kind(screenshot_reason)
+        checks["screen_capture"] = {"status": "blocked" if kind == "screen-recording-blocked" else "degraded", "message": screenshot_reason, "kind": kind}
+        if kind == "screen-recording-blocked":
+            recommendations.append("Grant Screen Recording permission to the terminal/IDE running the ai-collab daemon, then restart the daemon.")
+    elif screenshot_status == "not-run":
+        checks["screen_capture"] = {"status": "idle", "message": "capture interval not due"}
+
+    if screenshot and isinstance(screenshot.get("window"), dict):
+        checks["window_access"] = {
+            "status": "ok",
+            "message": "project window matched",
+            "window": screenshot["window"],
+        }
+    elif current_system == "Darwin" and screenshot_status == "failed" and "osascript" in screenshot_reason.lower():
+        checks["window_access"] = {"status": "blocked", "message": screenshot_reason}
+        recommendations.append("Grant Accessibility/System Events permission to the terminal/IDE running the ai-collab daemon.")
+
+    if checks["semantic_ocr"]["status"] == "degraded":
+        recommendations.append("Install tesseract or set AI_COLLAB_OBSERVER_SEMANTIC_OCR=0 to keep metadata-only semantic vision explicit.")
+
+    status_values = [item.get("status") for item in checks.values() if isinstance(item, dict)]
+    if any(value == "blocked" for value in status_values):
+        overall = "blocked"
+    elif any(value in {"degraded", "unsupported"} for value in status_values):
+        overall = "degraded"
+    else:
+        overall = "ok"
+
+    health = {
+        "schema": HEALTH_SCHEMA_VERSION,
+        "project": root.name,
+        "project_path": str(root.resolve()),
+        "updated": isoformat_z(now),
+        "overall": overall,
+        "system": current_system,
+        "settings": {
+            "screenshots": screenshots_enabled,
+            "screenshot_mode": mode,
+            "screenshot_interval": env_int("AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL", DEFAULT_SCREENSHOT_INTERVAL_SECONDS, 1),
+            "screenshot_active_only": active_only,
+            "semantic_ocr": env_bool("AI_COLLAB_OBSERVER_SEMANTIC_OCR", True),
+        },
+        "capabilities": {
+            "osascript": shutil.which("osascript") or "",
+            "screencapture": shutil.which("screencapture") or "",
+            "tesseract": ocr_binary,
+        },
+        "checks": checks,
+        "recommendations": recommendations,
+        "last_screenshot": screenshot or {},
+    }
+    write_json(live_dir / "health.json", health)
+    return health
+
+
 def maybe_capture_screenshot(
     root: Path,
     live_dir: Path,
@@ -630,7 +1008,7 @@ def maybe_capture_screenshot(
 ) -> dict[str, Any] | None:
     if not env_bool("AI_COLLAB_OBSERVER_SCREENSHOTS", True):
         return None
-    if env_bool("AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY", True) and not active_agents:
+    if env_bool("AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY", False) and not active_agents:
         return None
     interval = env_int("AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL", DEFAULT_SCREENSHOT_INTERVAL_SECONDS, 1)
     if not screenshot_due(live_dir, now, interval):
@@ -659,6 +1037,7 @@ def maybe_capture_screenshot(
         mode = "project"
     timestamp = now.strftime("%Y%m%d-%H%M%S")
     path = screenshots_dir / f"{timestamp}-{mode}.png"
+    semantic_path = screenshots_dir / f"{timestamp}-{mode}.semantic.json"
     command = ["screencapture", "-x"]
     rect = None
     window: dict[str, str] = {}
@@ -675,6 +1054,13 @@ def maybe_capture_screenshot(
         }
         if window:
             marker["window"] = window
+        marker["semantic"] = write_visual_semantics(
+            root=root,
+            marker=marker,
+            semantic_path=semantic_path,
+            now=now,
+            runner=runner,
+        )
         write_json(screenshots_dir / ".last.json", marker)
         return marker
 
@@ -690,6 +1076,13 @@ def maybe_capture_screenshot(
                 "status": "skipped",
                 "reason": f"no visible window matched project {root.name}",
             }
+            marker["semantic"] = write_visual_semantics(
+                root=root,
+                marker=marker,
+                semantic_path=semantic_path,
+                now=now,
+                runner=runner,
+            )
             write_json(screenshots_dir / ".last.json", marker)
             return marker
         command.extend(["-R", rect])
@@ -726,13 +1119,21 @@ def maybe_capture_screenshot(
         "rect": rect or "",
         "window": window,
         "active_agents": active_agents,
+        "status": "captured",
     }
     if fallback_reason:
         marker["fallback"] = "screen-after-project-window-match"
         marker["rect_error"] = fallback_reason
+    marker["semantic"] = write_visual_semantics(
+        root=root,
+        marker=marker,
+        semantic_path=semantic_path,
+        now=now,
+        runner=runner,
+    )
     write_json(screenshots_dir / ".last.json", marker)
     prune_screenshots(screenshots_dir, env_int("AI_COLLAB_OBSERVER_SCREENSHOT_MAX_KEEP", DEFAULT_MAX_SCREENSHOTS, 1))
-    return {"status": "captured", **marker}
+    return marker
 
 
 def build_alerts(
@@ -777,6 +1178,76 @@ def build_alerts(
     return alerts
 
 
+def build_runtime_alerts(
+    *,
+    snapshots: dict[str, dict[str, Any]],
+    screenshot: dict[str, Any] | None,
+    health: dict[str, Any],
+    now: datetime,
+    active_seconds: int,
+) -> list[dict[str, Any]]:
+    alerts: list[dict[str, Any]] = []
+    screenshot = screenshot or {}
+    screenshot_status = screenshot.get("status")
+    if screenshot_status == "failed":
+        alerts.append(
+            {
+                "type": "screenshot-failed",
+                "severity": "warn",
+                "message": screenshot.get("reason", "screenshot failed"),
+                "kind": screenshot_failure_kind(str(screenshot.get("reason", ""))),
+            }
+        )
+    elif screenshot_status == "skipped" and "no visible window matched" in str(screenshot.get("reason", "")):
+        alerts.append(
+            {
+                "type": "project-window-missing",
+                "severity": "info",
+                "message": screenshot["reason"],
+            }
+        )
+
+    semantic = screenshot.get("semantic") if isinstance(screenshot.get("semantic"), dict) else {}
+    if semantic.get("state") == "error":
+        alerts.append(
+            {
+                "type": "visual-error",
+                "severity": "warn",
+                "message": "Semantic vision detected error text in the project window",
+                "semantic": semantic,
+            }
+        )
+
+    if health.get("overall") == "blocked":
+        alerts.append(
+            {
+                "type": "observer-health-blocked",
+                "severity": "warn",
+                "message": "Observer health is blocked; check .ai-collab/live/health.json",
+            }
+        )
+
+    for agent, snapshot in snapshots.items():
+        if snapshot.get("status") != "running" or not snapshot.get("processes"):
+            continue
+        report_recent = is_report_recent(snapshot.get("reported", {}), now, active_seconds)
+        latest_log = snapshot.get("latest_log") or {}
+        log_recent = False
+        if latest_log.get("mtime"):
+            updated = parse_iso(str(latest_log.get("mtime", "")))
+            log_recent = bool(updated and (now - updated.astimezone(timezone.utc)).total_seconds() <= active_seconds)
+        if not report_recent and not log_recent:
+            alerts.append(
+                {
+                    "type": "agent-running-without-recent-log",
+                    "agent": agent,
+                    "severity": "info",
+                    "message": f"{agent} has a project-matched process but no recent collab log or live report",
+                }
+            )
+    return alerts
+
+
 def event_changes(previous: dict[str, Any], current: dict[str, Any]) -> list[dict[str, Any]]:
     changes: list[dict[str, Any]] = []
     if not previous:
@@ -816,15 +1287,16 @@ def observe_project(
     live_dir.mkdir(parents=True, exist_ok=True)
 
     agents = discover_agents(collab_dir)
+    identity = project_identity(root)
     active_seconds = env_int("AI_COLLAB_OBSERVER_ACTIVE_SECONDS", DEFAULT_ACTIVE_SECONDS, 1)
     stale_claim_seconds = env_int("AI_COLLAB_OBSERVER_STALE_CLAIM_SECONDS", DEFAULT_STALE_CLAIM_SECONDS, 60)
     max_events = env_int("AI_COLLAB_OBSERVER_MAX_EVENTS", DEFAULT_MAX_EVENTS, 1)
 
     git = git_state(root, runner=runner)
-    processes_by_agent = process_snapshot(root, agents, runner=runner)
+    processes_by_agent = process_snapshot(root, agents, runner=runner, system=system)
     logs_by_agent = {agent: read_latest_log(collab_dir, agent) for agent in agents}
     inboxes = {agent: read_inbox(collab_dir, agent) for agent in agents}
-    alerts = build_alerts(
+    base_alerts = build_alerts(
         agents=agents,
         inboxes=inboxes,
         logs_by_agent=logs_by_agent,
@@ -855,6 +1327,7 @@ def observe_project(
             "schema": SCHEMA_VERSION,
             "project": root.name,
             "project_path": str(root),
+            "project_identity": identity,
             "agent": agent,
             "updated": isoformat_z(now),
             "status": status,
@@ -868,7 +1341,7 @@ def observe_project(
             "thread_mentions": latest_thread_mentions(collab_dir, agent),
             "processes": processes,
             "git": git,
-            "alerts": [alert for alert in alerts if alert.get("agent") == agent],
+            "alerts": [alert for alert in base_alerts if alert.get("agent") == agent],
         }
         previous = load_json(live_dir / f"{agent}.json", {})
         write_json(live_dir / f"{agent}.json", snapshot)
@@ -891,6 +1364,19 @@ def observe_project(
                 max_events=max_events,
             )
 
+    health = build_health(root=root, live_dir=live_dir, now=now, screenshot=screenshot, system=system)
+    runtime_alerts = build_runtime_alerts(
+        snapshots=snapshots,
+        screenshot=screenshot,
+        health=health,
+        now=now,
+        active_seconds=active_seconds,
+    )
+    alerts = base_alerts + runtime_alerts
+    for agent, snapshot in snapshots.items():
+        snapshot["alerts"] = [alert for alert in alerts if alert.get("agent") == agent]
+        write_json(live_dir / f"{agent}.json", snapshot)
+
     for alert in alerts:
         append_jsonl(live_dir / "director-alerts.jsonl", {"timestamp": isoformat_z(now), **alert}, max_events=max_events)
 
@@ -898,6 +1384,7 @@ def observe_project(
         "schema": SCHEMA_VERSION,
         "project": root.name,
         "project_path": str(root),
+        "project_identity": identity,
         "updated": isoformat_z(now),
         "agents": [
             {
@@ -913,6 +1400,11 @@ def observe_project(
         "git": git,
         "alerts": alerts,
         "screenshot": screenshot or {},
+        "health": {
+            "overall": health["overall"],
+            "path": str(live_dir / "health.json"),
+            "recommendations": health.get("recommendations", []),
+        },
     }
     write_json(live_dir / "summary.json", summary)
     return summary

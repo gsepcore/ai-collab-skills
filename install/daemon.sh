@@ -52,10 +52,10 @@ while true; do
       done
     fi
 
-    # Live observer — writes .ai-collab/live/*.json snapshots with semantic
-    # state, process hints, git dirtiness, stale-claim alerts, and optional
-    # screenshots. It is project-local and can be disabled with
-    # AI_COLLAB_OBSERVER=0.
+    # Live observer — writes project-local .ai-collab/live/*.json snapshots,
+    # health.json, screenshot semantic sidecars, process hints, git dirtiness,
+    # stale-claim alerts, and project-scoped automatic screenshots. It can be
+    # disabled with AI_COLLAB_OBSERVER=0.
     if [ -x "$OBSERVER_SCRIPT" ] && [ "${AI_COLLAB_OBSERVER:-1}" != "0" ]; then
       python3 "$OBSERVER_SCRIPT" "$COLLAB_DIR" >/dev/null 2>>"$LOG_FILE" || log "Warning: observer scan failed for $COLLAB_DIR"
     fi
