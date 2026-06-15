@@ -662,6 +662,22 @@ def maybe_capture_screenshot(
     command = ["screencapture", "-x"]
     rect = None
     window: dict[str, str] = {}
+
+    def record_failed(reason: str) -> dict[str, Any]:
+        marker: dict[str, Any] = {
+            "captured_at": isoformat_z(now),
+            "path": str(path),
+            "mode": mode,
+            "rect": rect or "",
+            "active_agents": active_agents,
+            "status": "failed",
+            "reason": truncate(reason, 500),
+        }
+        if window:
+            marker["window"] = window
+        write_json(screenshots_dir / ".last.json", marker)
+        return marker
+
     if mode == "project":
         rect, window = project_window_rect(root, runner)
         if not rect:
@@ -685,7 +701,7 @@ def maybe_capture_screenshot(
     try:
         completed = run_command(command, root, runner=runner, timeout=15)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"status": "failed", "reason": f"screencapture failed: {exc}"}
+        return record_failed(f"screencapture failed: {exc}")
     fallback_reason = ""
     if completed.returncode != 0 and mode == "project" and rect:
         fallback_reason = truncate((completed.stderr or completed.stdout or "rect capture failed").strip(), 500)
@@ -693,10 +709,10 @@ def maybe_capture_screenshot(
         try:
             completed = run_command(command, root, runner=runner, timeout=15)
         except (OSError, subprocess.TimeoutExpired) as exc:
-            return {"status": "failed", "reason": f"screencapture fallback failed: {exc}"}
+            return record_failed(f"screencapture fallback failed: {exc}")
     if completed.returncode != 0:
         reason = truncate((completed.stderr or completed.stdout or "screencapture failed").strip(), 500)
-        return {"status": "failed", "reason": reason}
+        return record_failed(reason)
     if not path.exists():
         # Test runners may report success without creating the file.
         try:
