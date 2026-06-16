@@ -232,6 +232,20 @@ O para **configuración permanente** (para que la IA lo haga automáticamente en
 
 ---
 
+## Estado operativo
+
+AI Collab está diseñado para quedar operativo out-of-the-box: el instalador configura la skill, daemon, hooks, observer del proyecto, capturas automáticas, soporte OCR y health checks. El observer se mantiene aislado por proyecto, así que puedes tener varios Antigravity/OpenCode/Codex abiertos sin mezclar screenshots, procesos o estado live entre repos.
+
+Los únicos estados degradados dependen del sistema o de APIs externas, y se reportan explícitamente en vez de fallar en silencio:
+
+- El permiso Screen Recording de macOS puede bloquear screenshots hasta que el usuario conceda acceso al terminal/IDE que ejecuta el daemon.
+- OCR se instala automáticamente cuando existe un package manager soportado; si el sistema bloquea la instalación, la visión semántica sigue en modo metadata-only y `health.json` lo explica.
+- La pestaña Codex ya abierta dentro de Antigravity no puede recibir inyección visible de forma confiable hasta que OpenAI/Antigravity exponga una API pública; OpenCode, colaboración por filesystem, snapshots del observer, screenshots, OCR, inboxes y rutas Codex ACP/manual siguen disponibles.
+
+Puedes ejecutar `python3 ~/.claude/ai-collab-doctor.py` en cualquier momento para ver si la máquina está completamente verde o qué permiso/API externa limita alguna función.
+
+---
+
 ## Comandos
 
 ### `/collab read`

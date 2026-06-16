@@ -180,7 +180,7 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-That's it. The installer sets up **all eleven components** automatically:
+That's it. The installer sets up **all twelve components** automatically:
 
 | Component | What it does | Where |
 |-----------|-------------|-------|
@@ -191,12 +191,25 @@ That's it. The installer sets up **all eleven components** automatically:
 | 🧩 Project onboarding | Registers agents, IDE/container, model, TEAM, inbox, and rules files | `~/.claude/ai-collab-project-setup.py` |
 | 🎛️ Run orchestrator | Creates director-selected implementation runs, safe tasks, and agent threads | `~/.claude/ai-collab-orchestrate.py` |
 | 👁️ Live observer | Writes `.ai-collab/live/` semantic snapshots, alerts, and automatic screenshots | `~/.claude/ai-collab-observer.py` |
+| 🔎 OCR engine | Installs/detects `tesseract` for screenshot text reading when available | Homebrew / Linux package manager |
 | 🩺 Doctor script | Verifies installed files, hooks, daemon, and queues | `~/.claude/ai-collab-doctor.py` |
 | 🪝 `SessionStart` hook | Loads `CONTEXT.md` + notifications on session open | `~/.claude/settings.json` |
 | 🪝 `UserPromptSubmit` hook | Shows pending AI notifications before each message | `~/.claude/settings.json` |
 | 🪝 `Stop` hook | Auto-regenerates `CONTEXT.md` after each Claude response | `~/.claude/settings.json` |
 
 The hooks are installed **globally** (`~/.claude/settings.json`) so they work in **every project** automatically — no per-project configuration needed.
+
+### Operational status
+
+AI Collab is designed to be fully operational out of the box: the installer sets up the skill, daemon, hooks, project observer, automatic screenshots, OCR support, and health checks. The observer remains project-scoped, so multiple Antigravity/OpenCode/Codex workspaces can be open without mixing screenshots, processes, or live status between repos.
+
+The only degraded states are external to the skill and are reported explicitly instead of failing silently:
+
+- macOS Screen Recording permission can block screenshots until the user grants access to the terminal/IDE running the daemon.
+- OCR is installed automatically when a supported package manager is available; if the system blocks installation, semantic vision continues in metadata-only mode and `health.json` explains it.
+- The already-open Codex tab inside Antigravity cannot be injected into reliably until OpenAI/Antigravity exposes a public API; OpenCode, filesystem collaboration, observer snapshots, screenshots, OCR, inboxes, and ACP/manual Codex paths remain available.
+
+Run `python3 ~/.claude/ai-collab-doctor.py` any time to see whether the current machine is fully green or which external permission/API is limiting a feature.
 
 ### After installing — set up your project
 
