@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""
+Static tests for install/install.sh.
+"""
+import subprocess
+import unittest
+from pathlib import Path
+
+
+INSTALL_SH = Path(__file__).parent / "install.sh"
+
+
+class TestInstallScript(unittest.TestCase):
+    def test_shell_syntax(self):
+        completed = subprocess.run(["bash", "-n", str(INSTALL_SH)], capture_output=True, text=True, check=False)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_ocr_auto_install_defaults_are_present(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+
+        self.assertIn('INSTALL_OCR="${AI_COLLAB_INSTALL_OCR:-1}"', text)
+        self.assertIn("Step 3/6 — Installing semantic vision OCR", text)
+        self.assertIn("brew install tesseract", text)
+        self.assertIn("apt-get install -y tesseract-ocr", text)
+        self.assertIn('add_plist_env "AI_COLLAB_OBSERVER_SEMANTIC_OCR" "${AI_COLLAB_OBSERVER_SEMANTIC_OCR:-1}"', text)
+
+
+if __name__ == "__main__":
+    unittest.main()

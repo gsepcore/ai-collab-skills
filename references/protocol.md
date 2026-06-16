@@ -34,7 +34,7 @@ All AIs write Markdown session logs to `{project-root}/.ai-collab/`.
 - Any AI with filesystem access can read any log
 - The daemon (if installed) detects new/updated logs within 15 seconds and notifies the user
 - The daemon also scans `inbox-*.md` and `thread-*.md`: unread inboxes target an agent mailbox, while `@slug` mentions in threads target that agent's monitor/adapter path.
-- The daemon also writes semantic live snapshots to `.ai-collab/live/{agent}.json`, `.ai-collab/live/summary.json`, `.ai-collab/live/health.json`, and `.ai-collab/live/director-alerts.jsonl`. Process hints and screenshots are project-scoped: the default screenshot mode captures only a visible window matching the current project fingerprint and skips unrelated workspaces. Screenshots and `.semantic.json` sidecars are written under `.ai-collab/live/screenshots/` by default unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`.
+- The daemon also writes semantic live snapshots to `.ai-collab/live/{agent}.json`, `.ai-collab/live/summary.json`, `.ai-collab/live/health.json`, and `.ai-collab/live/director-alerts.jsonl`. Process hints and screenshots are project-scoped: the default screenshot mode captures only a visible window matching the current project fingerprint and skips unrelated workspaces. Screenshots and `.semantic.json` sidecars are written under `.ai-collab/live/screenshots/` by default unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`. The installer attempts to install the local OCR engine (`tesseract`) by default; if unavailable, semantic vision remains metadata-only and the health file explains why.
 
 Every log should include these frontmatter fields when the agent supports them:
 

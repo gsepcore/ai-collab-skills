@@ -14,8 +14,9 @@
 #    8. Multi-agent orchestrator → ~/.claude/ai-collab-orchestrate.py
 #    9. Live observer            → ~/.claude/ai-collab-observer.py
 #   10. Doctor script            → ~/.claude/ai-collab-doctor.py
-#   11. Background daemon        → launchd (macOS) / cron (Linux)
-#   12. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#   11. OCR engine               → tesseract auto-install when possible
+#   12. Background daemon        → launchd (macOS) / cron (Linux)
+#   13. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -35,6 +36,7 @@ PLIST_LABEL="com.gsepcore.ai-collab"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 YES="${AI_COLLAB_YES:-}"          # set to 1 to skip confirmations
 SKIP_DAEMON="${AI_COLLAB_NO_DAEMON:-}"  # set to 1 to skip daemon
+INSTALL_OCR="${AI_COLLAB_INSTALL_OCR:-1}"  # set to 0 to skip OCR engine install
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 bold()    { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -44,6 +46,7 @@ info()    { printf '  %s\n' "$*"; }
 ask()     { [[ -n "$YES" ]] && return 0; read -r -p "$1 [Y/n] " _ans; [[ "$_ans" =~ ^[Nn]$ ]] && return 1 || return 0; }
 need()    { command -v "$1" &>/dev/null || { echo "Error: $1 is required but not installed."; exit 1; }; }
 xml_escape() { printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g'; }
+have()    { command -v "$1" &>/dev/null; }
 sanitize_path() {
   local raw="$1"
   local clean="" part
@@ -56,6 +59,75 @@ sanitize_path() {
     esac
   done
   printf '%s' "$clean"
+}
+
+install_ocr_engine() {
+  if [[ "${AI_COLLAB_OBSERVER_SEMANTIC_OCR:-1}" = "0" || "$INSTALL_OCR" = "0" || "${AI_COLLAB_NO_OCR_INSTALL:-}" = "1" ]]; then
+    info "OCR engine install skipped — semantic vision will use metadata-only mode unless tesseract is already available."
+    return 0
+  fi
+
+  if have tesseract; then
+    green "OCR engine ready → $(command -v tesseract)"
+    return 0
+  fi
+
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    if have brew; then
+      info "Installing OCR engine for semantic vision: brew install tesseract"
+      if brew install tesseract; then
+        green "OCR engine installed → $(command -v tesseract || echo tesseract)"
+      else
+        yellow "OCR engine install failed; AI Collab will continue in metadata-only mode."
+        info "Run later: brew install tesseract"
+      fi
+    else
+      yellow "Homebrew not found; OCR engine could not be installed automatically."
+      info "AI Collab still works. To enable OCR later: install Homebrew, then run 'brew install tesseract'."
+    fi
+    return 0
+  fi
+
+  if [[ "$OSTYPE" == "linux"* ]]; then
+    local prefix=()
+    if [[ "$(id -u)" != "0" ]]; then
+      if have sudo; then
+        prefix=(sudo)
+      else
+        yellow "OCR auto-install needs root or sudo; continuing in metadata-only mode."
+        return 0
+      fi
+    fi
+
+    info "Installing OCR engine for semantic vision"
+    if have apt-get; then
+      if "${prefix[@]}" apt-get update && "${prefix[@]}" apt-get install -y tesseract-ocr; then
+        green "OCR engine installed → $(command -v tesseract || echo tesseract)"
+      else
+        yellow "OCR engine install failed; AI Collab will continue in metadata-only mode."
+      fi
+    elif have dnf; then
+      if "${prefix[@]}" dnf install -y tesseract; then
+        green "OCR engine installed → $(command -v tesseract || echo tesseract)"
+      else
+        yellow "OCR engine install failed; AI Collab will continue in metadata-only mode."
+      fi
+    elif have yum; then
+      if "${prefix[@]}" yum install -y tesseract; then
+        green "OCR engine installed → $(command -v tesseract || echo tesseract)"
+      else
+        yellow "OCR engine install failed; AI Collab will continue in metadata-only mode."
+      fi
+    elif have pacman; then
+      if "${prefix[@]}" pacman -Sy --noconfirm tesseract; then
+        green "OCR engine installed → $(command -v tesseract || echo tesseract)"
+      else
+        yellow "OCR engine install failed; AI Collab will continue in metadata-only mode."
+      fi
+    else
+      yellow "No supported package manager found for OCR auto-install."
+    fi
+  fi
 }
 
 # ── Detect source location ────────────────────────────────────────────────────
@@ -109,7 +181,7 @@ fi
 
 # ── 1. Install Claude Code skill ─────────────────────────────────────────────
 echo ""
-bold "Step 1/5 — Installing Claude Code skill"
+bold "Step 1/6 — Installing Claude Code skill"
 
 mkdir -p "$SKILL_DIR/references"
 copy_or_download "SKILL.md"                      "$SKILL_DIR/SKILL.md"
@@ -120,7 +192,7 @@ info  "Use /collab read, /collab write, /collab setup, /collab assign, etc."
 
 # ── 2. Install daemon + summary scripts ─────────────────────────────────────
 echo ""
-bold "Step 2/5 — Installing background scripts"
+bold "Step 2/6 — Installing background scripts"
 
 copy_or_download "install/daemon.sh"                          "$CLAUDE_DIR/ai-collab-daemon.sh"
 copy_or_download "install/ai-collab-summary.py"               "$CLAUDE_DIR/ai-collab-summary.py"
@@ -149,9 +221,14 @@ green "Run orchestrator     → $CLAUDE_DIR/ai-collab-orchestrate.py"
 green "Live observer        → $CLAUDE_DIR/ai-collab-observer.py"
 green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"
 
-# ── 3. Start background daemon ───────────────────────────────────────────────
+# ── 3. Install semantic vision OCR engine ───────────────────────────────────
 echo ""
-bold "Step 3/5 — Starting background daemon"
+bold "Step 3/6 — Installing semantic vision OCR"
+install_ocr_engine
+
+# ── 4. Start background daemon ───────────────────────────────────────────────
+echo ""
+bold "Step 4/6 — Starting background daemon"
 
 if [[ -n "$SKIP_DAEMON" ]]; then
   yellow "Daemon skipped (AI_COLLAB_NO_DAEMON=1)"
@@ -285,9 +362,9 @@ else
   info  "Start manually: bash $CLAUDE_DIR/ai-collab-daemon.sh &"
 fi
 
-# ── 4. Install global Claude Code hooks ─────────────────────────────────────
+# ── 5. Install global Claude Code hooks ─────────────────────────────────────
 echo ""
-bold "Step 4/5 — Installing Claude Code hooks (global)"
+bold "Step 5/6 — Installing Claude Code hooks (global)"
 info  "These hooks work automatically in ALL your projects."
 
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
@@ -393,9 +470,9 @@ green "SessionStart hook  → loads CONTEXT.md + notifications on every new sess
 green "UserPromptSubmit   → shows pending notifications before each message"
 green "Stop hook          → auto-generates CONTEXT.md after every response"
 
-# ── 5. Initialize .ai-collab/ in current project (optional) ─────────────────
+# ── 6. Initialize .ai-collab/ in current project (optional) ─────────────────
 echo ""
-bold "Step 5/5 — Project onboarding (optional)"
+bold "Step 6/6 — Project onboarding (optional)"
 
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 
@@ -443,6 +520,7 @@ echo "    🧭 Auto-onboard        — registers new agents after their first lo
 echo "    🧩 Project onboarding  — registers agents, IDE/container, model, rules"
 echo "    🎛️  Run orchestrator    — director-selected multi-agent implementation runs"
 echo "    👁️  Live observer       — writes .ai-collab/live semantic state snapshots"
+echo "    🔎 OCR engine          — powers screenshot text reading when available"
 echo "    🩺 Doctor script       — verifies install health"
 echo "    📚 /collab skill       — collaboration commands available in Claude Code"
 echo ""

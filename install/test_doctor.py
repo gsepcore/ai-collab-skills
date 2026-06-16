@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 _spec = importlib.util.spec_from_file_location(
@@ -77,6 +78,20 @@ class TestDoctor(unittest.TestCase):
         self.assertEqual(len(codex_visible), 1)
         self.assertEqual(codex_visible[0].level, "WARN")
         self.assertIn("degraded", codex_visible[0].message)
+
+    def test_ocr_engine_check_ok_when_tesseract_exists(self):
+        with patch.object(_mod.shutil, "which", return_value="/opt/homebrew/bin/tesseract"):
+            results = _mod.check_ocr_engine()
+
+        self.assertEqual(results[0].level, "OK")
+        self.assertIn("tesseract available", results[0].message)
+
+    def test_ocr_engine_check_warns_when_missing(self):
+        with patch.object(_mod.shutil, "which", return_value=None):
+            results = _mod.check_ocr_engine()
+
+        self.assertEqual(results[0].level, "WARN")
+        self.assertIn("metadata-only", results[0].message)
 
     def test_strict_exit_code_fails_on_failure_only(self):
         results = [_mod.warn("daemon", "not loaded")]

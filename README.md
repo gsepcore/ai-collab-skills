@@ -502,6 +502,8 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_MAX_OUTPUT` | `4000` | Total stdout character cap. Hard ceiling protecting Claude's context. |
 | `AI_COLLAB_YES` | _(off)_ | Set to `1` to skip installer confirmation prompts (useful in CI / Dockerfile installs). |
 | `AI_COLLAB_NO_DAEMON` | _(off)_ | Set to `1` to skip starting the background daemon during install (file-watching feature disabled). |
+| `AI_COLLAB_INSTALL_OCR` | `1` | Installs the local OCR engine (`tesseract`) during `install.sh` when a supported package manager is available. Set `0` to skip. |
+| `AI_COLLAB_NO_OCR_INSTALL` | _(off)_ | Set to `1` to skip OCR engine installation while keeping metadata-only semantic vision. |
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Set to `1` (in the daemon's launchd plist `EnvironmentVariables`) to fire macOS Notification Center banners when other AIs complete tasks. Persistent layer that works even when Claude Code is closed — see [macOS notifications](#macos-notifications-survives-claude-close-mac-sleep-and-restart). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | macOS sound name (e.g. `Tink`, `Glass`, `Pop`, `Hero`) to play with each banner. Only effective when `AI_COLLAB_OS_NOTIFY=1`. Leave unset for silent banners. |
 | `AI_COLLAB_DOCTOR_STRICT` | _(off)_ | Set to `1` so `ai-collab-doctor.py` exits nonzero when required install files/settings are broken. Warnings remain non-fatal. |
@@ -567,7 +569,7 @@ The daemon now gives the director "semantic eyes" for every onboarded project. E
 
 `health.json` is the observer doctor for the project. It records screenshot mode, interval, Screen Recording/window-access failures, OCR availability, the last screenshot attempt, and concrete recommendations. If macOS returns errors such as `could not create image from display`, the failure is recorded there instead of leaving an old screenshot looking current.
 
-Each screenshot attempt also writes a `.semantic.json` sidecar. When local `tesseract` exists, the sidecar includes OCR text and simple state inference such as `error`, `waiting-for-input`, `testing`, `editing`, or `running`. Without OCR, the sidecar still records window title/app/rect, active agents, project match, and metadata-only state.
+Each screenshot attempt also writes a `.semantic.json` sidecar. The installer tries to install local OCR (`tesseract`) by default, so most macOS/Homebrew and common Linux installs get text reading immediately. When `tesseract` exists, the sidecar includes OCR text and simple state inference such as `error`, `waiting-for-input`, `testing`, `editing`, or `running`. Without OCR, the sidecar still records window title/app/rect, active agents, project match, and metadata-only state.
 
 The onboarding snippets instruct each agent to self-report before commands and edits:
 

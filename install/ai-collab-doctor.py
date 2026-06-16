@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -201,6 +202,33 @@ def check_codex_visible_support() -> list[CheckResult]:
     ]
 
 
+def check_ocr_engine() -> list[CheckResult]:
+    configured = os.environ.get("AI_COLLAB_OBSERVER_TESSERACT_BIN", "").strip()
+    if configured:
+        configured_path = Path(configured).expanduser()
+        resolved = shutil.which(configured) or (str(configured_path) if configured_path.exists() else "")
+        if resolved:
+            return [ok("ocr-engine", f"tesseract configured → {resolved}")]
+        return [
+            warn(
+                "ocr-engine",
+                f"AI_COLLAB_OBSERVER_TESSERACT_BIN is set to {configured!r}, but it was not found. "
+                "OCR will fall back to metadata-only semantic vision.",
+            )
+        ]
+
+    detected = shutil.which("tesseract")
+    if detected:
+        return [ok("ocr-engine", f"tesseract available → {detected}")]
+    return [
+        warn(
+            "ocr-engine",
+            "tesseract not found. Fresh installs try to install it automatically by default; "
+            "without it, screenshots still work but semantic vision is metadata-only.",
+        )
+    ]
+
+
 def run_checks(home: Path | None = None, include_launchd: bool = True) -> list[CheckResult]:
     root = home or Path.home()
     results: list[CheckResult] = []
@@ -210,6 +238,7 @@ def run_checks(home: Path | None = None, include_launchd: bool = True) -> list[C
     if include_launchd:
         results.extend(check_launchd())
         results.extend(check_cli_projects_allowlist(root))
+    results.extend(check_ocr_engine())
     results.extend(check_codex_visible_support())
     return results
 
