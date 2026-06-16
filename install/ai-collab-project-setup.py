@@ -266,9 +266,10 @@ Mandatory behavior:
 1. At the start of every response, read `.ai-collab/CONTEXT.md` if it exists; otherwise read `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` to know the registered agents, their containers, models, and rule files.
 3. Read your direct inbox `{inbox}` and `.ai-collab/inbox-all.md`. If either has `status: unread`, claim it before doing any other work, execute it, then mark it `status: done`.
-4. Before editing files, read the latest logs and respect every `Do Not Touch (Avoid Conflicts)` section.
-5. Keep live observability updated in `{live_report}` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
-6. After every response, create or update your session log at `{log_path}`.
+4. Read recent task threads `.ai-collab/thread-*.md` and natural discussions `.ai-collab/discussions/*.md` where you are mentioned or listed as a participant. Answer direct `@{agent}` mentions before unrelated work.
+5. Before editing files, read the latest logs and respect every `Do Not Touch (Avoid Conflicts)` section.
+6. Keep live observability updated in `{live_report}` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
+7. After every response, create or update your session log at `{log_path}`.
 
 Inbox claim contract:
 - Change `status: unread` to `status: claimed`.
@@ -276,6 +277,12 @@ Inbox claim contract:
 - Never overwrite another agent's claim.
 - When finished, set `status: done` and `done_at: {{ISO timestamp}}`.
 - If blocked, set `status: blocked` and append the reason to the matching `thread-{{task_id}}.md` when present.
+
+Natural conversation contract:
+- Use `python3 ~/.claude/ai-collab-converse.py` when you need another agent's judgement instead of hiding the question in a private log.
+- Ask concrete questions with `question --to other-agent`, propose implementation options with `proposal`, record accepted choices with `decision`, and mark blockers with `blocker`.
+- Mention agents explicitly with `@slug`; the daemon wakes the mentioned agent from task threads and `.ai-collab/discussions/*.md`.
+- Do not edit previous messages. Correct yourself by appending a new message.
 
 Required log frontmatter:
 ```yaml

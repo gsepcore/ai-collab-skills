@@ -162,6 +162,12 @@ def parse_frontmatter(content: str) -> tuple[dict[str, str], str]:
     return meta, "\n".join(lines[end + 1 :])
 
 
+def parse_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip().strip("[]") for item in value.split(",") if item.strip().strip("[]")]
+
+
 def extract_section(content: str, header: str) -> str:
     pattern = rf"^## {re.escape(header)}\s*\n(.*?)(?=^## |\Z)"
     match = re.search(pattern, content, flags=re.MULTILINE | re.DOTALL)
@@ -587,9 +593,62 @@ def read_agent_report(live_dir: Path, agent: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def conversation_paths(collab_dir: Path) -> list[Path]:
+    paths = list(collab_dir.glob("thread-*.md")) + list((collab_dir / "discussions").glob("*.md"))
+    paths = [path for path in paths if path.is_file()]
+    return sorted(paths, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def latest_conversation_message(body: str) -> dict[str, str] | None:
+    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s+(?:--|—)\s+([a-zA-Z0-9_-]+)\s*$", body))
+    if not matches:
+        return None
+    start = matches[-1].end()
+    end_match = re.search(r"(?m)^---\s*$", body[start:])
+    end = start + end_match.start() if end_match else len(body)
+    return {
+        "timestamp": matches[-1].group(1).strip(),
+        "author": matches[-1].group(2).strip().lower(),
+        "content": body[start:end].strip(),
+    }
+
+
+def active_conversations(collab_dir: Path, limit: int = 10) -> list[dict[str, Any]]:
+    conversations: list[dict[str, Any]] = []
+    for path in conversation_paths(collab_dir):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        meta, body = parse_frontmatter(text)
+        status = meta.get("status", "open")
+        if status == "closed":
+            continue
+        latest = latest_conversation_message(body) or {}
+        conversations.append(
+            {
+                "path": str(path),
+                "mtime": file_mtime_iso(path),
+                "thread": meta.get("thread", path.stem),
+                "kind": meta.get("kind", "task" if path.name.startswith("thread-") else "discussion"),
+                "topic": meta.get("topic", meta.get("thread", path.stem)),
+                "status": status,
+                "participants": parse_csv(meta.get("participants")),
+                "latest": {
+                    "timestamp": latest.get("timestamp", ""),
+                    "author": latest.get("author", ""),
+                    "excerpt": truncate(str(latest.get("content", "")), 700),
+                },
+            }
+        )
+        if len(conversations) >= limit:
+            break
+    return conversations
+
+
 def latest_thread_mentions(collab_dir: Path, agent: str) -> list[dict[str, str]]:
     mentions: list[dict[str, str]] = []
-    for thread in collab_dir.glob("thread-*.md"):
+    for thread in conversation_paths(collab_dir):
         try:
             text = thread.read_text(encoding="utf-8")
         except OSError:
@@ -1296,6 +1355,7 @@ def observe_project(
     processes_by_agent = process_snapshot(root, agents, runner=runner, system=system)
     logs_by_agent = {agent: read_latest_log(collab_dir, agent) for agent in agents}
     inboxes = {agent: read_inbox(collab_dir, agent) for agent in agents}
+    conversations = active_conversations(collab_dir)
     base_alerts = build_alerts(
         agents=agents,
         inboxes=inboxes,
@@ -1339,6 +1399,12 @@ def observe_project(
             "inbox": inbox,
             "latest_log": latest_log,
             "thread_mentions": latest_thread_mentions(collab_dir, agent),
+            "conversations": [
+                item
+                for item in conversations
+                if agent in item.get("participants", [])
+                or f"@{agent}" in str((item.get("latest") or {}).get("excerpt", ""))
+            ],
             "processes": processes,
             "git": git,
             "alerts": [alert for alert in base_alerts if alert.get("agent") == agent],
@@ -1397,6 +1463,7 @@ def observe_project(
             for agent in agents
         ],
         "active_agents": active_agents,
+        "conversations": conversations,
         "git": git,
         "alerts": alerts,
         "screenshot": screenshot or {},

@@ -43,6 +43,8 @@ your-project/
     ├── inbox-codex.md                ← tasks assigned specifically to Codex
     ├── inbox-opencode.md             ← tasks assigned specifically to OpenCode
     ├── thread-20260512-task.md       ← agent-to-agent conversation for a task
+    ├── discussions/                  ← natural questions/proposals/decisions
+    │   └── discussion-20260616-api.md
     ├── live/                         ← semantic observer snapshots + automatic screenshots
     │   ├── summary.json              ← current status for every registered agent
     │   ├── health.json               ← observer/screenshot/OCR health diagnostics
@@ -138,19 +140,20 @@ These are non-negotiable rules in every snippet so workers self-orient without t
 
 When `/collab setup` runs on a fresh project, it also seeds `.ai-collab/inbox-all.md` with a **welcome onboarding task** — the first worker AI to open the project gets a concrete first instruction instead of an empty inbox.
 
-### 2.5 Per-agent monitors and task threads
+### 2.5 Per-agent monitors and natural conversations
 
-The daemon treats each worker slug as addressable. Direct assignments wake `inbox-{slug}.md`; threaded conversation wakes workers through `@slug` mentions in `.ai-collab/thread-{task_id}.md`.
+The daemon treats each worker slug as addressable. Direct assignments wake `inbox-{slug}.md`; threaded conversation wakes workers through `@slug` mentions in `.ai-collab/thread-{task_id}.md` and `.ai-collab/discussions/*.md`.
 
 ```text
 inbox-codex.md         direct task mailbox for Codex
 inbox-opencode.md      direct task mailbox for OpenCode
 thread-{task_id}.md    append-only discussion around a task
-@codex                 wake Codex from the latest thread message
-@opencode              wake OpenCode from the latest thread message
+discussions/*.md       natural agent questions, proposals, decisions, blockers
+@codex                 wake Codex from the latest conversation message
+@opencode              wake OpenCode from the latest conversation message
 ```
 
-Thread mentions create wake events with `source_type: thread`, `reason: thread-mention`, `source_path`, `thread_path`, and the target slug. They do not claim or mutate the inbox task. The inbox remains the canonical task state; the thread is the conversation layer agents use to ask questions, assign review, and report progress to each other.
+Conversation mentions create wake events with `source_type: thread`, `reason: thread-mention`, `source_path`, `thread_path`, and the target slug. They do not claim or mutate the inbox task. The inbox remains the canonical task state; the thread/discussion is the conversation layer agents use to ask questions, compare options, assign review, record decisions, and report progress to each other.
 
 ### 3. Each project is its own isolation bubble
 
@@ -180,7 +183,7 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-That's it. The installer sets up **all twelve components** automatically:
+That's it. The installer sets up **all thirteen components** automatically:
 
 | Component | What it does | Where |
 |-----------|-------------|-------|
@@ -190,6 +193,7 @@ That's it. The installer sets up **all twelve components** automatically:
 | 🧭 Auto-onboard | Detects a new agent's first log and appends its rules snippet + TEAM entry | `~/.claude/ai-collab-auto-onboard.py` |
 | 🧩 Project onboarding | Registers agents, IDE/container, model, TEAM, inbox, and rules files | `~/.claude/ai-collab-project-setup.py` |
 | 🎛️ Run orchestrator | Creates director-selected implementation runs, safe tasks, and agent threads | `~/.claude/ai-collab-orchestrate.py` |
+| 💬 Conversation helper | Lets agents ask questions, propose options, record decisions, blockers, reviews, and handoffs | `~/.claude/ai-collab-converse.py` |
 | 👁️ Live observer | Writes `.ai-collab/live/` semantic snapshots, alerts, and automatic screenshots | `~/.claude/ai-collab-observer.py` |
 | 🔎 OCR engine | Installs/detects `tesseract` for screenshot text reading when available | Homebrew / Linux package manager |
 | 🩺 Doctor script | Verifies installed files, hooks, daemon, and queues | `~/.claude/ai-collab-doctor.py` |
@@ -201,7 +205,7 @@ The hooks are installed **globally** (`~/.claude/settings.json`) so they work in
 
 ### Operational status
 
-AI Collab is designed to be fully operational out of the box: the installer sets up the skill, daemon, hooks, project observer, automatic screenshots, OCR support, and health checks. The observer remains project-scoped, so multiple Antigravity/OpenCode/Codex workspaces can be open without mixing screenshots, processes, or live status between repos.
+AI Collab is designed to be fully operational out of the box: the installer sets up the skill, daemon, hooks, conversation helper, project observer, automatic screenshots, OCR support, and health checks. The observer remains project-scoped, so multiple Antigravity/OpenCode/Codex workspaces can be open without mixing screenshots, processes, conversations, or live status between repos.
 
 The only degraded states are external to the skill and are reported explicitly instead of failing silently:
 
@@ -311,7 +315,33 @@ Delegate a task to another AI without leaving your Claude session. Writes `.ai-c
 
 The third form (`/collab assign all ...`) writes to `inbox-all.md` so every worker AI sees it.
 
-**Why this matters:** you do not have to copy a prompt from Claude's window into Codex's or OpenCode's window. The worker AI self-orients from its inbox, and the daemon can wake addressable agents through inboxes or `@slug` thread mentions. See [Architecture](#architecture-director-autonomous-workers-project-isolation) for the full flow.
+**Why this matters:** you do not have to copy a prompt from Claude's window into Codex's or OpenCode's window. The worker AI self-orients from its inbox, and the daemon can wake addressable agents through inboxes or `@slug` conversation mentions. See [Architecture](#architecture-director-autonomous-workers-project-isolation) for the full flow.
+
+### `/collab converse`
+
+Start a natural agent discussion without creating a formal inbox task first. Use it when agents need to ask each other questions, compare implementation options, request review, correct a misunderstanding, record a decision, or hand off context.
+
+```bash
+python3 ~/.claude/ai-collab-converse.py --root "$PWD" start \
+  --author codex \
+  --topic "Billing API boundary" \
+  --to opencode \
+  --type question \
+  --message "Can you compare the adapter approach with changing the shared API directly?"
+
+python3 ~/.claude/ai-collab-converse.py --root "$PWD" proposal \
+  --thread discussion-20260616-120000-billing-api-boundary \
+  --author opencode \
+  --to codex \
+  --message "Proposal: keep the API stable and add a billing adapter in src/billing/adapter.ts."
+
+python3 ~/.claude/ai-collab-converse.py --root "$PWD" decision \
+  --thread discussion-20260616-120000-billing-api-boundary \
+  --author codex \
+  --message "Decision: use the adapter. Do not change the public API in this task."
+```
+
+Task-bound conversations can still use the same helper with `--kind task --task-id TASK`, which writes the compatible `.ai-collab/thread-{task_id}.md` file. General discussions go to `.ai-collab/discussions/`. In both cases, direct `@slug` mentions wake the mentioned agent when the daemon adapter is running, and `/collab observe` shows open conversations in the live project summary.
 
 ### `/collab orchestrate`
 
@@ -434,18 +464,19 @@ Remove stale session logs.
 
 > **This is all set up automatically by the installer.** No manual steps.
 
-Ten components keep Claude informed and able to dispatch inbox tasks:
+Eleven components keep Claude informed and able to dispatch inbox tasks:
 
 1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
 3. **Notification reader script** — `~/.claude/ai-collab-check-notifications.py` is invoked by the `UserPromptSubmit` hook. It uses an `fcntl` lock to coordinate with the daemon, **filters notifications by active project**, caps output to 10 items / 500 chars per message / 4 KB total, drops notifications older than 24 h, defends against malformed JSON, and always exits 0 (never blocks your prompt). All limits are tunable — see [Environment variables](#environment-variables) below.
-4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md` and `thread-*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; thread mentions use `reason: thread-mention`. **By default it uses `visible`** so OpenCode/Codex get invisible synthetic wakeups in their running panels with zero manual activation; you can downgrade to `cli` (headless execution) or `notify-only` (safe logging only) via `AI_COLLAB_WAKEUP_ADAPTER`.
-5. **Live observer** — `~/.claude/ai-collab-observer.py` writes `.ai-collab/live/{agent}.json`, `summary.json`, `health.json`, screenshot PNGs, and `.semantic.json` sidecars every daemon tick. It combines inbox status, latest logs, agent self-reports, running process hints tied to the project fingerprint, git dirtiness, stale-claim alerts, OCR/metadata vision, and project-scoped automatic screenshots.
-6. **Project onboarding** — `~/.claude/ai-collab-project-setup.py` creates the agent-first project manifest (`TEAM.md`, `agents.json`), welcome inbox, and runtime rules files. It records agent, container, and model explicitly so a fresh project does not depend on guesswork.
-7. **Auto-onboard detector** — `~/.claude/ai-collab-auto-onboard.py` runs from the daemon when a new `{slug}-{YYYYMMDD-HHMMSS}.md` log appears. Known slugs get an agent-specific `AI-COLLAB-START agent={slug}` rules block if missing, plus a merged `.ai-collab/TEAM.md` roster entry. Unknown slugs produce a low-priority `.ai-collab/inbox-all.md` notice telling Claude Code to run `/collab onboard {slug}`. The operation is idempotent and never overwrites existing rules content.
-8. **Run orchestrator** — `~/.claude/ai-collab-orchestrate.py` creates `.ai-collab/runs/{run_id}/`, records the selected director, writes safe task assignments to normal inboxes, and appends task-thread messages that agents can answer naturally.
-9. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
-10. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
+4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md`, `thread-*.md`, and `discussions/*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; conversation mentions use `reason: thread-mention`. **By default it uses `visible`** so OpenCode/Codex get invisible synthetic wakeups in their running panels with zero manual activation; you can downgrade to `cli` (headless execution) or `notify-only` (safe logging only) via `AI_COLLAB_WAKEUP_ADAPTER`.
+5. **Natural conversation helper** — `~/.claude/ai-collab-converse.py` creates append-only task threads and general discussions with typed messages (`question`, `proposal`, `decision`, `blocker`, `review`, `handoff`) that agents can read and answer naturally.
+6. **Live observer** — `~/.claude/ai-collab-observer.py` writes `.ai-collab/live/{agent}.json`, `summary.json`, `health.json`, screenshot PNGs, and `.semantic.json` sidecars every daemon tick. It combines inbox status, latest logs, open conversations, agent self-reports, running process hints tied to the project fingerprint, git dirtiness, stale-claim alerts, OCR/metadata vision, and project-scoped automatic screenshots.
+7. **Project onboarding** — `~/.claude/ai-collab-project-setup.py` creates the agent-first project manifest (`TEAM.md`, `agents.json`), welcome inbox, and runtime rules files. It records agent, container, and model explicitly so a fresh project does not depend on guesswork.
+8. **Auto-onboard detector** — `~/.claude/ai-collab-auto-onboard.py` runs from the daemon when a new `{slug}-{YYYYMMDD-HHMMSS}.md` log appears. Known slugs get an agent-specific `AI-COLLAB-START agent={slug}` rules block if missing, plus a merged `.ai-collab/TEAM.md` roster entry. Unknown slugs produce a low-priority `.ai-collab/inbox-all.md` notice telling Claude Code to run `/collab onboard {slug}`. The operation is idempotent and never overwrites existing rules content.
+9. **Run orchestrator** — `~/.claude/ai-collab-orchestrate.py` creates `.ai-collab/runs/{run_id}/`, records the selected director, writes safe task assignments to normal inboxes, and appends task-thread messages that agents can answer naturally.
+10. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
+11. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
    - `UserPromptSubmit` — runs `ai-collab-check-notifications.py` to show pending notifications for the **active project only**, zero token cost at idle
    - `Stop` — auto-regenerates `CONTEXT.md` after every Claude response using a Python script
@@ -576,9 +607,9 @@ The daemon now gives the director "semantic eyes" for every onboarded project. E
     20260615-120000-project.semantic.json
 ```
 
-`{agent}.json` is the observer's merged view: inbox status, current task, latest log sections, self-reported command/edit phase from `{agent}.agent.json`, recent command/test/edit events from `{agent}.agent.events.jsonl`, project-scoped process hints, git dirty files, thread mentions, and alerts. `{agent}.events.jsonl` is observer-owned history for status changes, process changes, dirty-file changes, and screenshots.
+`{agent}.json` is the observer's merged view: inbox status, current task, latest log sections, self-reported command/edit phase from `{agent}.agent.json`, recent command/test/edit events from `{agent}.agent.events.jsonl`, open conversations where the agent participates or was mentioned, project-scoped process hints, git dirty files, and alerts. `{agent}.events.jsonl` is observer-owned history for status changes, process changes, dirty-file changes, and screenshots.
 
-`summary.json` includes a project fingerprint (`project_identity`) built from the absolute repo path, repo name, git remote repo name, and optional `AI_COLLAB_PROJECT_ALIASES`. Process hints are accepted only when the command, local endpoint, or process cwd matches that fingerprint. This is what keeps multiple Antigravity windows/projects isolated.
+`summary.json` includes open conversations from `.ai-collab/thread-*.md` and `.ai-collab/discussions/*.md`, plus a project fingerprint (`project_identity`) built from the absolute repo path, repo name, git remote repo name, and optional `AI_COLLAB_PROJECT_ALIASES`. Process hints are accepted only when the command, local endpoint, or process cwd matches that fingerprint. This is what keeps multiple Antigravity windows/projects isolated.
 
 `health.json` is the observer doctor for the project. It records screenshot mode, interval, Screen Recording/window-access failures, OCR availability, the last screenshot attempt, and concrete recommendations. If macOS returns errors such as `could not create image from display`, the failure is recorded there instead of leaving an old screenshot looking current.
 

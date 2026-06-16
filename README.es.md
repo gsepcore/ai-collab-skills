@@ -35,9 +35,14 @@ Cada IA escribe un log de sesión en Markdown dentro de `{raíz-del-proyecto}/.a
 tu-proyecto/
 └── .ai-collab/
     ├── PROTOCOL.md                   ← protocolo compartido (se crea automáticamente)
+    ├── TEAM.md                       ← agentes registrados + container/model/rules
+    ├── agents.json                   ← manifiesto machine-readable de agentes
     ├── inbox-all.md                  ← tareas broadcast para cualquier IA
     ├── inbox-codex.md                ← tareas asignadas específicamente a Codex
     ├── inbox-opencode.md             ← tareas asignadas específicamente a OpenCode
+    ├── thread-20260512-task.md       ← conversación agente-a-agente de una tarea
+    ├── discussions/                  ← preguntas/propuestas/decisiones naturales
+    │   └── discussion-20260616-api.md
     ├── live/                         ← snapshots semánticos + screenshots automáticos
     │   ├── summary.json              ← estado actual de cada agente registrado
     │   ├── health.json               ← diagnóstico del observer/screenshots/OCR
@@ -234,7 +239,7 @@ O para **configuración permanente** (para que la IA lo haga automáticamente en
 
 ## Estado operativo
 
-AI Collab está diseñado para quedar operativo out-of-the-box: el instalador configura la skill, daemon, hooks, observer del proyecto, capturas automáticas, soporte OCR y health checks. El observer se mantiene aislado por proyecto, así que puedes tener varios Antigravity/OpenCode/Codex abiertos sin mezclar screenshots, procesos o estado live entre repos.
+AI Collab está diseñado para quedar operativo out-of-the-box: el instalador configura la skill, daemon, hooks, helper de conversaciones, observer del proyecto, capturas automáticas, soporte OCR y health checks. El observer se mantiene aislado por proyecto, así que puedes tener varios Antigravity/OpenCode/Codex abiertos sin mezclar screenshots, procesos, conversaciones o estado live entre repos.
 
 Los únicos estados degradados dependen del sistema o de APIs externas, y se reportan explícitamente en vez de fallar en silencio:
 
@@ -293,7 +298,33 @@ Delega una tarea a otra IA sin salir de tu sesión de Claude. Escribe `.ai-colla
 
 La tercera forma (`/collab assign all ...`) escribe en `inbox-all.md` para que cada worker la vea.
 
-**Por qué importa:** no tienes que copiar un prompt desde la ventana de Claude a la de Codex o la de OpenCode. El worker se auto-orienta desde su inbox en su primera respuesta después de que lo abras. Ver [Arquitectura](#arquitectura-director-workers-autónomos-aislamiento-por-proyecto) para el flujo completo.
+**Por qué importa:** no tienes que copiar un prompt desde la ventana de Claude a la de Codex o la de OpenCode. El worker se auto-orienta desde su inbox en su primera respuesta después de que lo abras, y el daemon puede despertar agentes por menciones `@slug` en conversaciones. Ver [Arquitectura](#arquitectura-director-workers-autónomos-aislamiento-por-proyecto) para el flujo completo.
+
+### `/collab converse`
+
+Abre una conversación natural entre agentes sin crear primero una tarea formal. Úsalo cuando los agentes necesiten preguntarse cosas, comparar soluciones, pedir revisión, corregirse, registrar una decisión o dejar un handoff.
+
+```bash
+python3 ~/.claude/ai-collab-converse.py --root "$PWD" start \
+  --author codex \
+  --topic "Límite del API de billing" \
+  --to opencode \
+  --type question \
+  --message "Compara el adapter approach con cambiar el API compartido directamente."
+
+python3 ~/.claude/ai-collab-converse.py --root "$PWD" proposal \
+  --thread discussion-20260616-120000-limite-del-api-de-billing \
+  --author opencode \
+  --to codex \
+  --message "Propuesta: mantener el API estable y agregar un adapter en src/billing/adapter.ts."
+
+python3 ~/.claude/ai-collab-converse.py --root "$PWD" decision \
+  --thread discussion-20260616-120000-limite-del-api-de-billing \
+  --author codex \
+  --message "Decisión: usar el adapter. No cambiar el API público en esta tarea."
+```
+
+Las conversaciones ligadas a una tarea usan `--kind task --task-id TAREA` y escriben el archivo compatible `.ai-collab/thread-{task_id}.md`. Las conversaciones generales viven en `.ai-collab/discussions/`. En ambos casos, una mención directa `@slug` despierta al agente mencionado cuando el daemon adapter está activo, y `/collab observe` muestra las conversaciones abiertas en el resumen live del proyecto.
 
 ### `/collab orchestrate`
 
@@ -574,9 +605,9 @@ El daemon también escribe "ojos semánticos" del proyecto cada 15 segundos:
     20260615-120000-project.semantic.json
 ```
 
-`{agente}.json` es la vista combinada del observer: estado del inbox, tarea actual, secciones del último log, fase/comando reportado por `{agente}.agent.json`, eventos recientes de comandos/tests/ediciones desde `{agente}.agent.events.jsonl`, pistas de procesos filtradas por proyecto, archivos dirty en git, menciones en threads y alertas. `{agente}.events.jsonl` conserva el historial del observer para cambios de estado, procesos, archivos dirty y screenshots.
+`{agente}.json` es la vista combinada del observer: estado del inbox, tarea actual, secciones del último log, fase/comando reportado por `{agente}.agent.json`, eventos recientes de comandos/tests/ediciones desde `{agente}.agent.events.jsonl`, conversaciones abiertas donde participa o fue mencionado, pistas de procesos filtradas por proyecto, archivos dirty en git y alertas. `{agente}.events.jsonl` conserva el historial del observer para cambios de estado, procesos, archivos dirty y screenshots.
 
-`summary.json` incluye un fingerprint del proyecto (`project_identity`) construido desde la ruta absoluta del repo, nombre del repo, repo remoto git y aliases opcionales en `AI_COLLAB_PROJECT_ALIASES`. Las pistas de proceso solo se aceptan si el comando, endpoint local o cwd del proceso coincide con ese fingerprint. Eso mantiene aislados varios Antigravity/proyectos abiertos a la vez.
+`summary.json` incluye conversaciones abiertas en `.ai-collab/thread-*.md` y `.ai-collab/discussions/*.md`, además de un fingerprint del proyecto (`project_identity`) construido desde la ruta absoluta del repo, nombre del repo, repo remoto git y aliases opcionales en `AI_COLLAB_PROJECT_ALIASES`. Las pistas de proceso solo se aceptan si el comando, endpoint local o cwd del proceso coincide con ese fingerprint. Eso mantiene aislados varios Antigravity/proyectos abiertos a la vez.
 
 `health.json` es el doctor del observer para este proyecto. Registra modo de screenshot, intervalo, fallos de Screen Recording/acceso a ventanas, disponibilidad de OCR, último intento de captura y recomendaciones concretas. Si macOS devuelve errores como `could not create image from display`, el fallo queda registrado ahí en vez de dejar una captura vieja como si fuera actual.
 

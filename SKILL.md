@@ -13,6 +13,8 @@ Shared filesystem protocol so every AI coding agent working on the same project 
 
 Each AI writes a Markdown log to `{project-root}/.ai-collab/`. Any AI with filesystem access to the project can read those logs. Claude manages its own log via this skill. Other agents (OpenCode, Codex, Aider, Cursor native chat, etc.) write via agent-specific rules installed by `~/.claude/ai-collab-project-setup.py`.
 
+Agents can also hold natural conversations: task-specific threads live at `.ai-collab/thread-{task_id}.md`, and broader design/review discussions live at `.ai-collab/discussions/*.md`. `@slug` mentions in either place are scanned by the daemon and can wake the mentioned agent.
+
 The installed daemon also writes semantic live snapshots to `{project-root}/.ai-collab/live/`. These are the project-scoped "eyes" layer: current inbox/task state, latest log summary, self-reported commands/edits from each agent, process hints tied to the current project, git dirty files, director alerts, `health.json`, automatic project-window screenshots, and `.semantic.json` screenshot sidecars unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`. The installer attempts to install the local OCR engine (`tesseract`) by default; if unavailable, vision remains functional in metadata-only mode and `health.json` reports the degradation.
 
 **Conceptual model:** this skill is agent-first. `agent` is the runtime doing work, `container` is the IDE/terminal where it is visible, and `model` is metadata about the LLM behind it. Do not treat IDEs and agents as the same thing.
@@ -94,17 +96,50 @@ Show the live semantic observer view for the project.
    - dirty files count
    - alerts
    - screenshot path if present
-5. Read `{root}/.ai-collab/live/health.json` if present and report:
+5. If `summary.json` has `conversations`, show open discussions/task threads with topic, participants, latest author, latest excerpt, and path.
+6. Read `{root}/.ai-collab/live/health.json` if present and report:
    - overall health
    - screenshot/window/OCR checks that are not `ok`
    - recommendations
-6. If the latest screenshot has a `semantic.path`, read that sidecar and summarize:
+7. If the latest screenshot has a `semantic.path`, read that sidecar and summarize:
    - project match
    - OCR status
    - inferred state (`error`, `waiting-for-input`, `testing`, `editing`, `running`, `unknown`, etc.)
    - text excerpt if present
-7. Read `{root}/.ai-collab/live/director-alerts.jsonl` if present and print the latest 5 alerts first.
-8. If screenshots are not present, mention they are enabled by default but require a visible window matching the current project fingerprint, macOS Screen Recording permission, a supported macOS host, and `AI_COLLAB_OBSERVER_SCREENSHOTS` not being set to `0`.
+8. Read `{root}/.ai-collab/live/director-alerts.jsonl` if present and print the latest 5 alerts first.
+9. If screenshots are not present, mention they are enabled by default but require a visible window matching the current project fingerprint, macOS Screen Recording permission, a supported macOS host, and `AI_COLLAB_OBSERVER_SCREENSHOTS` not being set to `0`.
+
+---
+
+## Command: /collab converse
+
+Start or continue a natural agent-to-agent discussion for questions, proposals, reviews, blockers, decisions, and handoffs.
+
+**Steps:**
+1. Find project root.
+2. Prefer the deterministic helper:
+
+   ```bash
+   python3 ~/.claude/ai-collab-converse.py --root "$ROOT" start --author claude-code --topic "$TOPIC" --to "$AGENTS" --message "$MESSAGE"
+   ```
+
+   If the helper is not installed, fall back to appending the same heading format manually.
+3. Use task threads for task-bound work:
+
+   ```bash
+   python3 ~/.claude/ai-collab-converse.py --root "$ROOT" start --kind task --task-id "$TASK" --author claude-code --to opencode --type question --topic "$TOPIC" --message "$MESSAGE"
+   ```
+
+4. Continue a conversation with typed messages:
+
+   ```bash
+   python3 ~/.claude/ai-collab-converse.py --root "$ROOT" question --thread "$THREAD" --author claude-code --to opencode --message "$QUESTION"
+   python3 ~/.claude/ai-collab-converse.py --root "$ROOT" proposal --thread "$THREAD" --author opencode --to codex --message "$PROPOSAL"
+   python3 ~/.claude/ai-collab-converse.py --root "$ROOT" decision --thread "$THREAD" --author codex --message "$DECISION"
+   ```
+
+5. Remind agents to answer direct mentions before unrelated work. A message that mentions `@opencode`, `@codex`, or another registered slug can wake that agent through the daemon.
+6. Use `/collab observe` to see open conversations and latest replies.
 
 ---
 

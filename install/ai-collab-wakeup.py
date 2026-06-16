@@ -185,6 +185,24 @@ def thread_id_from_path(thread_path: Path) -> str:
     return stem
 
 
+def collab_root_for_path(path: Path) -> Path:
+    current = path.parent
+    while current != current.parent:
+        if current.name == ".ai-collab":
+            return current
+        current = current.parent
+    return path.parent
+
+
+def project_root_for_path(path: Path) -> Path:
+    collab_root = collab_root_for_path(path)
+    return collab_root.parent if collab_root.name == ".ai-collab" else path.parent.parent
+
+
+def is_thread_file(path: Path) -> bool:
+    return path.name.startswith("thread-") or path.parent.name == "discussions"
+
+
 def find_mentions(message: str) -> list[str]:
     return sorted(dict.fromkeys(match.group(1).lower() for match in MENTION_RE.finditer(message)))
 
@@ -1411,7 +1429,9 @@ def process_thread(
 
     task_id = meta.get("thread") or thread_id_from_path(thread_path)
     inbox_name = meta.get("inbox", "")
-    inbox_path = str(thread_path.parent / inbox_name) if inbox_name else ""
+    collab_root = collab_root_for_path(thread_path)
+    project_root = project_root_for_path(thread_path)
+    inbox_path = str(collab_root / inbox_name) if inbox_name else ""
     msg_hash = message_hash(message)
     timestamp = isoformat_z(now)
     state = load_json(state_file, {})
@@ -1453,7 +1473,7 @@ def process_thread(
         event = {
             "task_id": task_id,
             "project": project,
-            "project_path": str(thread_path.parent.parent),
+            "project_path": str(project_root),
             "target_slug": target_slug,
             "source_type": "thread",
             "source_path": str(thread_path),
@@ -1683,8 +1703,8 @@ def main(argv: list[str]) -> int:
         return 2
 
     project = argv[1]
-    path = Path(argv[2])
-    if path.name.startswith("thread-"):
+    path = Path(argv[2]).expanduser().resolve()
+    if is_thread_file(path):
         result = process_thread(path, project)
     else:
         result = process_inbox(path, project)

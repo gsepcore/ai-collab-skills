@@ -60,6 +60,8 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("AI-COLLAB-START agent=codex", agents_md)
         self.assertIn("agent_slug: `opencode`", agents_md)
         self.assertIn("agent_slug: `codex`", agents_md)
+        self.assertIn("ai-collab-converse.py", agents_md)
+        self.assertIn("Natural conversation contract:", agents_md)
 
     def test_opencode_gets_agent_specific_rules_file(self):
         self.setup()

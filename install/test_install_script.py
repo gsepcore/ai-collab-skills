@@ -25,6 +25,13 @@ class TestInstallScript(unittest.TestCase):
         self.assertIn("apt-get install -y tesseract-ocr", text)
         self.assertIn('add_plist_env "AI_COLLAB_OBSERVER_SEMANTIC_OCR" "${AI_COLLAB_OBSERVER_SEMANTIC_OCR:-1}"', text)
 
+    def test_conversation_helper_is_installed(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+
+        self.assertIn('copy_or_download "install/ai-collab-converse.py"', text)
+        self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-converse.py"', text)
+        self.assertIn("Conversation helper", text)
+
 
 if __name__ == "__main__":
     unittest.main()

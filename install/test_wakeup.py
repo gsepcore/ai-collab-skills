@@ -1000,6 +1000,35 @@ class TestProcessThread(unittest.TestCase):
         self.assertEqual(result["reason"], "closed")
         self.assertFalse(self.events.exists())
 
+    def test_discussion_mention_uses_project_root(self):
+        discussion_dir = self.collab / "discussions"
+        discussion_dir.mkdir()
+        discussion = discussion_dir / "discussion-20260616-api.md"
+        append_thread_message(
+            discussion,
+            task_id="discussion-20260616-api",
+            project="gsep",
+            inbox_name="",
+            author_slug="codex",
+            message="@opencode please compare the two API options.",
+            now=self.now,
+        )
+
+        result = process_thread(
+            discussion,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "thread-mentions")
+        events = json.loads(self.events.read_text(encoding="utf-8"))
+        self.assertEqual(events[0]["target_slug"], "opencode")
+        self.assertEqual(events[0]["project_path"], str(self.root))
+        self.assertEqual(events[0]["thread_path"], str(discussion))
+
 
 if __name__ == "__main__":
     unittest.main()

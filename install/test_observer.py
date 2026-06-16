@@ -167,6 +167,43 @@ Implementing live observation.
         self.assertEqual(snapshot["current_command"], "python3 -m unittest install/test_observer.py")
         self.assertEqual(snapshot["reported_events"][0]["event"], "command")
 
+    def test_observer_reports_open_discussions(self):
+        discussion_dir = self.collab / "discussions"
+        discussion_dir.mkdir()
+        (discussion_dir / "discussion-20260616-api.md").write_text(
+            """---
+schema: ai-collab.thread.v2
+thread: discussion-20260616-api
+kind: discussion
+topic: API boundary
+project: demo
+participants: codex, opencode
+status: open
+updated: 2026-06-16T12:00:00Z
+---
+## 2026-06-16T12:00:00Z -- codex
+
+type: question
+to: opencode
+
+@opencode should we use an adapter?
+
+---
+""",
+            encoding="utf-8",
+        )
+
+        summary = _mod.observe_project(self.collab, now=self.now, runner=self.fake_runner, system="Darwin")
+
+        self.assertEqual(summary["conversations"][0]["topic"], "API boundary")
+        self.assertEqual(summary["conversations"][0]["latest"]["author"], "codex")
+        snapshot = json.loads((self.collab / "live" / "opencode.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["conversations"][0]["thread"], "discussion-20260616-api")
+        self.assertEqual(
+            snapshot["thread_mentions"][0]["path"],
+            str((discussion_dir / "discussion-20260616-api.md").resolve()),
+        )
+
     def test_process_snapshot_filters_processes_from_other_projects(self):
         other = self.root.parent / "other-project"
 
