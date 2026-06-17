@@ -151,28 +151,22 @@ Todo vive dentro del proyecto. Si abres otro proyecto mañana → los contextos 
 
 ## Instalación
 
-### Paso 1 — Instalar los archivos del skill
+### Un comando — instala todo
 
 ```bash
-mkdir -p ~/.claude/skills/collab/references
-
-curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/SKILL.md \
-  -o ~/.claude/skills/collab/SKILL.md
-
-curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/references/protocol.md \
-  -o ~/.claude/skills/collab/references/protocol.md
+curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/install.sh | bash
 ```
 
-O clona y copia manualmente:
+O desde un repo clonado:
 
 ```bash
 git clone https://github.com/gsepcore/ai-collab-skills.git
-mkdir -p ~/.claude/skills/collab/references
-cp ai-collab-skills/SKILL.md ~/.claude/skills/collab/SKILL.md
-cp ai-collab-skills/references/protocol.md ~/.claude/skills/collab/references/protocol.md
+bash ai-collab-skills/install/install.sh
 ```
 
-### Paso 2 — Configurar tu proyecto
+Eso instala la skill de Claude Code, daemon, hooks globales, detector de wakeups, onboarding de proyectos, helper de conversaciones, observer, doctor y soporte OCR cuando está disponible.
+
+### Después de instalar — configura tu proyecto
 
 Abre Claude Code dentro de tu proyecto y ejecuta:
 
@@ -180,60 +174,26 @@ Abre Claude Code dentro de tu proyecto y ejecuta:
 /collab setup
 ```
 
-Esto hará:
-- Crear la carpeta `{raíz}/.ai-collab/`
-- Agregar `.ai-collab/` a `.gitignore` automáticamente
-- Copiar el `PROTOCOL.md` al directorio compartido
-- Preguntar qué otras IAs usas y generar los snippets de reglas para cada una
+Esto crea `.ai-collab/`, agrega `.ai-collab/` a `.gitignore`, copia `PROTOCOL.md`, escribe `TEAM.md` y `agents.json`, crea el inbox inicial y agrega los bloques de reglas correctos para cada agente.
 
-### Paso 3 — Activar las otras IAs
+### Configurar otros agentes
 
-Pega este comando en cada otra IA al inicio de su sesión. Reemplaza las rutas con la ruta real de tu proyecto:
+Para configuración permanente, usa el helper de onboarding:
 
-```
-Eres parte de un equipo de múltiples IAs trabajando en este proyecto simultáneamente.
-
-PASO 1 — Lee estos archivos ahora:
-- {raíz-del-proyecto}/.ai-collab/PROTOCOL.md
-- {raíz-del-proyecto}/.ai-collab/CONTEXT.md
-- Cualquier otro archivo .md en {raíz-del-proyecto}/.ai-collab/ (son logs de otras IAs)
-
-PASO 2 — Confirma que los leíste con un resumen de 3 líneas:
-- En qué están trabajando las otras IAs
-- Qué archivos NO debes tocar
-- El problema crítico más importante pendiente
-
-PASO 3 — Escribe tu primer log en:
-{raíz-del-proyecto}/.ai-collab/{nombre-de-tu-ia}-{YYYYMMDD-HHMMSS}.md
-
-Usa este formato exacto:
----
-ai: [Nombre de tu IA y modelo]
-session: [YYYYMMDD-HHMMSS]
-project: [nombre del proyecto]
-updated: [timestamp ISO]
----
-## Working On
-[qué estás haciendo ahora mismo]
-## Files Modified This Session
-[archivos que tocaste, o "None"]
-## Decisions Made
-[decisiones tomadas, o "None"]
-## Do Not Touch (Avoid Conflicts)
-[archivos que estás editando activamente]
-## Handoff Note
-[lo más importante que las otras IAs deben saber de esta sesión]
-
-REGLA PERMANENTE — después de CADA respuesta que me des:
-Actualiza ese archivo con lo que acabas de hacer. No esperes que te lo pida. Siempre.
-
-REGLA DE COORDINACIÓN:
-- Antes de editar cualquier archivo, revisa la sección "Do Not Touch" de los otros logs
-- Si otra IA tiene un archivo listado, pregúntame antes de tocarlo
-- Escribe solo en español o inglés — sin mezclar otros idiomas o alfabetos
+```bash
+python3 ~/.claude/ai-collab-project-setup.py
 ```
 
-O para **configuración permanente** (para que la IA lo haga automáticamente en cada sesión), pega los snippets listos de `examples/` en sus archivos de reglas. Ver la tabla de [Herramientas de IA compatibles](#herramientas-de-ia-compatibles) más abajo.
+El helper escribe en los archivos de reglas correctos:
+
+| Runtime de agente | Archivo de reglas |
+|---|---|
+| Claude Code | `CLAUDE.md` |
+| OpenCode | `.opencode/rules/ai-collab.md` + `AGENTS.md` |
+| Codex | `AGENTS.md` |
+| Cursor native chat | `.cursorrules` |
+| Windsurf native chat | `.windsurfrules` |
+| Copilot Chat | `.github/copilot-instructions.md` |
 
 ---
 

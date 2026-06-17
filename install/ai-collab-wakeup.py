@@ -203,6 +203,40 @@ def is_thread_file(path: Path) -> bool:
     return path.name.startswith("thread-") or path.parent.name == "discussions"
 
 
+def project_agent_known(project_root: Path, target_slug: str) -> bool:
+    collab = project_root / ".ai-collab"
+    target_slug = target_slug.strip().lower()
+    if not target_slug:
+        return False
+
+    agents = load_json(collab / "agents.json", {})
+    if isinstance(agents, dict):
+        roster = agents.get("agents", agents.get("roster", []))
+        if isinstance(roster, list):
+            for item in roster:
+                if isinstance(item, str) and item.lower() == target_slug:
+                    return True
+                if isinstance(item, dict) and str(item.get("agent") or item.get("slug") or "").lower() == target_slug:
+                    return True
+        if target_slug in {str(key).lower() for key in agents.keys()}:
+            return True
+
+    try:
+        team_text = (collab / "TEAM.md").read_text(encoding="utf-8").lower()
+    except FileNotFoundError:
+        team_text = ""
+    if re.search(rf"(?m)^\s*-\s+{re.escape(target_slug)}(?:\s|\(|$)", team_text):
+        return True
+    if re.search(rf"(?m)^\|\s*{re.escape(target_slug)}\s*\|", team_text):
+        return True
+
+    if (collab / f"inbox-{target_slug}.md").exists():
+        return True
+    if any(collab.glob(f"{target_slug}-*.md")):
+        return True
+    return False
+
+
 def find_mentions(message: str) -> list[str]:
     return sorted(dict.fromkeys(match.group(1).lower() for match in MENTION_RE.finditer(message)))
 
@@ -630,9 +664,9 @@ def run_opencode_visible_adapter(
     project_path = input_data.get("project_path")
     last_error = ""
     fast_timeout = min(timeout, 10)
-    # Prefer ports whose /project/current matches the inbox's project_path so
-    # the synthetic prompt lands in the user's visible tab, not a tab open on
-    # another project.
+    # Only deliver visible prompts to a TUI whose project matches the inbox's
+    # project_path. Falling back to any other OpenCode port can wake a different
+    # project, which is worse than leaving the event retryable.
     project_ports: list[int] = []
     other_ports: list[int] = []
     for port in ports:
@@ -646,10 +680,15 @@ def run_opencode_visible_adapter(
                 project_ports.append(port)
                 continue
         other_ports.append(port)
-    # Hardening (per Cody's review 2026-05-13): once any port reports a
-    # matching project, never fall back to non-matching ports — that path
-    # could re-introduce cross-project delivery. Only use other_ports when
-    # no port can be confirmed for the target project at all.
+    if project_path and not project_ports:
+        return {
+            "status": "failed",
+            "message": (
+                "no visible OpenCode TUI port matched project "
+                f"{project_path}; refusing cross-project wakeup"
+            ),
+            "adapter_name": "opencode-visible",
+        }
     ordered_ports = project_ports if project_ports else other_ports
 
     def tui_url(port: int, path: str) -> str:
@@ -1440,6 +1479,15 @@ def process_thread(
 
     results = []
     for target_slug in targets:
+        if not project_agent_known(project_root, target_slug):
+            results.append({"target_slug": target_slug, "action": "skipped", "reason": "agent-not-in-project"})
+            log(
+                f"THREAD action=skipped task_id={task_id} target={target_slug} "
+                f"reason=agent-not-in-project project={project_root} thread={thread_path}",
+                log_file,
+            )
+            continue
+
         state_key = f"thread:{task_id}:{msg_hash}:{target_slug}"
         entry = state.get(state_key, {})
         if entry is True:

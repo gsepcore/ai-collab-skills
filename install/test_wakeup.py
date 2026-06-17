@@ -665,6 +665,39 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(posts[1][0], "http://127.0.0.1:22222/tui/append-prompt?directory=%2Ftmp%2Fgsep")
         self.assertEqual(posts[2][0], "http://127.0.0.1:22222/tui/submit-prompt?directory=%2Ftmp%2Fgsep")
 
+    def test_opencode_visible_refuses_cross_project_fallback(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/new-project"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "11111"
+        posts = []
+
+        def fake_poster(url, payload, **kwargs):
+            posts.append((url, payload, kwargs))
+            return 200, "ok"
+
+        def fake_getter(url, **kwargs):
+            if "127.0.0.1:11111/project/current" in url:
+                return 200, {"worktree": "/tmp/other-project"}
+            if "127.0.0.1:11111/session" in url:
+                return 200, [{"id": "ses_other", "directory": "/tmp/other-project"}]
+            return 404, ""
+
+        result = _mod.run_opencode_visible_adapter(
+            {
+                "project_path": "/tmp/new-project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/new-project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            timeout=10,
+            poster=fake_poster,
+            getter=fake_getter,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("refusing cross-project wakeup", result["message"])
+        self.assertEqual(posts, [])
+
     def test_antigravity_chat_adapter_uses_reuse_window(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
         os.environ["AI_COLLAB_ANTIGRAVITY_BIN"] = "/usr/bin/antigravity"
@@ -904,6 +937,19 @@ class TestProcessThread(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.collab = self.root / ".ai-collab"
         self.collab.mkdir()
+        (self.collab / "TEAM.md").write_text(
+            """---
+project: gsep
+---
+
+## Roster
+
+- claude-code
+- codex
+- opencode
+""",
+            encoding="utf-8",
+        )
         self.thread = self.collab / "thread-task-123.md"
         self.events = self.root / "events.json"
         self.state = self.root / "state.json"
@@ -979,6 +1025,35 @@ class TestProcessThread(unittest.TestCase):
 
         self.assertEqual(result["action"], "ignored")
         self.assertEqual(result["reason"], "no-mentions")
+        self.assertFalse(self.events.exists())
+
+    def test_thread_mention_skips_agent_not_in_project(self):
+        (self.collab / "TEAM.md").write_text(
+            """---
+project: gsep
+---
+
+## Roster
+
+- claude-code
+- codex
+""",
+            encoding="utf-8",
+        )
+        self.append(author="codex", message="@opencode please compare this.")
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "thread-mentions")
+        self.assertEqual(result["results"][0]["action"], "skipped")
+        self.assertEqual(result["results"][0]["reason"], "agent-not-in-project")
         self.assertFalse(self.events.exists())
 
     def test_closed_thread_is_ignored(self):
