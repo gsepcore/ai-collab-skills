@@ -235,7 +235,12 @@ def copy_protocol(root: Path) -> str:
         if candidate.exists():
             atomic_write(target, candidate.read_text(encoding="utf-8"))
             return "created"
-    atomic_write(target, "# AI Collab Protocol\n\nRead `.ai-collab/TEAM.md` and your inbox before responding.\n")
+    atomic_write(
+        target,
+        "# AI Collab Protocol\n\n"
+        "Before every response or analysis, read `.ai-collab/TEAM.md`, your inbox, "
+        "`inbox-all.md`, recent logs, and relevant task threads/discussions.\n",
+    )
     return "created"
 
 
@@ -262,14 +267,15 @@ Identity:
 - container: `{container or "unknown"}`
 - model: `{model or "unknown"}`
 
-Mandatory behavior:
-1. At the start of every response, read `.ai-collab/CONTEXT.md` if it exists; otherwise read `.ai-collab/PROTOCOL.md`.
+Mandatory preflight before EVERY response, analysis, or tool action:
+1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise read `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` to know the registered agents, their containers, models, and rule files.
 3. Read your direct inbox `{inbox}` and `.ai-collab/inbox-all.md`. If either has `status: unread`, claim it before doing any other work, execute it, then mark it `status: done`.
 4. Read recent task threads `.ai-collab/thread-*.md` and natural discussions `.ai-collab/discussions/*.md` where you are mentioned or listed as a participant. Answer direct `@{agent}` mentions before unrelated work.
-5. Before editing files, read the latest logs and respect every `Do Not Touch (Avoid Conflicts)` section.
-6. Keep live observability updated in `{live_report}` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
-7. After every response, create or update your session log at `{log_path}`.
+5. Read the latest session logs in `.ai-collab/*.md` from other agents, skipping `PROTOCOL.md`, `CONTEXT.md`, `TEAM.md`, inbox files, and your own current-session log. Respect every `Do Not Touch (Avoid Conflicts)` section before analyzing, replying, or editing.
+6. If `.ai-collab/live/summary.json` exists, read it for current agent phases, dirty files, alerts, and open conversations before making coordination decisions.
+7. Keep live observability updated in `{live_report}` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
+8. After every response, create or update your session log at `{log_path}`.
 
 Inbox claim contract:
 - Change `status: unread` to `status: claimed`.
@@ -460,9 +466,10 @@ Models: {", ".join(f"{a}={models.get(a, 'unknown')}" for a in agents)}
 First-response checklist:
 1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` and confirm your own `agent_slug`, container, model, and rule file.
-3. Read your direct inbox `.ai-collab/inbox-{{your-agent-slug}}.md`.
-4. Write your first session log using the exact slug from TEAM.md.
-5. Mark this welcome task `done` only after you have oriented yourself.
+3. Read your direct inbox `.ai-collab/inbox-{{your-agent-slug}}.md` and `.ai-collab/inbox-all.md`.
+4. Read recent logs from other agents, relevant `thread-*.md` / `discussions/*.md`, and active `Do Not Touch` sections before answering or analyzing.
+5. Write your first session log using the exact slug from TEAM.md.
+6. Mark this welcome task `done` only after you have oriented yourself.
 """
     atomic_write(path, body)
     return "created"

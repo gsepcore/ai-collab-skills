@@ -51,6 +51,9 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("- codex", team)
         self.assertIn("| opencode | worker | antigravity | minimax/m2.5 |", team)
         self.assertIn("| codex | worker | antigravity | openai/gpt-5.5 |", team)
+        inbox_all = (self.root / ".ai-collab" / "inbox-all.md").read_text(encoding="utf-8")
+        self.assertIn("Read recent logs from other agents", inbox_all)
+        self.assertIn("before answering or analyzing", inbox_all)
 
     def test_shared_agents_md_can_hold_multiple_agent_snippets(self):
         self.setup()
@@ -62,6 +65,9 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("agent_slug: `codex`", agents_md)
         self.assertIn("ai-collab-converse.py", agents_md)
         self.assertIn("Natural conversation contract:", agents_md)
+        self.assertIn("Mandatory preflight before EVERY response, analysis, or tool action:", agents_md)
+        self.assertIn("Read the latest session logs in `.ai-collab/*.md` from other agents", agents_md)
+        self.assertIn("Respect every `Do Not Touch (Avoid Conflicts)` section before analyzing, replying, or editing", agents_md)
 
     def test_opencode_gets_agent_specific_rules_file(self):
         self.setup()
@@ -71,6 +77,8 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("inbox-opencode.md", rules)
         self.assertIn(".ai-collab/live/opencode.agent.json", rules)
         self.assertIn(".ai-collab/live/opencode.agent.events.jsonl", rules)
+        self.assertIn("Mandatory preflight before EVERY response, analysis, or tool action:", rules)
+        self.assertIn(".ai-collab/live/summary.json", rules)
 
     def test_idempotent_rerun_does_not_duplicate_snippets(self):
         self.setup()

@@ -126,11 +126,12 @@ Próxima vez que envíes un prompt en Claude → hook UserPromptSubmit inyecta
        Claude te avisa
 ```
 
-Cada archivo de reglas de los workers (creado por `/collab setup` o pegado desde `references/protocol.md`) contiene dos comportamientos obligatorios:
+Cada archivo de reglas de los workers (creado por `/collab setup` o pegado desde `references/protocol.md`) contiene comportamientos obligatorios:
 
-1. **Inbox check antes de cada respuesta** — releer `inbox-{ai}.md` e `inbox-all.md`, ejecutar cualquier tarea con `status: unread`, marcarla `status: done` vía escritura atómica.
-2. **Log automático después de cada respuesta** — guardar en `.ai-collab/{ai}-{timestamp}.md` con frontmatter y secciones estándar.
-3. **Observabilidad live durante el trabajo** — actualizar `.ai-collab/live/{ai}.agent.json` antes/después de comandos, tests, ediciones, bloqueos y handoffs.
+1. **Preflight completo antes de cada respuesta, análisis o tool action** — releer `CONTEXT.md` o `PROTOCOL.md`, `TEAM.md`, tu inbox, `inbox-all.md`, threads/discussions relevantes, logs recientes de otros agentes y secciones activas de `Do Not Touch`.
+2. **Inbox check antes de responder** — ejecutar cualquier tarea con `status: unread`, marcarla `status: done` vía escritura atómica y nunca sobrescribir el claim de otro agente.
+3. **Log automático después de cada respuesta** — guardar en `.ai-collab/{ai}-{timestamp}.md` con frontmatter y secciones estándar.
+4. **Observabilidad live durante el trabajo** — actualizar `.ai-collab/live/{ai}.agent.json` antes/después de comandos, tests, ediciones, bloqueos y handoffs.
 
 Estas reglas son no negociables en cada snippet, así los workers se auto-orientan sin que el usuario tenga que recordarles nada.
 

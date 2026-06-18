@@ -16,10 +16,10 @@ python3 ~/.claude/ai-collab-project-setup.py
 
 It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/inbox-all.md`, and the correct rules files for each selected agent.
 
-**Three rules that make this work:**
+**Core rules that make this work:**
 1. Every AI saves a log after EVERY response — automatically, no prompting needed.
 2. Every new AI reads `CONTEXT.md` first — the single-file project brief from all logs.
-3. Every AI checks its inbox on every response — `inbox-{ai-name}.md` and `inbox-all.md` for direct task assignments from the orchestrating AI.
+3. Every AI performs a full preflight before EVERY response, analysis, or tool action: context/protocol, team roster, direct inbox, `inbox-all.md`, relevant threads/discussions, recent logs from other agents, and active `Do Not Touch` sections.
 4. Every AI treats `thread-{task_id}.md` as the task conversation channel, and `.ai-collab/discussions/*.md` as natural design/review conversations — `@slug` mentions can wake the mentioned agent when the daemon and adapter are running.
 5. Directed implementation runs have one active director in `.ai-collab/runs/{run_id}/director.json`; all other agents respect that director for the run.
 6. Every AI keeps live observability current in `.ai-collab/live/{agent}.agent.json` before and after commands, tests, file edits, blockers, and handoffs.
@@ -194,6 +194,8 @@ updated: {ISO timestamp}
 [the one thing other AIs must know from this response]
 
 ### Inbox check — every response (MANDATORY):
+Before any analysis or answer, first re-read project context and recent coordination state: `.ai-collab/CONTEXT.md` or `.ai-collab/PROTOCOL.md`, `.ai-collab/TEAM.md`, your inbox, `inbox-all.md`, relevant `thread-*.md` / `discussions/*.md`, and recent logs from other agents. Respect `Do Not Touch` before replying or editing.
+
 Before every response (not just session start), re-read `.ai-collab/inbox-cursor.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
 
 ### After every response — proactive check:
@@ -225,6 +227,8 @@ You are part of a multi-AI team. Other assistants (Claude Code, Cursor, Codex, e
 4. Announce: "Context loaded from [N] AI session(s)."
 
 ### Inbox check — every response (MANDATORY):
+Before any analysis or answer, first re-read project context and recent coordination state: `.ai-collab/CONTEXT.md` or `.ai-collab/PROTOCOL.md`, `.ai-collab/TEAM.md`, your inbox, `inbox-all.md`, relevant `thread-*.md` / `discussions/*.md`, and recent logs from other agents. Respect `Do Not Touch` before replying or editing.
+
 Before every response, re-read `.ai-collab/inbox-windsurf.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
 
 ### AUTOMATIC LOG — after EVERY response (mandatory, no exceptions):
@@ -273,6 +277,8 @@ Add to `.github/copilot-instructions.md`:
 At the start of each session, check `.ai-collab/` in the project root for logs from other AI assistants. Read them and summarize relevant context to the user. Also read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 **INBOX CHECK — before every response (MANDATORY):**
+Before any analysis or answer, first re-read project context and recent coordination state: `.ai-collab/CONTEXT.md` or `.ai-collab/PROTOCOL.md`, `.ai-collab/TEAM.md`, your inbox, `inbox-all.md`, relevant `thread-*.md` / `discussions/*.md`, and recent logs from other agents. Respect `Do Not Touch` before replying or editing.
+
 Before every response, re-read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` first. (2) Execute the task BEFORE responding. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`.
 
 **AUTOMATIC LOG — after EVERY response (mandatory):**
@@ -299,6 +305,8 @@ You are working alongside other AI assistants on this project. A shared log dire
 On session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Summarize what other AIs have been working on and flag any Do Not Touch files. Also read `.ai-collab/inbox-opencode.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 INBOX CHECK — before every response (MANDATORY):
+Before any analysis or answer, first re-read project context and recent coordination state: `.ai-collab/CONTEXT.md` or `.ai-collab/PROTOCOL.md`, `.ai-collab/TEAM.md`, your inbox, `inbox-all.md`, relevant `thread-*.md` / `discussions/*.md`, and recent logs from other agents. Respect `Do Not Touch` before replying or editing.
+
 Before every response (not just session start), re-read `.ai-collab/inbox-opencode.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
@@ -340,6 +348,8 @@ Add to your Codex system prompt:
 Other AI assistants are working on this project simultaneously. Check `.ai-collab/` at session start, summarize context to the user, and flag Do Not Touch files. Also read `.ai-collab/inbox-codex.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 INBOX CHECK — before every response (MANDATORY):
+Before any analysis or answer, first re-read project context and recent coordination state: `.ai-collab/CONTEXT.md` or `.ai-collab/PROTOCOL.md`, `.ai-collab/TEAM.md`, your inbox, `inbox-all.md`, relevant `thread-*.md` / `discussions/*.md`, and recent logs from other agents. Respect `Do Not Touch` before replying or editing.
+
 Before every response (not just session start), re-read `.ai-collab/inbox-codex.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
@@ -382,6 +392,8 @@ You are part of a multi-AI team inside Antigravity IDE. Other assistants (Claude
 On session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Tell the user what other AIs were working on and flag Do Not Touch files. Also read `.ai-collab/inbox-antigravity.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 INBOX CHECK — before every response (MANDATORY):
+Before any analysis or answer, first re-read project context and recent coordination state: `.ai-collab/CONTEXT.md` or `.ai-collab/PROTOCOL.md`, `.ai-collab/TEAM.md`, your inbox, `inbox-all.md`, relevant `thread-*.md` / `discussions/*.md`, and recent logs from other agents. Respect `Do Not Touch` before replying or editing.
+
 Before every response, re-read `.ai-collab/inbox-antigravity.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` first. (2) Execute the task BEFORE responding. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
@@ -404,6 +416,8 @@ Add to `.github/copilot-instructions.md` or VS Code AI instructions:
 You are part of a multi-AI team. Check `.ai-collab/` at session start. Read all `.md` files (skip PROTOCOL.md and your own logs). Summarize context and flag Do Not Touch files. Also read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 INBOX CHECK — before every response (MANDATORY):
+Before any analysis or answer, first re-read project context and recent coordination state: `.ai-collab/CONTEXT.md` or `.ai-collab/PROTOCOL.md`, `.ai-collab/TEAM.md`, your inbox, `inbox-all.md`, relevant `thread-*.md` / `discussions/*.md`, and recent logs from other agents. Respect `Do Not Touch` before replying or editing.
+
 Before every response, re-read `.ai-collab/inbox-copilot.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` first. (2) Execute the task BEFORE responding. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
@@ -426,6 +440,8 @@ Add to your Hermes system prompt or rules:
 You are part of a multi-AI team. Check `.ai-collab/` at session start. Read all `.md` files (skip PROTOCOL.md and your own logs). Summarize context and flag Do Not Touch files. Also read `.ai-collab/inbox-hermes.md` and `.ai-collab/inbox-all.md` — if `status: unread`, execute those tasks immediately and mark them `status: done`.
 
 INBOX CHECK — before every response (MANDATORY):
+Before any analysis or answer, first re-read project context and recent coordination state: `.ai-collab/CONTEXT.md` or `.ai-collab/PROTOCOL.md`, `.ai-collab/TEAM.md`, your inbox, `inbox-all.md`, relevant `thread-*.md` / `discussions/*.md`, and recent logs from other agents. Respect `Do Not Touch` before replying or editing.
+
 Before every response, re-read `.ai-collab/inbox-hermes.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` first. (2) Execute the task BEFORE responding. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`.
 
 AUTOMATIC LOG — MANDATORY after EVERY response:
@@ -449,8 +465,8 @@ You are part of a multi-AI team. A shared directory `.ai-collab/` exists in the 
 
 1. At session start: read all `.md` files in `.ai-collab/` (skip PROTOCOL.md and your own logs). Tell the user what other AIs were working on. Flag any Do Not Touch files before editing them. Then read `.ai-collab/inbox-{your-ai-name}.md` and `.ai-collab/inbox-all.md` — if either has `status: unread`, execute those tasks immediately and mark them `status: done`.
 
-2. INBOX CHECK — before every response (MANDATORY):
-   Before every response (not just session start), re-read `.ai-collab/inbox-{your-ai-name}.md` and `.ai-collab/inbox-all.md`. If either has `status: unread`: (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
+2. PREFLIGHT + INBOX CHECK — before every response, analysis, or tool action (MANDATORY):
+   First re-read project context and recent coordination state: `.ai-collab/CONTEXT.md` or `.ai-collab/PROTOCOL.md`, `.ai-collab/TEAM.md`, your inbox, `inbox-all.md`, relevant `thread-*.md` / `discussions/*.md`, and recent logs from other agents. Respect `Do Not Touch` before replying or editing. Then handle unread inboxes: if either inbox has `status: unread`, (1) atomically set `status: claimed`, `claimed_by: {your-slug}`, `claimed_at: {ISO timestamp}` before doing anything else. (2) Execute the task BEFORE responding to the user's current message. (3) Atomically set `status: done`, `done_at: {ISO timestamp}`. Never modify `task_id`. Use temp file + rename for every write.
 
 3. AUTOMATIC LOG — MANDATORY after EVERY response:
    After every single response — automatically, without the user asking — save your log to:

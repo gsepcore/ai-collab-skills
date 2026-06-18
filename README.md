@@ -131,10 +131,12 @@ Next time you send any prompt in Claude → UserPromptSubmit hook injects
        Claude tells you it's done
 ```
 
-Every worker AI's rules file (created by `/collab setup` or pasted from `references/protocol.md`) contains two mandatory behaviors:
+Every worker AI's rules file (created by `/collab setup` or pasted from `references/protocol.md`) contains mandatory behaviors:
 
-1. **Inbox check before every response** — re-read `inbox-{ai}.md` and `inbox-all.md`, execute any `status: unread` task, mark it `status: done` via atomic write.
-2. **Automatic log after every response** — save to `.ai-collab/{ai}-{timestamp}.md` with frontmatter and standard sections.
+1. **Full preflight before every response, analysis, or tool action** — re-read `CONTEXT.md` or `PROTOCOL.md`, `TEAM.md`, your inbox, `inbox-all.md`, relevant threads/discussions, recent logs from other agents, and active `Do Not Touch` sections.
+2. **Inbox handling before responding** — execute any `status: unread` task, mark it `status: done` via atomic write, and never overwrite another agent's claim.
+3. **Automatic log after every response** — save to `.ai-collab/{ai}-{timestamp}.md` with frontmatter and standard sections.
+4. **Live observability during work** — update `.ai-collab/live/{ai}.agent.json` before/after commands, tests, edits, blockers, and handoffs.
 
 These are non-negotiable rules in every snippet so workers self-orient without the user prompting.
 
