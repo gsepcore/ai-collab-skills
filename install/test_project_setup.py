@@ -105,6 +105,26 @@ class TestProjectSetup(unittest.TestCase):
         self.assertNotIn("Older live contract:", updated)
         self.assertEqual(updated.count("AI-COLLAB-START agent=opencode"), 1)
 
+    def test_refresh_protocol_updates_existing_copy_with_backup(self):
+        self.setup()
+        protocol = self.root / ".ai-collab" / "PROTOCOL.md"
+        protocol.write_text("# stale protocol\n", encoding="utf-8")
+
+        result = _mod.setup_project(
+            self.root,
+            ["opencode", "codex"],
+            "antigravity",
+            {"opencode": "minimax/m2.5", "codex": "openai/gpt-5.5"},
+            now=self.now,
+            refresh_protocol=True,
+        )
+
+        self.assertEqual(result["protocol"], "updated")
+        self.assertIn("AI Collab Protocol", protocol.read_text(encoding="utf-8"))
+        backups = list((self.root / ".ai-collab").glob("PROTOCOL.md.bak-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), "# stale protocol\n")
+
     def test_legacy_aliases_normalize_to_agent_runtime_names(self):
         self.setup(agents=("cursor", "windsurf", "copilot", "antigravity"), models={})
 

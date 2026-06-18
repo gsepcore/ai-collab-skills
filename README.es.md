@@ -165,7 +165,13 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-Eso instala la skill de Claude Code, daemon, hooks globales, detector de wakeups, onboarding de proyectos, helper de conversaciones, observer, doctor y soporte OCR cuando está disponible.
+Eso instala la skill de Claude Code, daemon, hooks globales, detector de wakeups, onboarding de proyectos, helper de conversaciones, observer, doctor, self-updater y soporte OCR cuando está disponible.
+
+Las instalaciones nuevas siempre bajan la versión actual de `main`. Las instalaciones viejas quedan auto-actualizables después de ejecutar el installer actual una vez: el daemon refresca periódicamente los scripts/skill en `~/.claude` y vuelve a aplicar los bloques gestionados `AI-COLLAB-START` / `AI-COLLAB-END` en proyectos que ya tienen `.ai-collab/`. Los `PROTOCOL.md` generados se refrescan con backup timestamped. Puedes forzarlo manualmente:
+
+```bash
+python3 ~/.claude/ai-collab-update.py --project "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+```
 
 ### Después de instalar — configura tu proyecto
 
@@ -200,7 +206,7 @@ El helper escribe en los archivos de reglas correctos:
 
 ## Estado operativo
 
-AI Collab está diseñado para quedar operativo out-of-the-box: el instalador configura la skill, daemon, hooks, helper de conversaciones, observer del proyecto, capturas automáticas, soporte OCR y health checks. El observer se mantiene aislado por proyecto, así que puedes tener varios Antigravity/OpenCode/Codex abiertos sin mezclar screenshots, procesos, conversaciones o estado live entre repos.
+AI Collab está diseñado para quedar operativo out-of-the-box: el instalador configura la skill, daemon, hooks, helper de conversaciones, observer del proyecto, capturas automáticas, soporte OCR, self-updates y health checks. El observer se mantiene aislado por proyecto, así que puedes tener varios Antigravity/OpenCode/Codex abiertos sin mezclar screenshots, procesos, conversaciones o estado live entre repos.
 
 Los únicos estados degradados dependen del sistema o de APIs externas, y se reportan explícitamente en vez de fallar en silencio:
 
@@ -520,6 +526,10 @@ Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`,
 | `AI_COLLAB_NO_DAEMON` | _(off)_ | Define `1` para saltar el inicio del daemon durante install (feature de file-watching deshabilitada). |
 | `AI_COLLAB_INSTALL_OCR` | `1` | Instala el motor OCR local (`tesseract`) durante `install.sh` cuando hay un package manager soportado. Define `0` para saltarlo. |
 | `AI_COLLAB_NO_OCR_INSTALL` | _(off)_ | Define `1` para saltar la instalación del motor OCR manteniendo visión semántica metadata-only. |
+| `AI_COLLAB_AUTO_UPDATE` | `1` | Activa el self-updater del daemon. Define `0` para dejar la instalación fija hasta correr manualmente `install.sh` o `ai-collab-update.py`. |
+| `AI_COLLAB_UPDATE_INTERVAL_SECONDS` | `21600` | Frecuencia de chequeo de updates del daemon. Default: 6 horas. |
+| `AI_COLLAB_UPDATE_RAW_BASE` | GitHub `main` raw URL | Fuente de actualización; útil para probar forks o branches de release. |
+| `AI_COLLAB_UPDATE_MAX_DEPTH` | `6` | Profundidad máxima bajo `$HOME` para encontrar proyectos existentes con `.ai-collab/` y refrescarlos. |
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Define `1` (en el `EnvironmentVariables` del plist launchd del daemon) para disparar banners del Notification Center de macOS cuando otras IAs completen tareas. Capa persistente que funciona incluso con Claude Code cerrado — ver [Notificaciones macOS](#notificaciones-macos-sobreviven-cierre-de-claude-sleep-y-reinicio). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | Nombre de sonido de macOS (ej. `Tink`, `Glass`, `Pop`, `Hero`) que se reproduce con cada banner. Solo efectivo cuando `AI_COLLAB_OS_NOTIFY=1`. Sin definir = banners silenciosos. |
 | `AI_COLLAB_OBSERVER` | `1` | Activa snapshots semánticos en `.ai-collab/live/`. Define `0` para apagar el observer sin detener el daemon. |

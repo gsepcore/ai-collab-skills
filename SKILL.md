@@ -17,6 +17,8 @@ Agents can also hold natural conversations: task-specific threads live at `.ai-c
 
 The installed daemon also writes semantic live snapshots to `{project-root}/.ai-collab/live/`. These are the project-scoped "eyes" layer: current inbox/task state, latest log summary, self-reported commands/edits from each agent, process hints tied to the current project, git dirty files, director alerts, `health.json`, automatic project-window screenshots, and `.semantic.json` screenshot sidecars unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`. The installer attempts to install the local OCR engine (`tesseract`) by default; if unavailable, vision remains functional in metadata-only mode and `health.json` reports the degradation.
 
+The daemon also runs the self-updater by default. It refreshes the global `~/.claude` install from the configured GitHub branch, then re-applies managed `AI-COLLAB-START` / `AI-COLLAB-END` rule blocks in already-onboarded projects and refreshes generated `PROTOCOL.md` files with backups. Set `AI_COLLAB_AUTO_UPDATE=0` to disable, or tune `AI_COLLAB_UPDATE_INTERVAL_SECONDS`.
+
 **Conceptual model:** this skill is agent-first. `agent` is the runtime doing work, `container` is the IDE/terminal where it is visible, and `model` is metadata about the LLM behind it. Do not treat IDEs and agents as the same thing.
 
 ---
@@ -153,7 +155,7 @@ First-time setup on a new project, AND safe to re-run later when a new AI joins.
 2. Run the deterministic onboarding helper:
 
    ```bash
-   python3 ~/.claude/ai-collab-project-setup.py --root "$ROOT"
+   python3 ~/.claude/ai-collab-project-setup.py --root "$ROOT" --refresh-protocol
    ```
 
    If the helper is not installed, fall back to the bundled copy in this repo: `install/ai-collab-project-setup.py`.
@@ -181,6 +183,25 @@ First-time setup on a new project, AND safe to re-run later when a new AI joins.
 8. Summarize the registered agents, their containers, their models, the exact rules files created, and whether the live monitor is active.
 
 **Re-run behavior:** This command is idempotent. Re-running it after a new AI joins the project will detect the new AI, append its rules block to its rules file (idempotent — skipped if already there), and merge it into `TEAM.md`. Nothing existing is overwritten or removed.
+
+## Command: /collab update
+
+Force an immediate update of the installed skill/scripts and managed project snippets.
+
+**Steps:**
+1. Find project root.
+2. Run:
+
+   ```bash
+   python3 ~/.claude/ai-collab-update.py --project "$ROOT"
+   ```
+
+3. Report:
+   - changed global install files
+   - refreshed project roots
+   - any download or project refresh errors
+
+**Behavior:** The normal daemon already runs this periodically when `AI_COLLAB_AUTO_UPDATE` is not `0`. Use `/collab update` for immediate recovery after a release or when a user suspects stale project rules.
 
 ---
 

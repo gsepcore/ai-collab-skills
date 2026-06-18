@@ -8,6 +8,9 @@ LOG_FILE="/tmp/ai-collab-daemon.log"
 WAKEUP_SCRIPT="$HOME/.claude/ai-collab-wakeup.py"
 AUTO_ONBOARD_SCRIPT="$HOME/.claude/ai-collab-auto-onboard.py"
 OBSERVER_SCRIPT="$HOME/.claude/ai-collab-observer.py"
+UPDATE_SCRIPT="$HOME/.claude/ai-collab-update.py"
+LAST_UPDATE_FILE="$HOME/.ai-collab-last-update"
+UPDATE_INTERVAL_SECONDS="${AI_COLLAB_UPDATE_INTERVAL_SECONDS:-21600}"
 MAX_NOTIFICATIONS=50
 
 log() { echo "[AI-COLLAB] $(date -u +"%Y-%m-%dT%H:%M:%SZ") $*" >> "$LOG_FILE"; }
@@ -20,6 +23,7 @@ log "Daemon started (PID $$)"
 # Initialize files
 [ -f "$NOTIFICATIONS_FILE" ] || echo "[]" > "$NOTIFICATIONS_FILE"
 [ -f "$LAST_CHECK_FILE" ]    || date +%s > "$LAST_CHECK_FILE"
+[ -f "$LAST_UPDATE_FILE" ]   || echo 0 > "$LAST_UPDATE_FILE"
 
 # Fix #4 — detect stat command (macOS vs Linux)
 if stat -f "%m" /dev/null 2>/dev/null; then
@@ -32,7 +36,21 @@ while true; do
   sleep 15
 
   LAST_CHECK=$(cat "$LAST_CHECK_FILE" 2>/dev/null || date +%s)
+  LAST_UPDATE=$(cat "$LAST_UPDATE_FILE" 2>/dev/null || echo 0)
   NOW=$(date +%s)
+
+  # Self-update — refreshes ~/.claude install files and managed project rule
+  # blocks. Disabled with AI_COLLAB_AUTO_UPDATE=0; interval defaults to 6h.
+  if [ -x "$UPDATE_SCRIPT" ] && [ "${AI_COLLAB_AUTO_UPDATE:-1}" != "0" ]; then
+    if [ $((NOW - LAST_UPDATE)) -ge "${UPDATE_INTERVAL_SECONDS:-21600}" ]; then
+      if python3 "$UPDATE_SCRIPT" >/tmp/ai-collab-update.log 2>>"$LOG_FILE"; then
+        log "Self-update completed"
+      else
+        log "Warning: self-update failed; see /tmp/ai-collab-update.log"
+      fi
+      echo "$NOW" > "$LAST_UPDATE_FILE"
+    fi
+  fi
 
   # Fix #3 — increased maxdepth from 4 to 6 for deeper project structures
   while IFS= read -r -d '' COLLAB_DIR; do

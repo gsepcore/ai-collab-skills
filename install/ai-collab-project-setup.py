@@ -222,19 +222,31 @@ def ensure_gitignore(root: Path) -> str:
     return "updated"
 
 
-def copy_protocol(root: Path) -> str:
+def copy_protocol(root: Path, refresh: bool = False, now: datetime | None = None) -> str:
     collab = root / ".ai-collab"
     target = collab / "PROTOCOL.md"
-    if target.exists():
-        return "unchanged"
     candidates = [
         Path.home() / ".claude/skills/collab/references/protocol.md",
         Path(__file__).resolve().parents[1] / "references/protocol.md",
     ]
     for candidate in candidates:
         if candidate.exists():
-            atomic_write(target, candidate.read_text(encoding="utf-8"))
+            content = candidate.read_text(encoding="utf-8")
+            if target.exists():
+                existing = target.read_text(encoding="utf-8")
+                if existing == content:
+                    return "unchanged"
+                if not refresh:
+                    return "unchanged"
+                backup_time = isoformat_z(now or utc_now()).replace(":", "").replace("-", "")
+                backup = target.with_name(f"PROTOCOL.md.bak-{backup_time}")
+                atomic_write(backup, existing)
+                atomic_write(target, content)
+                return "updated"
+            atomic_write(target, content)
             return "created"
+    if target.exists():
+        return "unchanged"
     atomic_write(
         target,
         "# AI Collab Protocol\n\n"
@@ -475,7 +487,14 @@ First-response checklist:
     return "created"
 
 
-def setup_project(root: Path, agents: list[str], container: str, models: dict[str, str], now: datetime | None = None) -> dict[str, Any]:
+def setup_project(
+    root: Path,
+    agents: list[str],
+    container: str,
+    models: dict[str, str],
+    now: datetime | None = None,
+    refresh_protocol: bool = False,
+) -> dict[str, Any]:
     now = now or utc_now()
     root = root.resolve()
     collab = root / ".ai-collab"
@@ -499,7 +518,7 @@ def setup_project(root: Path, agents: list[str], container: str, models: dict[st
     result: dict[str, Any] = {
         "root": str(root),
         "gitignore": ensure_gitignore(root),
-        "protocol": copy_protocol(root),
+        "protocol": copy_protocol(root, refresh=refresh_protocol, now=now),
         "rules": {},
     }
     rule_paths: dict[str, list[str]] = {}
@@ -542,6 +561,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--container", default=None, help="IDE/container, e.g. antigravity, cursor, vscode, terminal")
     parser.add_argument("--models", default=None, help="Comma-separated agent=model pairs")
     parser.add_argument("--non-interactive", action="store_true", help="Use detected/default values without prompts.")
+    parser.add_argument("--refresh-protocol", action="store_true", help="Refresh generated .ai-collab/PROTOCOL.md from the installed canonical copy, keeping a backup.")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve() if args.root else project_root()
@@ -556,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
         agents = agents or defaults
         container = container or os.environ.get("AI_COLLAB_CONTAINER", "unknown")
 
-    result = setup_project(root, agents, container, models)
+    result = setup_project(root, agents, container, models, refresh_protocol=args.refresh_protocol)
     print("[AI-COLLAB] Project onboarding complete")
     print(f"  root: {result['root']}")
     for agent, statuses in result["rules"].items():

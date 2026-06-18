@@ -185,7 +185,7 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-That's it. The installer sets up **all thirteen components** automatically:
+That's it. The installer sets up **all fourteen components** automatically:
 
 | Component | What it does | Where |
 |-----------|-------------|-------|
@@ -199,6 +199,7 @@ That's it. The installer sets up **all thirteen components** automatically:
 | 👁️ Live observer | Writes `.ai-collab/live/` semantic snapshots, alerts, and automatic screenshots | `~/.claude/ai-collab-observer.py` |
 | 🔎 OCR engine | Installs/detects `tesseract` for screenshot text reading when available | Homebrew / Linux package manager |
 | 🩺 Doctor script | Verifies installed files, hooks, daemon, and queues | `~/.claude/ai-collab-doctor.py` |
+| ⬆️ Self-updater | Refreshes the global install and managed project snippets automatically | `~/.claude/ai-collab-update.py` |
 | 🪝 `SessionStart` hook | Loads `CONTEXT.md` + notifications on session open | `~/.claude/settings.json` |
 | 🪝 `UserPromptSubmit` hook | Shows pending AI notifications before each message | `~/.claude/settings.json` |
 | 🪝 `Stop` hook | Auto-regenerates `CONTEXT.md` after each Claude response | `~/.claude/settings.json` |
@@ -207,7 +208,13 @@ The hooks are installed **globally** (`~/.claude/settings.json`) so they work in
 
 ### Operational status
 
-AI Collab is designed to be fully operational out of the box: the installer sets up the skill, daemon, hooks, conversation helper, project observer, automatic screenshots, OCR support, and health checks. The observer remains project-scoped, so multiple Antigravity/OpenCode/Codex workspaces can be open without mixing screenshots, processes, conversations, or live status between repos.
+AI Collab is designed to be fully operational out of the box: the installer sets up the skill, daemon, hooks, conversation helper, project observer, automatic screenshots, OCR support, self-updates, and health checks. The observer remains project-scoped, so multiple Antigravity/OpenCode/Codex workspaces can be open without mixing screenshots, processes, conversations, or live status between repos.
+
+New installs always pull from the current `main` branch. Existing installs become self-updating after they run the current installer once: the daemon periodically refreshes `~/.claude` scripts/skill files and re-applies managed `AI-COLLAB-START` / `AI-COLLAB-END` snippets in projects that already have `.ai-collab/`. Generated `PROTOCOL.md` files are refreshed with a timestamped backup. Disable this with `AI_COLLAB_AUTO_UPDATE=0`, or force it immediately with:
+
+```bash
+python3 ~/.claude/ai-collab-update.py --project "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+```
 
 The only degraded states are external to the skill and are reported explicitly instead of failing silently:
 
@@ -466,7 +473,7 @@ Remove stale session logs.
 
 > **This is all set up automatically by the installer.** No manual steps.
 
-Eleven components keep Claude informed and able to dispatch inbox tasks:
+Twelve components keep Claude informed and able to dispatch inbox tasks:
 
 1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
@@ -478,7 +485,8 @@ Eleven components keep Claude informed and able to dispatch inbox tasks:
 8. **Auto-onboard detector** — `~/.claude/ai-collab-auto-onboard.py` runs from the daemon when a new `{slug}-{YYYYMMDD-HHMMSS}.md` log appears. Known slugs get an agent-specific `AI-COLLAB-START agent={slug}` rules block if missing, plus a merged `.ai-collab/TEAM.md` roster entry. Unknown slugs produce a low-priority `.ai-collab/inbox-all.md` notice telling Claude Code to run `/collab onboard {slug}`. The operation is idempotent and never overwrites existing rules content.
 9. **Run orchestrator** — `~/.claude/ai-collab-orchestrate.py` creates `.ai-collab/runs/{run_id}/`, records the selected director, writes safe task assignments to normal inboxes, and appends task-thread messages that agents can answer naturally.
 10. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
-11. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
+11. **Self-updater** — `~/.claude/ai-collab-update.py` is called periodically by the daemon. It updates global install files from the configured branch, then refreshes managed project snippets and generated protocol files with backups. It never edits content outside generated AI Collab marker blocks.
+12. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
    - `UserPromptSubmit` — runs `ai-collab-check-notifications.py` to show pending notifications for the **active project only**, zero token cost at idle
    - `Stop` — auto-regenerates `CONTEXT.md` after every Claude response using a Python script
@@ -550,6 +558,10 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_NO_DAEMON` | _(off)_ | Set to `1` to skip starting the background daemon during install (file-watching feature disabled). |
 | `AI_COLLAB_INSTALL_OCR` | `1` | Installs the local OCR engine (`tesseract`) during `install.sh` when a supported package manager is available. Set `0` to skip. |
 | `AI_COLLAB_NO_OCR_INSTALL` | _(off)_ | Set to `1` to skip OCR engine installation while keeping metadata-only semantic vision. |
+| `AI_COLLAB_AUTO_UPDATE` | `1` | Enables the daemon self-updater. Set `0` to keep the installed version pinned until you manually run `install.sh` or `ai-collab-update.py`. |
+| `AI_COLLAB_UPDATE_INTERVAL_SECONDS` | `21600` | How often the daemon checks for updates. Default is 6 hours. |
+| `AI_COLLAB_UPDATE_RAW_BASE` | GitHub `main` raw URL | Override the update source, useful for testing a fork or release branch. |
+| `AI_COLLAB_UPDATE_MAX_DEPTH` | `6` | How deep the updater scans under `$HOME` for existing `.ai-collab/` projects to refresh. |
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Set to `1` (in the daemon's launchd plist `EnvironmentVariables`) to fire macOS Notification Center banners when other AIs complete tasks. Persistent layer that works even when Claude Code is closed — see [macOS notifications](#macos-notifications-survives-claude-close-mac-sleep-and-restart). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | macOS sound name (e.g. `Tink`, `Glass`, `Pop`, `Hero`) to play with each banner. Only effective when `AI_COLLAB_OS_NOTIFY=1`. Leave unset for silent banners. |
 | `AI_COLLAB_DOCTOR_STRICT` | _(off)_ | Set to `1` so `ai-collab-doctor.py` exits nonzero when required install files/settings are broken. Warnings remain non-fatal. |
