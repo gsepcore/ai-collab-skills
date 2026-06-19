@@ -165,7 +165,7 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-Eso instala la skill de Claude Code, daemon, hooks globales, detector de wakeups, onboarding de proyectos, helper de conversaciones, observer, doctor, self-updater y soporte OCR cuando está disponible.
+Eso instala la skill de Claude Code, daemon, hooks globales, detector de wakeups, onboarding de proyectos, helper de conversaciones, observer, doctor, self-updater, bridge API para Codex y soporte OCR cuando está disponible.
 
 Las instalaciones nuevas siempre bajan la versión actual de `main`. Las instalaciones viejas quedan auto-actualizables después de ejecutar el installer actual una vez: el daemon refresca periódicamente los scripts/skill en `~/.claude` y vuelve a aplicar los bloques gestionados `AI-COLLAB-START` / `AI-COLLAB-END` en proyectos que ya tienen `.ai-collab/`. Los `PROTOCOL.md` generados se refrescan con backup timestamped. Puedes forzarlo manualmente:
 
@@ -213,6 +213,24 @@ Los únicos estados degradados dependen del sistema o de APIs externas, y se rep
 - El permiso Screen Recording de macOS puede bloquear screenshots hasta que el usuario conceda acceso al terminal/IDE que ejecuta el daemon.
 - OCR se instala automáticamente cuando existe un package manager soportado; si el sistema bloquea la instalación, la visión semántica sigue en modo metadata-only y `health.json` lo explica.
 - La pestaña Codex ya abierta dentro de Antigravity no puede recibir inyección visible de forma confiable hasta que OpenAI/Antigravity exponga una API pública; OpenCode, colaboración por filesystem, snapshots del observer, screenshots, OCR, inboxes y rutas Codex ACP/manual siguen disponibles.
+
+### Bridge API Codex / Antigravity
+
+AI Collab instala un bridge local para que otros agentes puedan hablarle a Codex con un contrato tipo API:
+
+```bash
+python3 ~/.claude/ai-collab-codex-bridge.py serve --host 127.0.0.1 --port 8765
+```
+
+Luego otro agente puede llamar:
+
+```bash
+curl -s http://127.0.0.1:8765/v1/codex/message \
+  -H 'Content-Type: application/json' \
+  -d '{"project_path":"'"$(pwd)"'","from_agent":"opencode","topic":"Need Codex","message":"@codex revisa esto","mode":"background"}'
+```
+
+`mode: background` usa `codex-acp` para ejecución autónoma. `mode: visible` usa `antigravity-chat`, que sigue siendo best-effort hasta que Antigravity/Codex exponga una API pública de prompt entrante. Contrato completo: `references/codex-antigravity-bridge.md`.
 
 Puedes ejecutar `python3 ~/.claude/ai-collab-doctor.py` en cualquier momento para ver si la máquina está completamente verde o qué permiso/API externa limita alguna función.
 
@@ -530,6 +548,9 @@ Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`,
 | `AI_COLLAB_UPDATE_INTERVAL_SECONDS` | `21600` | Frecuencia de chequeo de updates del daemon. Default: 6 horas. |
 | `AI_COLLAB_UPDATE_RAW_BASE` | GitHub `main` raw URL | Fuente de actualización; útil para probar forks o branches de release. |
 | `AI_COLLAB_UPDATE_MAX_DEPTH` | `6` | Profundidad máxima bajo `$HOME` para encontrar proyectos existentes con `.ai-collab/` y refrescarlos. |
+| `AI_COLLAB_CODEX_BRIDGE_PORT` | `8765` | Puerto para `ai-collab-codex-bridge.py serve`. |
+| `AI_COLLAB_CODEX_BRIDGE_MODE` | `background` | Modo default del bridge: `background`, `visible`, `auto` o `notify-only`. |
+| `AI_COLLAB_CODEX_BRIDGE_TOKEN` | _(off)_ | Bearer token opcional requerido por el bridge HTTP API. |
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Define `1` (en el `EnvironmentVariables` del plist launchd del daemon) para disparar banners del Notification Center de macOS cuando otras IAs completen tareas. Capa persistente que funciona incluso con Claude Code cerrado — ver [Notificaciones macOS](#notificaciones-macos-sobreviven-cierre-de-claude-sleep-y-reinicio). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | Nombre de sonido de macOS (ej. `Tink`, `Glass`, `Pop`, `Hero`) que se reproduce con cada banner. Solo efectivo cuando `AI_COLLAB_OS_NOTIFY=1`. Sin definir = banners silenciosos. |
 | `AI_COLLAB_OBSERVER` | `1` | Activa snapshots semánticos en `.ai-collab/live/`. Define `0` para apagar el observer sin detener el daemon. |

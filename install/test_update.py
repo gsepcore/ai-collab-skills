@@ -60,6 +60,11 @@ class TestUpdate(unittest.TestCase):
         self.assertEqual(models["opencode"], "minimax/m2.5")
         self.assertEqual(models["codex"], "openai/gpt-5.5")
 
+    def test_global_update_includes_codex_bridge(self):
+        rels = [rel for rel, _dest, _executable in _mod.GLOBAL_FILES]
+
+        self.assertIn("install/ai-collab-codex-bridge.py", rels)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

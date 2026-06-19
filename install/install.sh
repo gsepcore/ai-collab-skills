@@ -16,9 +16,10 @@
 #   10. Live observer            → ~/.claude/ai-collab-observer.py
 #   11. Doctor script            → ~/.claude/ai-collab-doctor.py
 #   12. Self-updater             → ~/.claude/ai-collab-update.py
-#   13. OCR engine               → tesseract auto-install when possible
-#   14. Background daemon        → launchd (macOS) / cron (Linux)
-#   15. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#   13. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
+#   14. OCR engine               → tesseract auto-install when possible
+#   15. Background daemon        → launchd (macOS) / cron (Linux)
+#   16. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -207,6 +208,7 @@ copy_or_download "install/ai-collab-converse.py"              "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-observer.py"              "$CLAUDE_DIR/ai-collab-observer.py"
 copy_or_download "install/ai-collab-doctor.py"                "$CLAUDE_DIR/ai-collab-doctor.py"
 copy_or_download "install/ai-collab-update.py"                "$CLAUDE_DIR/ai-collab-update.py"
+copy_or_download "install/ai-collab-codex-bridge.py"          "$CLAUDE_DIR/ai-collab-codex-bridge.py"
 chmod +x "$CLAUDE_DIR/ai-collab-daemon.sh"
 chmod +x "$CLAUDE_DIR/ai-collab-wakeup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-auto-onboard.py"
@@ -216,6 +218,7 @@ chmod +x "$CLAUDE_DIR/ai-collab-converse.py"
 chmod +x "$CLAUDE_DIR/ai-collab-observer.py"
 chmod +x "$CLAUDE_DIR/ai-collab-doctor.py"
 chmod +x "$CLAUDE_DIR/ai-collab-update.py"
+chmod +x "$CLAUDE_DIR/ai-collab-codex-bridge.py"
 
 green "Daemon script        → $CLAUDE_DIR/ai-collab-daemon.sh"
 green "CONTEXT.md script    → $CLAUDE_DIR/ai-collab-summary.py"
@@ -228,6 +231,7 @@ green "Conversation helper  → $CLAUDE_DIR/ai-collab-converse.py"
 green "Live observer        → $CLAUDE_DIR/ai-collab-observer.py"
 green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"
 green "Self-updater         → $CLAUDE_DIR/ai-collab-update.py"
+green "Codex bridge API     → $CLAUDE_DIR/ai-collab-codex-bridge.py"
 
 # ── 3. Install semantic vision OCR engine ───────────────────────────────────
 echo ""

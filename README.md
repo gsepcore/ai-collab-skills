@@ -185,7 +185,7 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-That's it. The installer sets up **all fourteen components** automatically:
+That's it. The installer sets up **all fifteen components** automatically:
 
 | Component | What it does | Where |
 |-----------|-------------|-------|
@@ -200,6 +200,7 @@ That's it. The installer sets up **all fourteen components** automatically:
 | 🔎 OCR engine | Installs/detects `tesseract` for screenshot text reading when available | Homebrew / Linux package manager |
 | 🩺 Doctor script | Verifies installed files, hooks, daemon, and queues | `~/.claude/ai-collab-doctor.py` |
 | ⬆️ Self-updater | Refreshes the global install and managed project snippets automatically | `~/.claude/ai-collab-update.py` |
+| 🌉 Codex bridge API | Localhost API facade for addressing Codex via ACP/background or visible best-effort | `~/.claude/ai-collab-codex-bridge.py` |
 | 🪝 `SessionStart` hook | Loads `CONTEXT.md` + notifications on session open | `~/.claude/settings.json` |
 | 🪝 `UserPromptSubmit` hook | Shows pending AI notifications before each message | `~/.claude/settings.json` |
 | 🪝 `Stop` hook | Auto-regenerates `CONTEXT.md` after each Claude response | `~/.claude/settings.json` |
@@ -223,6 +224,24 @@ The only degraded states are external to the skill and are reported explicitly i
 - The already-open Codex tab inside Antigravity cannot be injected into reliably until OpenAI/Antigravity exposes a public API; OpenCode, filesystem collaboration, observer snapshots, screenshots, OCR, inboxes, and ACP/manual Codex paths remain available.
 
 Run `python3 ~/.claude/ai-collab-doctor.py` any time to see whether the current machine is fully green or which external permission/API is limiting a feature.
+
+### Codex / Antigravity bridge API
+
+AI Collab now installs a localhost bridge facade for agents that want to address Codex through an API-shaped contract:
+
+```bash
+python3 ~/.claude/ai-collab-codex-bridge.py serve --host 127.0.0.1 --port 8765
+```
+
+Then another agent can call:
+
+```bash
+curl -s http://127.0.0.1:8765/v1/codex/message \
+  -H 'Content-Type: application/json' \
+  -d '{"project_path":"'"$(pwd)"'","from_agent":"opencode","topic":"Need Codex","message":"@codex please review this","mode":"background"}'
+```
+
+`mode: background` routes to `codex-acp` for autonomous execution. `mode: visible` routes to `antigravity-chat`, which remains best-effort until Antigravity/Codex exposes a supported inbound prompt API. Full contract: `references/codex-antigravity-bridge.md`.
 
 ### After installing — set up your project
 
@@ -473,7 +492,7 @@ Remove stale session logs.
 
 > **This is all set up automatically by the installer.** No manual steps.
 
-Twelve components keep Claude informed and able to dispatch inbox tasks:
+Thirteen components keep Claude informed and able to dispatch inbox tasks:
 
 1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
@@ -486,7 +505,8 @@ Twelve components keep Claude informed and able to dispatch inbox tasks:
 9. **Run orchestrator** — `~/.claude/ai-collab-orchestrate.py` creates `.ai-collab/runs/{run_id}/`, records the selected director, writes safe task assignments to normal inboxes, and appends task-thread messages that agents can answer naturally.
 10. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
 11. **Self-updater** — `~/.claude/ai-collab-update.py` is called periodically by the daemon. It updates global install files from the configured branch, then refreshes managed project snippets and generated protocol files with backups. It never edits content outside generated AI Collab marker blocks.
-12. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
+12. **Codex bridge API** — `~/.claude/ai-collab-codex-bridge.py` exposes `POST /v1/codex/message` for agents that need a stable API-shaped Codex wake path. It records a normal discussion first, then routes to `codex-acp`, `antigravity-chat`, or `notify-only`.
+13. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
    - `UserPromptSubmit` — runs `ai-collab-check-notifications.py` to show pending notifications for the **active project only**, zero token cost at idle
    - `Stop` — auto-regenerates `CONTEXT.md` after every Claude response using a Python script
@@ -562,6 +582,9 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_UPDATE_INTERVAL_SECONDS` | `21600` | How often the daemon checks for updates. Default is 6 hours. |
 | `AI_COLLAB_UPDATE_RAW_BASE` | GitHub `main` raw URL | Override the update source, useful for testing a fork or release branch. |
 | `AI_COLLAB_UPDATE_MAX_DEPTH` | `6` | How deep the updater scans under `$HOME` for existing `.ai-collab/` projects to refresh. |
+| `AI_COLLAB_CODEX_BRIDGE_PORT` | `8765` | Port for `ai-collab-codex-bridge.py serve`. |
+| `AI_COLLAB_CODEX_BRIDGE_MODE` | `background` | Default bridge mode: `background`, `visible`, `auto`, or `notify-only`. |
+| `AI_COLLAB_CODEX_BRIDGE_TOKEN` | _(off)_ | Optional bearer token required by the bridge HTTP API. |
 | `AI_COLLAB_OS_NOTIFY` | _(off)_ | Set to `1` (in the daemon's launchd plist `EnvironmentVariables`) to fire macOS Notification Center banners when other AIs complete tasks. Persistent layer that works even when Claude Code is closed — see [macOS notifications](#macos-notifications-survives-claude-close-mac-sleep-and-restart). |
 | `AI_COLLAB_OS_NOTIFY_SOUND` | _(off)_ | macOS sound name (e.g. `Tink`, `Glass`, `Pop`, `Hero`) to play with each banner. Only effective when `AI_COLLAB_OS_NOTIFY=1`. Leave unset for silent banners. |
 | `AI_COLLAB_DOCTOR_STRICT` | _(off)_ | Set to `1` so `ai-collab-doctor.py` exits nonzero when required install files/settings are broken. Warnings remain non-fatal. |

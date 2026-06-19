@@ -19,6 +19,8 @@ The installed daemon also writes semantic live snapshots to `{project-root}/.ai-
 
 The daemon also runs the self-updater by default. It refreshes the global `~/.claude` install from the configured GitHub branch, then re-applies managed `AI-COLLAB-START` / `AI-COLLAB-END` rule blocks in already-onboarded projects and refreshes generated `PROTOCOL.md` files with backups. Set `AI_COLLAB_AUTO_UPDATE=0` to disable, or tune `AI_COLLAB_UPDATE_INTERVAL_SECONDS`.
 
+For Codex/Antigravity automation, the installer includes a local bridge API at `~/.claude/ai-collab-codex-bridge.py`. Use it when another agent needs a stable API-shaped way to address Codex. It writes normal `.ai-collab/discussions/` messages and routes to `codex-acp` background mode, `antigravity-chat` visible best-effort mode, or `notify-only`. Read `references/codex-antigravity-bridge.md` before changing or relying on this bridge.
+
 **Conceptual model:** this skill is agent-first. `agent` is the runtime doing work, `container` is the IDE/terminal where it is visible, and `model` is metadata about the LLM behind it. Do not treat IDEs and agents as the same thing.
 
 ---
@@ -202,6 +204,23 @@ Force an immediate update of the installed skill/scripts and managed project sni
    - any download or project refresh errors
 
 **Behavior:** The normal daemon already runs this periodically when `AI_COLLAB_AUTO_UPDATE` is not `0`. Use `/collab update` for immediate recovery after a release or when a user suspects stale project rules.
+
+## Command: /collab codex-bridge
+
+Expose a localhost API facade that other agents can call to address Codex.
+
+**Steps:**
+1. Read `references/codex-antigravity-bridge.md`.
+2. Start the bridge:
+
+   ```bash
+   python3 ~/.claude/ai-collab-codex-bridge.py serve --host 127.0.0.1 --port 8765
+   ```
+
+3. Tell callers to POST to `/v1/codex/message` with `project_path`, `from_agent`, `topic`, `message`, and `mode`.
+4. Be explicit about visibility:
+   - `mode: background` uses `codex-acp` and can be autonomous.
+   - `mode: visible` uses `antigravity-chat` and is best-effort/degraded until a real panel API exists.
 
 ---
 
