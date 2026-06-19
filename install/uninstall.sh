@@ -11,6 +11,7 @@ echo "=============================="
 echo ""
 echo "This will remove:"
 echo "  - launchd daemon (com.gsepcore.ai-collab)"
+echo "  - launchd Codex bridge (com.gsepcore.ai-collab-codex-bridge)"
 echo "  - ~/.claude/ai-collab-daemon.sh"
 echo "  - ~/.claude/ai-collab-summary.py"
 echo "  - ~/.claude/ai-collab-check-notifications.py"
@@ -21,6 +22,8 @@ echo "  - ~/.claude/ai-collab-orchestrate.py"
 echo "  - ~/.claude/ai-collab-converse.py"
 echo "  - ~/.claude/ai-collab-observer.py"
 echo "  - ~/.claude/ai-collab-doctor.py"
+echo "  - ~/.claude/ai-collab-update.py"
+echo "  - ~/.claude/ai-collab-codex-bridge.py"
 echo "  - ~/.ai-collab-notifications.json"
 echo "  - ~/.ai-collab-last-check"
 echo "  - ~/.ai-collab-wakeup-events.json"
@@ -42,6 +45,11 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
         launchctl unload "$PLIST" 2>/dev/null && echo "✓ launchd daemon stopped"
         rm -f "$PLIST" && echo "✓ Removed $PLIST"
     fi
+    BRIDGE_PLIST="$HOME/Library/LaunchAgents/com.gsepcore.ai-collab-codex-bridge.plist"
+    if [ -f "$BRIDGE_PLIST" ]; then
+        launchctl unload "$BRIDGE_PLIST" 2>/dev/null && echo "✓ Codex bridge stopped"
+        rm -f "$BRIDGE_PLIST" && echo "✓ Removed $BRIDGE_PLIST"
+    fi
 fi
 
 # Remove cron job (Linux)
@@ -61,6 +69,8 @@ fi
 [ -f "$HOME/.claude/ai-collab-converse.py" ]             && rm -f "$HOME/.claude/ai-collab-converse.py"             && echo "✓ Removed ai-collab-converse.py"
 [ -f "$HOME/.claude/ai-collab-observer.py" ]             && rm -f "$HOME/.claude/ai-collab-observer.py"             && echo "✓ Removed ai-collab-observer.py"
 [ -f "$HOME/.claude/ai-collab-doctor.py" ]               && rm -f "$HOME/.claude/ai-collab-doctor.py"               && echo "✓ Removed ai-collab-doctor.py"
+[ -f "$HOME/.claude/ai-collab-update.py" ]               && rm -f "$HOME/.claude/ai-collab-update.py"               && echo "✓ Removed ai-collab-update.py"
+[ -f "$HOME/.claude/ai-collab-codex-bridge.py" ]         && rm -f "$HOME/.claude/ai-collab-codex-bridge.py"         && echo "✓ Removed ai-collab-codex-bridge.py"
 
 # Remove notification queue files
 [ -f "$HOME/.ai-collab-notifications.json" ] && rm -f "$HOME/.ai-collab-notifications.json" && echo "✓ Removed notifications queue"

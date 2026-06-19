@@ -37,8 +37,11 @@ SKILL_DIR="$HOME/.claude/skills/collab"
 CLAUDE_DIR="$HOME/.claude"
 PLIST_LABEL="com.gsepcore.ai-collab"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+BRIDGE_PLIST_LABEL="com.gsepcore.ai-collab-codex-bridge"
+BRIDGE_PLIST_PATH="$HOME/Library/LaunchAgents/${BRIDGE_PLIST_LABEL}.plist"
 YES="${AI_COLLAB_YES:-}"          # set to 1 to skip confirmations
 SKIP_DAEMON="${AI_COLLAB_NO_DAEMON:-}"  # set to 1 to skip daemon
+SKIP_CODEX_BRIDGE="${AI_COLLAB_NO_CODEX_BRIDGE:-}"  # set to 1 to skip Codex bridge API
 INSTALL_OCR="${AI_COLLAB_INSTALL_OCR:-1}"  # set to 0 to skip OCR engine install
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -366,6 +369,67 @@ PLIST
   green "launchd daemon loaded → auto-starts on login, survives sleep"
   info  "Logs: /tmp/ai-collab-daemon.log"
   info  "Stop: launchctl unload ~/Library/LaunchAgents/${PLIST_LABEL}.plist"
+
+  if [[ -z "$SKIP_CODEX_BRIDGE" ]]; then
+    BRIDGE_ENV_ITEMS=""
+    add_bridge_env() {
+      local key="$1" value="$2"
+      [ -n "$value" ] || return 0
+      BRIDGE_ENV_ITEMS="${BRIDGE_ENV_ITEMS}        <key>${key}</key>
+        <string>$(xml_escape "$value")</string>
+"
+    }
+    add_bridge_env "AI_COLLAB_CODEX_BRIDGE_MODE" "${AI_COLLAB_CODEX_BRIDGE_MODE:-background}"
+    add_bridge_env "AI_COLLAB_CODEX_BRIDGE_TOKEN" "${AI_COLLAB_CODEX_BRIDGE_TOKEN:-}"
+    add_bridge_env "AI_COLLAB_CODEX_BRIDGE_TIMEOUT" "${AI_COLLAB_CODEX_BRIDGE_TIMEOUT:-}"
+    add_bridge_env "AI_COLLAB_WAKEUP_CLI_PROJECTS" "${AI_COLLAB_WAKEUP_CLI_PROJECTS:-}"
+    add_bridge_env "AI_COLLAB_CODEX_ACP_COMMAND" "${AI_COLLAB_CODEX_ACP_COMMAND:-}"
+    BRIDGE_ENV_BLOCK=""
+    if [[ -n "$BRIDGE_ENV_ITEMS" ]]; then
+      BRIDGE_ENV_BLOCK="    <key>EnvironmentVariables</key>
+    <dict>
+${BRIDGE_ENV_ITEMS}    </dict>
+"
+    fi
+    BRIDGE_PORT="${AI_COLLAB_CODEX_BRIDGE_PORT:-8765}"
+    cat > "$BRIDGE_PLIST_PATH" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${BRIDGE_PLIST_LABEL}</string>
+${BRIDGE_ENV_BLOCK}    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>${CLAUDE_DIR}/ai-collab-codex-bridge.py</string>
+        <string>serve</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>${BRIDGE_PORT}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/ai-collab-codex-bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/ai-collab-codex-bridge.err</string>
+</dict>
+</plist>
+PLIST
+    launchctl unload "$BRIDGE_PLIST_PATH" 2>/dev/null || true
+    launchctl load -w "$BRIDGE_PLIST_PATH"
+    green "Codex bridge loaded → http://127.0.0.1:${BRIDGE_PORT}/health"
+    info  "Bridge logs: /tmp/ai-collab-codex-bridge.log"
+    info  "Stop: launchctl unload ~/Library/LaunchAgents/${BRIDGE_PLIST_LABEL}.plist"
+  else
+    yellow "Codex bridge skipped (AI_COLLAB_NO_CODEX_BRIDGE=1)"
+  fi
 
 elif command -v crontab &>/dev/null; then
   # Linux / WSL — cron fallback

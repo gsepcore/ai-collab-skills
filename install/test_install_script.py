@@ -47,6 +47,9 @@ class TestInstallScript(unittest.TestCase):
         self.assertIn('copy_or_download "install/ai-collab-codex-bridge.py"', text)
         self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-codex-bridge.py"', text)
         self.assertIn("Codex bridge API", text)
+        self.assertIn('BRIDGE_PLIST_LABEL="com.gsepcore.ai-collab-codex-bridge"', text)
+        self.assertIn("Codex bridge loaded", text)
+        self.assertIn("AI_COLLAB_NO_CODEX_BRIDGE", text)
 
 
 if __name__ == "__main__":
