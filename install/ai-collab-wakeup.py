@@ -551,6 +551,13 @@ def path_matches(value: str, allowed: str) -> bool:
         return str(path) == str(allowed_path)
 
 
+def same_path(left: str, right: str) -> bool:
+    try:
+        return Path(left).resolve() == Path(right).resolve()
+    except OSError:
+        return left == right
+
+
 def cli_project_allowed(project_path: str) -> bool:
     allowed = csv_env("AI_COLLAB_WAKEUP_CLI_PROJECTS")
     if not allowed:
@@ -779,13 +786,59 @@ def auth_headers_from_env(prefix: str) -> dict[str, str]:
     return {}
 
 
-def opencode_port_project(port: int, *, timeout: int, getter=None) -> str | None:
+def opencode_port_project_candidates(port: int, *, timeout: int, getter=None) -> list[dict[str, str]]:
     getter = getter or get_json
+    candidates: list[dict[str, str]] = []
     status, body = getter(f"http://127.0.0.1:{port}/project/current", timeout=timeout)
-    if not (200 <= status < 300) or not isinstance(body, dict):
-        return None
-    worktree = body.get("worktree")
-    return worktree if isinstance(worktree, str) else None
+    if 200 <= status < 300 and isinstance(body, dict):
+        for key in ("worktree", "directory", "path", "root"):
+            value = body.get(key)
+            if isinstance(value, str) and value:
+                candidates.append({"source": f"project/current.{key}", "path": value})
+
+    status, body = getter(f"http://127.0.0.1:{port}/session", timeout=timeout)
+    if 200 <= status < 300 and isinstance(body, list):
+        for session in body:
+            if not isinstance(session, dict):
+                continue
+            for key in ("directory", "path"):
+                value = session.get(key)
+                if isinstance(value, str) and value:
+                    candidates.append({"source": f"session.{key}", "path": value})
+
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in candidates:
+        marker = (item["source"], item["path"])
+        if marker not in seen:
+            seen.add(marker)
+            deduped.append(item)
+    return deduped
+
+
+def opencode_port_project(port: int, *, timeout: int, getter=None) -> str | None:
+    for item in opencode_port_project_candidates(port, timeout=timeout, getter=getter):
+        if item["source"].startswith("project/current."):
+            return item["path"]
+    return None
+
+
+def opencode_port_matches_project(port: int, project_path: str, *, timeout: int, getter=None) -> bool:
+    return any(same_path(item["path"], project_path) for item in opencode_port_project_candidates(port, timeout=timeout, getter=getter))
+
+
+def opencode_port_diagnostics(ports: list[int], *, timeout: int, getter=None) -> str:
+    parts: list[str] = []
+    for port in ports:
+        candidates = opencode_port_project_candidates(port, timeout=timeout, getter=getter)
+        if not candidates:
+            parts.append(f"{port}: no project/session metadata")
+            continue
+        paths = ", ".join(f"{item['source']}={item['path']}" for item in candidates[:4])
+        if len(candidates) > 4:
+            paths += f", +{len(candidates) - 4} more"
+        parts.append(f"{port}: {paths}")
+    return "; ".join(parts)
 
 
 def discover_opencode_active_session(
@@ -861,22 +914,17 @@ def run_opencode_visible_adapter(
     project_ports: list[int] = []
     other_ports: list[int] = []
     for port in ports:
-        port_project = opencode_port_project(port, timeout=fast_timeout, getter=getter)
-        if project_path and port_project:
-            try:
-                same = Path(port_project).resolve() == Path(project_path).resolve()
-            except OSError:
-                same = port_project == project_path
-            if same:
-                project_ports.append(port)
-                continue
+        if project_path and opencode_port_matches_project(port, project_path, timeout=fast_timeout, getter=getter):
+            project_ports.append(port)
+            continue
         other_ports.append(port)
     if project_path and not project_ports:
+        diagnostics = opencode_port_diagnostics(ports, timeout=fast_timeout, getter=getter)
         return {
             "status": "failed",
             "message": (
                 "no visible OpenCode TUI port matched project "
-                f"{project_path}; refusing cross-project wakeup"
+                f"{project_path}; refusing cross-project wakeup. candidates: {diagnostics}"
             ),
             "adapter_name": "opencode-visible",
         }
@@ -963,6 +1011,30 @@ def run_opencode_visible_adapter(
         "message": last_error or "visible OpenCode TUI did not accept wakeup prompt",
         "adapter_name": "opencode-visible",
     }
+
+
+def run_opencode_auto_adapter(
+    input_data: dict[str, str],
+    *,
+    timeout: int,
+    runner=subprocess.run,
+) -> dict[str, str]:
+    visible_result = run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
+    cli_result = run_cli_adapter(input_data, timeout=timeout, runner=runner)
+    if cli_result.get("status") == "success":
+        cli_result["fallback_from"] = visible_result.get("adapter_name", "opencode-visible")
+        cli_result["fallback_reason"] = visible_result.get("message", "")
+        cli_result["visible_status"] = visible_result.get("status", "")
+        return cli_result
+
+    if visible_result.get("status") == "success":
+        visible_result["fallback_adapter"] = cli_result.get("adapter_name", "cli")
+        visible_result["fallback_failure"] = cli_result.get("message", "")
+        return visible_result
+
+    visible_result["fallback_adapter"] = cli_result.get("adapter_name", "cli")
+    visible_result["fallback_failure"] = cli_result.get("message", "")
+    return visible_result
 
 
 def run_kilo_visible_adapter(
@@ -1457,7 +1529,7 @@ def run_visible_adapter(
 ) -> dict[str, str]:
     target = input_data["target_slug"]
     if target == "opencode":
-        return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
+        return run_opencode_auto_adapter(input_data, timeout=timeout, runner=runner)
     if target == "kilo":
         return run_kilo_visible_adapter(input_data, timeout=timeout, runner=runner)
     if target == "hermes":
@@ -1555,6 +1627,8 @@ def run_wakeup_adapter(
         return run_visible_adapter(input_data, timeout=timeout, runner=runner)
     if mode == "opencode-visible":
         return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "opencode-auto":
+        return run_opencode_auto_adapter(input_data, timeout=timeout, runner=runner)
     if mode == "antigravity-chat":
         return run_antigravity_chat_adapter(input_data, timeout=timeout, runner=runner)
     if mode == "codex-filesystem":

@@ -85,6 +85,61 @@ Already done.
             state = json.loads(state_file.read_text(encoding="utf-8"))
             self.assertIn("task-123:100:0", state)
 
+    def test_requeues_failed_unclaimed_wakeup_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            collab = root / ".ai-collab"
+            collab.mkdir()
+            inbox = collab / "inbox-opencode.md"
+            inbox.write_text(
+                """---
+task_id: task-123
+status: failed
+attempts: 3
+last_attempt: 2026-06-23T18:49:30Z
+claimed_by: 
+claimed_at: 
+done_at: 2026-06-23T18:49:30Z
+---
+## Task
+Wake OpenCode.
+""",
+                encoding="utf-8",
+            )
+            state_file = root / "state.json"
+            state_file.write_text(json.dumps({"task-123:100:0": "seen"}), encoding="utf-8")
+
+            result = _mod.recover_project(
+                root,
+                summary_script=root / "missing-summary.py",
+                state_file=state_file,
+                max_context_age_seconds=3600,
+                dry_run=False,
+                now=datetime(2026, 6, 23, 19, 30, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(result["requeued_failed_wakeups"]["status"], "updated")
+            meta, _body = _mod.parse_frontmatter(inbox.read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "unread")
+            self.assertEqual(meta["attempts"], "0")
+            self.assertEqual(meta["last_attempt"], "")
+            self.assertEqual(meta["done_at"], "")
+            self.assertEqual(meta["recovered_by"], "ai-collab-recover")
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertNotIn("task-123:100:0", state)
+
+    def test_does_not_requeue_claimed_or_already_recovered_failed_task(self):
+        self.assertFalse(
+            _mod.should_requeue_failed_wakeup(
+                {"task_id": "task-1", "status": "failed", "attempts": "3", "claimed_by": "opencode"}
+            )
+        )
+        self.assertFalse(
+            _mod.should_requeue_failed_wakeup(
+                {"task_id": "task-1", "status": "failed", "attempts": "3", "recovered_by": "ai-collab-recover"}
+            )
+        )
+
     def test_refreshes_stale_context_with_summary_script(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

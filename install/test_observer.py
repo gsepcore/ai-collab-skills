@@ -224,6 +224,32 @@ to: opencode
         self.assertIn(str(self.root), processes["opencode"][0]["command"])
         self.assertEqual(processes["codex"], [])
 
+    def test_opencode_process_matches_global_project_by_session_directory(self):
+        def getter(url, **kwargs):
+            if url.endswith("/project/current"):
+                return 200, {"worktree": "/"}
+            if url.endswith("/session"):
+                return 200, [{"id": "ses_root", "directory": str(self.root)}]
+            return 404, ""
+
+        matched = _mod.opencode_process_matches_project("opencode --port 52721", self.root, getter=getter)
+
+        self.assertTrue(matched)
+
+    def test_opencode_process_rejects_other_project_sessions(self):
+        other = self.root.parent / "other-project"
+
+        def getter(url, **kwargs):
+            if url.endswith("/project/current"):
+                return 200, {"worktree": "/"}
+            if url.endswith("/session"):
+                return 200, [{"id": "ses_other", "directory": str(other)}]
+            return 404, ""
+
+        matched = _mod.opencode_process_matches_project("opencode --port 52721", self.root, getter=getter)
+
+        self.assertFalse(matched)
+
     def test_project_identity_uses_git_remote_and_aliases(self):
         os.environ["AI_COLLAB_PROJECT_ALIASES"] = "collab eyes;workspace-alpha"
         git_dir = self.root / ".git"

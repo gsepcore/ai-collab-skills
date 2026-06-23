@@ -74,6 +74,15 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     return meta, "\n".join(lines[end + 1 :])
 
 
+def render_frontmatter(meta: dict[str, str], body: str) -> str:
+    lines = ["---"]
+    for key, value in meta.items():
+        lines.append(f"{key}: {value}")
+    lines.append("---")
+    lines.append(body.lstrip("\n"))
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def discover_projects(home: Path, max_depth: int) -> list[Path]:
     projects: list[Path] = []
     base_depth = len(home.parts)
@@ -167,6 +176,49 @@ def unfinished_task_ids(collab_dir: Path) -> list[str]:
     return sorted(set(task_ids))
 
 
+def should_requeue_failed_wakeup(meta: dict[str, str]) -> bool:
+    status = (meta.get("status") or "").strip().lower()
+    if status != "failed":
+        return False
+    if not (meta.get("task_id") or "").strip():
+        return False
+    if (meta.get("claimed_by") or "").strip() or (meta.get("claimed_at") or "").strip():
+        return False
+    if (meta.get("recovered_by") or "").strip():
+        return False
+    try:
+        attempts = int((meta.get("attempts") or "0").strip())
+    except ValueError:
+        attempts = 0
+    return attempts > 0
+
+
+def requeue_failed_wakeups(collab_dir: Path, *, dry_run: bool, now: datetime) -> dict[str, Any]:
+    requeued: list[dict[str, str]] = []
+    for inbox in sorted(collab_dir.glob("inbox-*.md")):
+        try:
+            meta, body = parse_frontmatter(inbox.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if not should_requeue_failed_wakeup(meta):
+            continue
+        task_id = meta["task_id"]
+        requeued.append({"task_id": task_id, "path": str(inbox)})
+        if dry_run:
+            continue
+        timestamp = isoformat_z(now)
+        meta["status"] = "unread"
+        meta["attempts"] = "0"
+        meta["last_attempt"] = ""
+        meta["done_at"] = ""
+        meta["updated"] = timestamp
+        meta["recovered_by"] = "ai-collab-recover"
+        meta["recovered_at"] = timestamp
+        meta["recovery_reason"] = "retry-failed-unclaimed-wakeup"
+        atomic_write_text(inbox, render_frontmatter(meta, body))
+    return {"status": "updated" if requeued else "skipped", "requeued": requeued}
+
+
 def prune_wakeup_dedupe(task_ids: list[str], state_file: Path, *, dry_run: bool) -> dict[str, Any]:
     if not task_ids:
         return {"status": "skipped", "reason": "no unfinished inbox tasks"}
@@ -197,6 +249,7 @@ def recover_project(
         "root": str(root),
         "updated": isoformat_z(now),
         "context": {"status": "unchanged"},
+        "requeued_failed_wakeups": {"status": "skipped"},
         "wakeup_state": {"status": "skipped"},
     }
     if not collab_dir.is_dir():
@@ -207,6 +260,7 @@ def recover_project(
     if context_needs_refresh(collab_dir, max_age_seconds=max_context_age_seconds):
         result["context"] = regenerate_context(root, summary_script, dry_run=dry_run)
 
+    result["requeued_failed_wakeups"] = requeue_failed_wakeups(collab_dir, dry_run=dry_run, now=now)
     task_ids = unfinished_task_ids(collab_dir)
     result["wakeup_state"] = prune_wakeup_dedupe(task_ids, state_file, dry_run=dry_run)
     result["status"] = "ok"

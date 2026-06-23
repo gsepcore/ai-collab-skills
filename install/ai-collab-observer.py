@@ -516,6 +516,15 @@ def opencode_process_matches_project(command: str, root: Path, getter=get_json) 
     for key in ("worktree", "directory", "path", "root"):
         if path_matches_root(body.get(key), root):
             return True
+    status, body = getter(f"http://127.0.0.1:{port}/session", timeout=2)
+    if status != 200 or not isinstance(body, list):
+        return False
+    for session in body:
+        if not isinstance(session, dict):
+            continue
+        for key in ("directory", "path"):
+            if path_matches_root(session.get(key), root):
+                return True
     return False
 
 
