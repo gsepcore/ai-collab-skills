@@ -49,9 +49,14 @@ Body:
 
 Modes:
 
-- `background`: maps to `codex-acp`; launches an autonomous Codex worker.
+- `background`: maps to `codex-auto`; tries `codex-acp` first, then a real
+  non-interactive `codex exec` worker, then falls back to a degraded
+  `codex-filesystem` receipt so delivery is still visible in `.ai-collab`
+  without claiming a real Codex turn.
 - `visible`: maps to `antigravity-chat`; best-effort visible Antigravity chat.
 - `auto`: uses the default visible wakeup routing.
+- `codex-filesystem`: writes a Codex wake receipt, live state, and session log
+  without claiming control of the visible Codex panel or an LLM turn.
 - `notify-only`: records the wake event without executing an adapter.
 
 The bridge writes a normal `.ai-collab/discussions/*.md` thread first, then
@@ -70,6 +75,9 @@ python3 ~/.claude/ai-collab-codex-bridge.py send \
 
 ## Visibility guarantee
 
-`background` can be autonomous but is not the user's current visible Codex tab.
+`background` can be autonomous when ACP or `codex exec` works. If both are
+unavailable, the filesystem fallback records a degraded receipt by writing
+Codex artifacts, but it is not an LLM turn and is not the user's current visible
+Codex tab.
 `visible` can try Antigravity chat, but exact visible-tab injection remains
 degraded until Antigravity/Codex exposes a supported inbound prompt API.

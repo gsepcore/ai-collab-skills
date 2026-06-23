@@ -6,7 +6,7 @@ You are `opencode` (OpenCode) in project `ai-collab-skills`.
 Identity:
 - agent_slug: `opencode`
 - role: `worker`
-- container: `antigravity`
+- container: `unknown`
 - model: `unknown`
 
 Mandatory preflight before EVERY response, analysis, or tool action:
@@ -37,7 +37,7 @@ Required log frontmatter:
 ---
 ai: OpenCode (unknown)
 agent: opencode
-container: antigravity
+container: unknown
 model: unknown
 session: {YYYYMMDD-HHMMSS}
 project: ai-collab-skills
@@ -74,7 +74,7 @@ You are `codex` (Codex) in project `ai-collab-skills`.
 Identity:
 - agent_slug: `codex`
 - role: `worker`
-- container: `antigravity`
+- container: `unknown`
 - model: `unknown`
 
 Mandatory preflight before EVERY response, analysis, or tool action:
@@ -105,7 +105,7 @@ Required log frontmatter:
 ---
 ai: Codex (unknown)
 agent: codex
-container: antigravity
+container: unknown
 model: unknown
 session: {YYYYMMDD-HHMMSS}
 project: ai-collab-skills

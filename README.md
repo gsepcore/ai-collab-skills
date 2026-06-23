@@ -185,7 +185,7 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-That's it. The installer sets up **all fifteen components** automatically:
+That's it. The installer sets up **sixteen components** automatically:
 
 | Component | What it does | Where |
 |-----------|-------------|-------|
@@ -200,6 +200,7 @@ That's it. The installer sets up **all fifteen components** automatically:
 | 🔎 OCR engine | Installs/detects `tesseract` for screenshot text reading when available | Homebrew / Linux package manager |
 | 🩺 Doctor script | Verifies installed files, hooks, daemon, and queues | `~/.claude/ai-collab-doctor.py` |
 | ⬆️ Self-updater | Refreshes the global install and managed project snippets automatically | `~/.claude/ai-collab-update.py` |
+| 🧭 Reboot recovery | Regenerates `CONTEXT.md` and re-arms unfinished wakeups after restart | `~/.claude/ai-collab-recover.py` |
 | 🌉 Codex bridge API | Localhost API facade for addressing Codex via ACP/background or visible best-effort | `~/.claude/ai-collab-codex-bridge.py` |
 | 🪝 `SessionStart` hook | Loads `CONTEXT.md` + notifications on session open | `~/.claude/settings.json` |
 | 🪝 `UserPromptSubmit` hook | Shows pending AI notifications before each message | `~/.claude/settings.json` |
@@ -216,6 +217,8 @@ New installs always pull from the current `main` branch. Existing installs becom
 ```bash
 python3 ~/.claude/ai-collab-update.py --project "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ```
+
+The daemon also runs recovery every few minutes and after reboot/login. Recovery does not erase project memory. It refreshes stale or missing `.ai-collab/CONTEXT.md`, writes `.ai-collab/live/recovery.json`, and removes stale wakeup dedupe entries for unfinished inbox tasks so a task queued before shutdown can be attempted again.
 
 The only degraded states are external to the skill and are reported explicitly instead of failing silently:
 
@@ -241,7 +244,7 @@ curl -s http://127.0.0.1:8765/v1/codex/message \
   -d '{"project_path":"'"$(pwd)"'","from_agent":"opencode","topic":"Need Codex","message":"@codex please review this","mode":"background"}'
 ```
 
-`mode: background` routes to `codex-acp` for autonomous execution. `mode: visible` routes to `antigravity-chat`, which remains best-effort until Antigravity/Codex exposes a supported inbound prompt API. Full contract: `references/codex-antigravity-bridge.md`.
+`mode: background` routes to `codex-auto`: it tries `codex-acp` first, then a real non-interactive `codex exec` worker, then a degraded filesystem receipt that writes live state and a session log. `mode: visible` routes to `antigravity-chat`, which remains best-effort until Antigravity/Codex exposes a supported inbound prompt API. Full contract: `references/codex-antigravity-bridge.md`.
 
 ### After installing — set up your project
 
@@ -505,8 +508,9 @@ Thirteen components keep Claude informed and able to dispatch inbox tasks:
 9. **Run orchestrator** — `~/.claude/ai-collab-orchestrate.py` creates `.ai-collab/runs/{run_id}/`, records the selected director, writes safe task assignments to normal inboxes, and appends task-thread messages that agents can answer naturally.
 10. **Doctor script** — `~/.claude/ai-collab-doctor.py` verifies the installed scripts, skill files, hooks, daemon registration, and JSON queues. It is read-only and safe to run any time.
 11. **Self-updater** — `~/.claude/ai-collab-update.py` is called periodically by the daemon. It updates global install files from the configured branch, then refreshes managed project snippets and generated protocol files with backups. It never edits content outside generated AI Collab marker blocks.
-12. **Codex bridge API** — `~/.claude/ai-collab-codex-bridge.py` exposes `POST /v1/codex/message` for agents that need a stable API-shaped Codex wake path. It records a normal discussion first, then routes to `codex-acp`, `antigravity-chat`, or `notify-only`.
-13. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
+12. **Reboot recovery** — `~/.claude/ai-collab-recover.py` is called by the daemon after restart and periodically. It regenerates stale `CONTEXT.md` files and clears stale wakeup dedupe keys for unfinished inboxes, preserving all logs and threads.
+13. **Codex bridge API** — `~/.claude/ai-collab-codex-bridge.py` exposes `POST /v1/codex/message` for agents that need a stable API-shaped Codex wake path. It records a normal discussion first, then routes to `codex-auto`, `antigravity-chat`, `codex-filesystem`, or `notify-only`.
+14. **Three Claude Code hooks** installed globally in `~/.claude/settings.json`:
    - `SessionStart` — injects `CONTEXT.md` before your first message in every new session
    - `UserPromptSubmit` — runs `ai-collab-check-notifications.py` to show pending notifications for the **active project only**, zero token cost at idle
    - `Stop` — auto-regenerates `CONTEXT.md` after every Claude response using a Python script
@@ -582,6 +586,9 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_UPDATE_INTERVAL_SECONDS` | `21600` | How often the daemon checks for updates. Default is 6 hours. |
 | `AI_COLLAB_UPDATE_RAW_BASE` | GitHub `main` raw URL | Override the update source, useful for testing a fork or release branch. |
 | `AI_COLLAB_UPDATE_MAX_DEPTH` | `6` | How deep the updater scans under `$HOME` for existing `.ai-collab/` projects to refresh. |
+| `AI_COLLAB_RECOVERY` | `1` | Enables daemon recovery after restart/session loss. Set `0` to disable automatic `CONTEXT.md` refresh and wakeup dedupe repair. |
+| `AI_COLLAB_RECOVERY_INTERVAL_SECONDS` | `300` | How often the daemon runs recovery. Default is 5 minutes. |
+| `AI_COLLAB_RECOVERY_CONTEXT_MAX_AGE` | `3600` | Maximum age for `CONTEXT.md` before recovery refreshes it, even if no newer logs are detected. |
 | `AI_COLLAB_CODEX_BRIDGE_PORT` | `8765` | Port for `ai-collab-codex-bridge.py serve`. |
 | `AI_COLLAB_CODEX_BRIDGE_MODE` | `background` | Default bridge mode: `background`, `visible`, `auto`, or `notify-only`. |
 | `AI_COLLAB_CODEX_BRIDGE_TOKEN` | _(off)_ | Optional bearer token required by the bridge HTTP API. |
@@ -600,7 +607,7 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_OBSERVER_SEMANTIC_OCR` | `1` | Enables optional local OCR for screenshot sidecars when `tesseract` is available. Without OCR, semantic vision degrades to window/process/git metadata. |
 | `AI_COLLAB_OBSERVER_TESSERACT_BIN` | _(auto-detected)_ | Override the `tesseract` binary used for local OCR. |
 | `AI_COLLAB_PROJECT_ALIASES` | _(empty)_ | Optional comma/semicolon/newline-separated project aliases that should count as the current workspace when matching windows/processes. Useful when an IDE title differs from the repo name. |
-| `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Wakeup adapter mode. Default `visible` targets active visible panels when supported. Other options: `opencode-visible`, `kilo-visible`, `hermes-uri`, `antigravity-chat`, `acp`, `codex-acp`, `kimi-acp`, `kilo-acp`, `hermes-acp`, `cli`, or `notify-only`. |
+| `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Wakeup adapter mode. Default `visible` targets active visible panels when supported. Other options: `opencode-visible`, `kilo-visible`, `hermes-uri`, `antigravity-chat`, `codex-auto`, `codex-filesystem`, `acp`, `codex-acp`, `kimi-acp`, `kilo-acp`, `hermes-acp`, `cli`, or `notify-only`. |
 | `AI_COLLAB_WAKEUP_MAX_ATTEMPTS` | `3` | Maximum wake attempts before an unread inbox auto-transitions to `failed`. |
 | `AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT` | `120` | Seconds before a CLI adapter run is considered failed. |
 | `AI_COLLAB_WAKEUP_CLI_PROJECTS` | _(empty = all projects)_ | Optional allowlist for executable adapters. By default, any project with a `.ai-collab/` directory is allowed — the user opted in by setting it up there. Set this only if you want to restrict the daemon to specific projects: comma-separated basenames or absolute paths. |
@@ -702,7 +709,9 @@ Until OpenAI or Antigravity publishes a supported injection surface, Codex has t
 | Mode | What it does | Tradeoff |
 |---|---|---|
 | `visible` (default) | `antigravity chat --reuse-window` best-effort | May or may not reach the visible tab. Degraded. |
-| `codex-acp` (opt-in) | Spawns a fresh ACP Codex worker, 100% reliable execution | Runs invisibly, not in the user's open panel |
+| `codex-auto` | Tries ACP first, then a real `codex exec` worker, then a filesystem receipt | Autonomous when ACP or CLI works; final fallback is deterministic, not an LLM turn |
+| `codex-acp` (opt-in) | Spawns a fresh ACP Codex worker when the ACP command works | Runs invisibly, not in the user's open panel |
+| `codex-filesystem` | Writes a Codex answer to the thread/inbox plus live state and log | Proves wake delivery without claiming visible-session control |
 | Manual (1 click) | User types "lee tu inbox" in the tab | 100% reliable + visible, requires one human click |
 
 OpenCode and Claude Code remain automatable, but AI Collab treats visible trust as the default: OpenCode wakeups are visible unless `AI_COLLAB_OPENCODE_SYNTHETIC=1` is explicitly enabled. Full investigation: `claude-acp-active-codex-analysis.md`, `codex-bridge-blocker.md`, `codex-acp-investigation.md`, `opencode-codex-bridge-investigation.md` (these live in the `.ai-collab/` of any project where the team has investigated — they document the dead-end analysis so future contributors do not retry the same paths).

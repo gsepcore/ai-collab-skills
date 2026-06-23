@@ -7,6 +7,7 @@ Run with: python3 -m pytest install/test_wakeup.py -v
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -803,6 +804,151 @@ for line in sys.stdin:
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["adapter_name"], "codex-acp")
         self.assertIn("ses_mock", result["message"])
+
+    def test_codex_filesystem_adapter_records_receipt_for_referenced_discussion(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            collab = root / ".ai-collab"
+            discussions = collab / "discussions"
+            discussions.mkdir(parents=True)
+            inbox = collab / "inbox-codex.md"
+            discussion = discussions / "discussion-20260619-opencode-status.md"
+            discussion.write_text(
+                """---
+schema: ai-collab.thread.v2
+thread: discussion-20260619-opencode-status
+kind: discussion
+topic: opencode-status
+project: gsep
+created: 2026-06-19T13:00:00Z
+updated: 2026-06-19T13:00:00Z
+participants: opencode, codex
+status: open
+---
+## 2026-06-19T13:00:00Z -- opencode
+
+type: question
+to: codex
+
+@codex are you awake?
+
+---
+""",
+                encoding="utf-8",
+            )
+            inbox.write_text(
+                SAMPLE_INBOX.replace("task-123", "wake-codex").replace(
+                    "Do the thing.",
+                    "OpenCode asked for Codex in `.ai-collab/discussions/discussion-20260619-opencode-status.md`.",
+                ),
+                encoding="utf-8",
+            )
+
+            result = _mod.run_codex_filesystem_adapter(
+                {
+                    "project_path": str(root),
+                    "target_slug": "codex",
+                    "inbox_path": str(inbox),
+                    "source_path": str(inbox),
+                    "source_type": "inbox",
+                    "task_id": "wake-codex",
+                    "synthetic_prompt": "read inbox",
+                },
+                now=datetime(2026, 6, 19, 13, 55, 0, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(result["status"], "degraded")
+            self.assertEqual(result["adapter_name"], "codex-filesystem")
+            meta, _ = parse_frontmatter(inbox.read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "unread")
+            self.assertEqual(meta["claimed_by"], "")
+            self.assertIn("Codex filesystem wake receipt was recorded", discussion.read_text(encoding="utf-8"))
+            self.assertIn("-- codex-filesystem", discussion.read_text(encoding="utf-8"))
+            self.assertTrue((collab / "live" / "codex.agent.json").exists())
+            self.assertTrue(list(collab.glob("codex-20260619-135500.md")))
+
+    def test_codex_auto_runs_cli_exec_when_acp_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            collab = root / ".ai-collab"
+            collab.mkdir()
+            thread = collab / "thread-task-123.md"
+            append_thread_message(
+                thread,
+                task_id="task-123",
+                project="gsep",
+                inbox_name="",
+                author_slug="opencode",
+                message="@codex wake up.",
+                now=datetime(2026, 6, 19, 13, 56, 0, tzinfo=timezone.utc),
+            )
+            os.environ["AI_COLLAB_CODEX_ACP_COMMAND"] = "/definitely/missing/codex-acp"
+            calls = []
+
+            def fake_runner(cmd, **kwargs):
+                calls.append((cmd, kwargs))
+                return _mod.subprocess.CompletedProcess(cmd, 0, "done", "")
+
+            result = run_wakeup_adapter(
+                {
+                    "project_path": str(root),
+                    "target_slug": "codex",
+                    "inbox_path": "",
+                    "source_path": str(thread),
+                    "source_type": "thread",
+                    "task_id": "task-123",
+                    "synthetic_prompt": "read thread",
+                },
+                mode="codex-auto",
+                timeout=1,
+                runner=fake_runner,
+            )
+
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["adapter_name"], "cli")
+            self.assertEqual(result["fallback_from"], "codex-acp")
+            self.assertTrue(calls)
+            self.assertIn("exec", calls[0][0])
+
+    def test_codex_auto_records_degraded_filesystem_receipt_when_acp_and_cli_fail(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            collab = root / ".ai-collab"
+            collab.mkdir()
+            thread = collab / "thread-task-123.md"
+            append_thread_message(
+                thread,
+                task_id="task-123",
+                project="gsep",
+                inbox_name="",
+                author_slug="opencode",
+                message="@codex wake up.",
+                now=datetime(2026, 6, 19, 13, 56, 0, tzinfo=timezone.utc),
+            )
+            os.environ["AI_COLLAB_CODEX_ACP_COMMAND"] = "/definitely/missing/codex-acp"
+
+            def failing_runner(cmd, **kwargs):
+                return _mod.subprocess.CompletedProcess(cmd, 1, "", "cli failed")
+
+            result = run_wakeup_adapter(
+                {
+                    "project_path": str(root),
+                    "target_slug": "codex",
+                    "inbox_path": "",
+                    "source_path": str(thread),
+                    "source_type": "thread",
+                    "task_id": "task-123",
+                    "synthetic_prompt": "read thread",
+                },
+                mode="codex-auto",
+                timeout=1,
+                runner=failing_runner,
+            )
+
+            self.assertEqual(result["status"], "degraded")
+            self.assertEqual(result["adapter_name"], "codex-filesystem")
+            self.assertEqual(result["fallback_from"], "cli")
+            self.assertIn("Codex filesystem wake receipt was recorded", thread.read_text(encoding="utf-8"))
 
     def test_generic_acp_adapter_processes_kimi_mock_agent(self):
         with tempfile.TemporaryDirectory() as d:

@@ -41,6 +41,15 @@ class TestInstallScript(unittest.TestCase):
         self.assertIn('add_plist_env "AI_COLLAB_AUTO_UPDATE" "${AI_COLLAB_AUTO_UPDATE:-1}"', text)
         self.assertIn('add_plist_env "AI_COLLAB_UPDATE_INTERVAL_SECONDS" "${AI_COLLAB_UPDATE_INTERVAL_SECONDS:-21600}"', text)
 
+    def test_recovery_is_installed_and_configured(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+
+        self.assertIn('copy_or_download "install/ai-collab-recover.py"', text)
+        self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-recover.py"', text)
+        self.assertIn("Reboot recovery", text)
+        self.assertIn('add_plist_env "AI_COLLAB_RECOVERY" "${AI_COLLAB_RECOVERY:-1}"', text)
+        self.assertIn('add_plist_env "AI_COLLAB_RECOVERY_INTERVAL_SECONDS" "${AI_COLLAB_RECOVERY_INTERVAL_SECONDS:-300}"', text)
+
     def test_codex_bridge_is_installed(self):
         text = INSTALL_SH.read_text(encoding="utf-8")
 

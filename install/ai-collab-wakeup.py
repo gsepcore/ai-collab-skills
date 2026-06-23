@@ -331,6 +331,197 @@ def append_thread_message(
         lock_file.close()
 
 
+def write_agent_live_state(
+    project_root: Path,
+    *,
+    agent_slug: str,
+    phase: str,
+    summary: str,
+    task_id: str = "",
+    now: datetime | None = None,
+) -> Path:
+    now = now or utc_now()
+    live_path = project_root / ".ai-collab" / "live" / f"{agent_slug}.agent.json"
+    payload = {
+        "agent": agent_slug,
+        "project": project_root.name,
+        "updated": isoformat_z(now),
+        "phase": phase,
+        "summary": summary,
+    }
+    if task_id:
+        payload["task_id"] = task_id
+    write_json(live_path, payload)
+    return live_path
+
+
+def write_codex_session_log(
+    project_root: Path,
+    *,
+    working_on: str,
+    files_read: list[str],
+    files_modified: list[str],
+    decisions: list[str],
+    issues: list[str],
+    handoff: str,
+    now: datetime | None = None,
+) -> Path:
+    now = now or utc_now()
+    session = now.strftime("%Y%m%d-%H%M%S")
+    timestamp = isoformat_z(now)
+    log_path = project_root / ".ai-collab" / f"codex-{session}.md"
+
+    def bullet(items: list[str]) -> str:
+        return "\n".join(f"- `{item}`" if item.startswith(".") or item.startswith("/") else f"- {item}" for item in items)
+
+    sections = [
+        "---",
+        "ai: Codex (filesystem wake adapter)",
+        "agent: codex",
+        "container: background",
+        "model: deterministic-filesystem",
+        f"session: {session}",
+        f"project: {project_root.name}",
+        f"updated: {timestamp}",
+        "---",
+        "",
+        "## Working On",
+        working_on,
+        "",
+        "## Files Read This Session",
+        bullet(files_read) or "- None",
+        "",
+        "## Files Modified This Session",
+        bullet(files_modified) or "- None",
+        "",
+        "## Decisions Made",
+        "\n".join(f"- {item}" for item in decisions) or "- None",
+        "",
+        "## Issues Identified",
+        "\n".join(f"- {item}" for item in issues) or "- None",
+        "",
+        "## Still In Progress",
+        "- Nothing pending from this automatic wake response.",
+        "",
+        "## Do Not Touch (Avoid Conflicts)",
+        "- None",
+        "",
+        "## Handoff Note",
+        handoff,
+        "",
+    ]
+    atomic_write(log_path, "\n".join(sections))
+    return log_path
+
+
+def referenced_thread_paths(project_root: Path, text: str) -> list[Path]:
+    paths: list[Path] = []
+    for match in re.finditer(r"`?(\.ai-collab/(?:thread-[^`\s]+|discussions/[^`\s]+\.md))`?", text):
+        raw = match.group(1).rstrip(".,)")
+        path = (project_root / raw).resolve()
+        try:
+            path.relative_to(project_root.resolve())
+        except ValueError:
+            continue
+        if path.exists() and path.suffix == ".md":
+            paths.append(path)
+    return list(dict.fromkeys(paths))
+
+
+def run_codex_filesystem_adapter(input_data: dict[str, str], *, now: datetime | None = None) -> dict[str, str]:
+    """Deterministic Codex wake receipt path through collab files.
+
+    This is intentionally modest: it does not pretend to be the visible Codex UI
+    or an LLM worker. It records a verifiable receipt by writing collab artifacts,
+    but returns degraded so callers do not mark the event as a completed wake.
+    """
+    now = now or utc_now()
+    if input_data["target_slug"] != "codex":
+        return {
+            "status": "failed",
+            "message": "codex-filesystem adapter only supports target codex",
+            "adapter_name": "codex-filesystem",
+        }
+    project_root = Path(input_data["project_path"]).expanduser().resolve()
+    if not (project_root / ".ai-collab").is_dir():
+        return {
+            "status": "failed",
+            "message": "project has no .ai-collab directory",
+            "adapter_name": "codex-filesystem",
+        }
+
+    task_id = input_data.get("task_id", "codex-wake")
+    source_type = input_data.get("source_type", "")
+    source_path = Path(input_data.get("source_path") or input_data.get("inbox_path") or "").expanduser()
+    if not source_path.is_absolute():
+        source_path = (project_root / source_path).resolve()
+    files_read: list[str] = []
+    files_modified: list[str] = []
+    reply_targets: list[Path] = []
+
+    if source_path.exists():
+        files_read.append(str(source_path))
+
+    if source_type == "thread" or source_path.parent.name == "discussions" or source_path.name.startswith("thread-"):
+        reply_targets.append(source_path)
+    else:
+        try:
+            inbox_text = source_path.read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError):
+            inbox_text = ""
+        for path in referenced_thread_paths(project_root, inbox_text):
+            reply_targets.append(path)
+
+    reply = (
+        "type: answer\n"
+        "to: all\n"
+        "tags: wakeup, codex-filesystem\n\n"
+        "@opencode Codex filesystem wake receipt was recorded automatically. "
+        "This proves the collab files were reachable, but it did not wake a visible Codex session or run an LLM turn. "
+        "If you need Codex to act, keep the task unread/retryable for a real adapter or wait for Codex's next preflight."
+    )
+    for target in list(dict.fromkeys(reply_targets)):
+        append_thread_message(
+            target,
+            task_id=thread_id_from_path(target),
+            project=project_root.name,
+            inbox_name="",
+            author_slug="codex-filesystem",
+            message=reply,
+            now=now,
+        )
+        files_modified.append(str(target))
+
+    live_path = write_agent_live_state(
+        project_root,
+        agent_slug="codex",
+        phase="done",
+        summary="Recorded a Codex filesystem wake receipt; no visible Codex session was activated.",
+        task_id=task_id,
+        now=now,
+    )
+    files_modified.append(str(live_path))
+    log_path = write_codex_session_log(
+        project_root,
+        working_on="Recorded a deterministic Codex wake receipt from AI Collab.",
+        files_read=files_read,
+        files_modified=files_modified,
+        decisions=[
+            "Used deterministic filesystem receipt because no public visible Codex panel inbound API is available.",
+            "Returned degraded so wake retry/notified semantics stay honest.",
+        ],
+        issues=[],
+        handoff="Codex wake receipt was verified through collab files. This does not imply visible panel injection or an LLM turn.",
+        now=now,
+    )
+    files_modified.append(str(log_path))
+    return {
+        "status": "degraded",
+        "message": "codex-filesystem recorded a wake receipt, but did not activate a visible Codex session",
+        "adapter_name": "codex-filesystem",
+    }
+
+
 def adapter_mode_from_env() -> str:
     return os.environ.get("AI_COLLAB_WAKEUP_ADAPTER", DEFAULT_ADAPTER).strip() or DEFAULT_ADAPTER
 
@@ -1280,48 +1471,12 @@ def run_visible_adapter(
     }
 
 
-def run_wakeup_adapter(
+def run_cli_adapter(
     input_data: dict[str, str],
     *,
-    mode: str | None = None,
-    timeout: int | None = None,
+    timeout: int,
     runner=subprocess.run,
 ) -> dict[str, str]:
-    mode = mode or adapter_mode_from_env()
-    timeout = timeout or adapter_timeout_from_env()
-
-    if mode == "mock-success":
-        return {"status": "success", "message": "mock adapter accepted task", "adapter_name": "mock-success"}
-    if mode == "mock-failed":
-        return {"status": "failed", "message": "mock adapter failed task", "adapter_name": "mock-failed"}
-    if mode == "notify-only":
-        return {
-            "status": "degraded",
-            "message": "wake event recorded; no active execution adapter configured",
-            "adapter_name": "notify-only",
-        }
-    if mode == "visible":
-        return run_visible_adapter(input_data, timeout=timeout, runner=runner)
-    if mode == "opencode-visible":
-        return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
-    if mode == "antigravity-chat":
-        return run_antigravity_chat_adapter(input_data, timeout=timeout, runner=runner)
-    if mode == "kilo-visible":
-        return run_kilo_visible_adapter(input_data, timeout=timeout, runner=runner)
-    if mode == "hermes-uri":
-        return run_hermes_uri_adapter(input_data, timeout=timeout, runner=runner)
-    if mode == "codex-acp":
-        return run_codex_acp_adapter(input_data, timeout=timeout)
-    if mode == "acp":
-        return run_acp_adapter(input_data, timeout=timeout)
-    if mode in {"hermes-acp", "kimi-acp", "kilo-acp"}:
-        expected = mode.removesuffix("-acp")
-        if input_data["target_slug"] != expected:
-            return {"status": "failed", "message": f"{mode} only supports target {expected}", "adapter_name": mode}
-        return run_acp_adapter(input_data, timeout=timeout)
-    if mode != "cli":
-        return {"status": "failed", "message": f"unknown adapter mode: {mode}", "adapter_name": mode}
-
     if truthy_env("AI_COLLAB_WAKEUP_DRY_RUN"):
         return {
             "status": "degraded",
@@ -1376,6 +1531,66 @@ def run_wakeup_adapter(
     }
 
 
+def run_wakeup_adapter(
+    input_data: dict[str, str],
+    *,
+    mode: str | None = None,
+    timeout: int | None = None,
+    runner=subprocess.run,
+) -> dict[str, str]:
+    mode = mode or adapter_mode_from_env()
+    timeout = timeout or adapter_timeout_from_env()
+
+    if mode == "mock-success":
+        return {"status": "success", "message": "mock adapter accepted task", "adapter_name": "mock-success"}
+    if mode == "mock-failed":
+        return {"status": "failed", "message": "mock adapter failed task", "adapter_name": "mock-failed"}
+    if mode == "notify-only":
+        return {
+            "status": "degraded",
+            "message": "wake event recorded; no active execution adapter configured",
+            "adapter_name": "notify-only",
+        }
+    if mode == "visible":
+        return run_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "opencode-visible":
+        return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "antigravity-chat":
+        return run_antigravity_chat_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "codex-filesystem":
+        return run_codex_filesystem_adapter(input_data)
+    if mode == "codex-auto":
+        acp_result = run_codex_acp_adapter(input_data, timeout=timeout)
+        if acp_result.get("status") == "success":
+            return acp_result
+        cli_result = run_cli_adapter(input_data, timeout=timeout, runner=runner)
+        if cli_result.get("status") == "success":
+            cli_result["fallback_from"] = acp_result.get("adapter_name", "codex-acp")
+            cli_result["fallback_reason"] = acp_result.get("message", "")
+            return cli_result
+        filesystem_result = run_codex_filesystem_adapter(input_data)
+        filesystem_result["fallback_from"] = cli_result.get("adapter_name", "cli")
+        filesystem_result["fallback_reason"] = cli_result.get("message", "")
+        filesystem_result["primary_failure"] = acp_result.get("message", "")
+        return filesystem_result
+    if mode == "kilo-visible":
+        return run_kilo_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "hermes-uri":
+        return run_hermes_uri_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "codex-acp":
+        return run_codex_acp_adapter(input_data, timeout=timeout)
+    if mode == "acp":
+        return run_acp_adapter(input_data, timeout=timeout)
+    if mode in {"hermes-acp", "kimi-acp", "kilo-acp"}:
+        expected = mode.removesuffix("-acp")
+        if input_data["target_slug"] != expected:
+            return {"status": "failed", "message": f"{mode} only supports target {expected}", "adapter_name": mode}
+        return run_acp_adapter(input_data, timeout=timeout)
+    if mode == "cli":
+        return run_cli_adapter(input_data, timeout=timeout, runner=runner)
+    return {"status": "failed", "message": f"unknown adapter mode: {mode}", "adapter_name": mode}
+
+
 def dispatch_wake_event(
     event: dict[str, Any],
     *,
@@ -1388,6 +1603,9 @@ def dispatch_wake_event(
         "project_path": event["project_path"],
         "target_slug": event["target_slug"],
         "inbox_path": event.get("inbox_path") or event["source_path"],
+        "source_path": event.get("source_path", ""),
+        "source_type": event.get("source_type", ""),
+        "thread_path": event.get("thread_path", ""),
         "task_id": event["task_id"],
         "synthetic_prompt": event["synthetic_prompt"],
     }

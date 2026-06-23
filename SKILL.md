@@ -17,9 +17,9 @@ Agents can also hold natural conversations: task-specific threads live at `.ai-c
 
 The installed daemon also writes semantic live snapshots to `{project-root}/.ai-collab/live/`. These are the project-scoped "eyes" layer: current inbox/task state, latest log summary, self-reported commands/edits from each agent, process hints tied to the current project, git dirty files, director alerts, `health.json`, automatic project-window screenshots, and `.semantic.json` screenshot sidecars unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`. The installer attempts to install the local OCR engine (`tesseract`) by default; if unavailable, vision remains functional in metadata-only mode and `health.json` reports the degradation.
 
-The daemon also runs the self-updater by default. It refreshes the global `~/.claude` install from the configured GitHub branch, then re-applies managed `AI-COLLAB-START` / `AI-COLLAB-END` rule blocks in already-onboarded projects and refreshes generated `PROTOCOL.md` files with backups. Set `AI_COLLAB_AUTO_UPDATE=0` to disable, or tune `AI_COLLAB_UPDATE_INTERVAL_SECONDS`.
+The daemon also runs the self-updater and reboot recovery by default. The self-updater refreshes the global `~/.claude` install from the configured GitHub branch, then re-applies managed `AI-COLLAB-START` / `AI-COLLAB-END` rule blocks in already-onboarded projects and refreshes generated `PROTOCOL.md` files with backups. Recovery refreshes stale/missing `CONTEXT.md` files and removes stale wakeup dedupe entries for unfinished inbox tasks after restart/session loss. Set `AI_COLLAB_AUTO_UPDATE=0` or `AI_COLLAB_RECOVERY=0` to disable either layer, or tune `AI_COLLAB_UPDATE_INTERVAL_SECONDS` / `AI_COLLAB_RECOVERY_INTERVAL_SECONDS`.
 
-For Codex/Antigravity automation, the installer includes a local bridge API at `~/.claude/ai-collab-codex-bridge.py`. Use it when another agent needs a stable API-shaped way to address Codex. It writes normal `.ai-collab/discussions/` messages and routes to `codex-acp` background mode, `antigravity-chat` visible best-effort mode, or `notify-only`. Read `references/codex-antigravity-bridge.md` before changing or relying on this bridge.
+For Codex/Antigravity automation, the installer includes a local bridge API at `~/.claude/ai-collab-codex-bridge.py`. Use it when another agent needs a stable API-shaped way to address Codex. It writes normal `.ai-collab/discussions/` messages and routes to `codex-auto` background mode, `antigravity-chat` visible best-effort mode, `codex-filesystem` deterministic wake receipt, or `notify-only`. `codex-auto` tries ACP first, then a real non-interactive `codex exec` worker, then the degraded filesystem receipt. Read `references/codex-antigravity-bridge.md` before changing or relying on this bridge.
 
 **Conceptual model:** this skill is agent-first. `agent` is the runtime doing work, `container` is the IDE/terminal where it is visible, and `model` is metadata about the LLM behind it. Do not treat IDEs and agents as the same thing.
 
@@ -219,8 +219,9 @@ Expose a localhost API facade that other agents can call to address Codex.
 
 3. Tell callers to POST to `/v1/codex/message` with `project_path`, `from_agent`, `topic`, `message`, and `mode`.
 4. Be explicit about visibility:
-   - `mode: background` uses `codex-acp` and can be autonomous.
+   - `mode: background` uses `codex-auto`: try `codex-acp`, then a real non-interactive `codex exec` worker, then fall back to a degraded deterministic filesystem receipt.
    - `mode: visible` uses `antigravity-chat` and is best-effort/degraded until a real panel API exists.
+   - `mode: codex-filesystem` proves wake delivery through `.ai-collab` files without claiming visible-session control.
 
 ---
 

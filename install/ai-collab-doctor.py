@@ -29,6 +29,7 @@ REQUIRED_CLAUDE_FILES = (
     ".claude/ai-collab-converse.py",
     ".claude/ai-collab-observer.py",
     ".claude/ai-collab-doctor.py",
+    ".claude/ai-collab-recover.py",
 )
 
 REQUIRED_SKILL_FILES = (

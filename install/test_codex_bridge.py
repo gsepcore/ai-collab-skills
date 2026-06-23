@@ -42,11 +42,11 @@ class TestCodexBridge(unittest.TestCase):
         self.assertIn("@codex please review", text)
 
     def test_adapter_mode_mapping(self):
-        self.assertEqual(_mod.adapter_mode("background"), "codex-acp")
+        self.assertEqual(_mod.adapter_mode("background"), "codex-auto")
         self.assertEqual(_mod.adapter_mode("visible"), "antigravity-chat")
         self.assertEqual(_mod.adapter_mode("notify-only"), "notify-only")
 
-    def test_handle_message_dispatches_wakeup_with_background_mode(self):
+    def test_handle_message_dispatches_wakeup_with_background_auto_mode(self):
         calls = []
 
         def fake_runner(*args, **kwargs):
@@ -67,8 +67,8 @@ class TestCodexBridge(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertTrue(Path(result["thread_path"]).exists())
-        self.assertEqual(result["wakeup"]["adapter_mode"], "codex-acp")
-        self.assertEqual(calls[0][1]["env"]["AI_COLLAB_WAKEUP_ADAPTER"], "codex-acp")
+        self.assertEqual(result["wakeup"]["adapter_mode"], "codex-auto")
+        self.assertEqual(calls[0][1]["env"]["AI_COLLAB_WAKEUP_ADAPTER"], "codex-auto")
 
 
 if __name__ == "__main__":

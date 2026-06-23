@@ -9,8 +9,11 @@ WAKEUP_SCRIPT="$HOME/.claude/ai-collab-wakeup.py"
 AUTO_ONBOARD_SCRIPT="$HOME/.claude/ai-collab-auto-onboard.py"
 OBSERVER_SCRIPT="$HOME/.claude/ai-collab-observer.py"
 UPDATE_SCRIPT="$HOME/.claude/ai-collab-update.py"
+RECOVERY_SCRIPT="$HOME/.claude/ai-collab-recover.py"
 LAST_UPDATE_FILE="$HOME/.ai-collab-last-update"
+LAST_RECOVERY_FILE="$HOME/.ai-collab-last-recovery"
 UPDATE_INTERVAL_SECONDS="${AI_COLLAB_UPDATE_INTERVAL_SECONDS:-21600}"
+RECOVERY_INTERVAL_SECONDS="${AI_COLLAB_RECOVERY_INTERVAL_SECONDS:-300}"
 MAX_NOTIFICATIONS=50
 
 log() { echo "[AI-COLLAB] $(date -u +"%Y-%m-%dT%H:%M:%SZ") $*" >> "$LOG_FILE"; }
@@ -24,6 +27,7 @@ log "Daemon started (PID $$)"
 [ -f "$NOTIFICATIONS_FILE" ] || echo "[]" > "$NOTIFICATIONS_FILE"
 [ -f "$LAST_CHECK_FILE" ]    || date +%s > "$LAST_CHECK_FILE"
 [ -f "$LAST_UPDATE_FILE" ]   || echo 0 > "$LAST_UPDATE_FILE"
+[ -f "$LAST_RECOVERY_FILE" ] || echo 0 > "$LAST_RECOVERY_FILE"
 
 # Fix #4 — detect stat command (macOS vs Linux)
 if stat -f "%m" /dev/null 2>/dev/null; then
@@ -37,6 +41,7 @@ while true; do
 
   LAST_CHECK=$(cat "$LAST_CHECK_FILE" 2>/dev/null || date +%s)
   LAST_UPDATE=$(cat "$LAST_UPDATE_FILE" 2>/dev/null || echo 0)
+  LAST_RECOVERY=$(cat "$LAST_RECOVERY_FILE" 2>/dev/null || echo 0)
   NOW=$(date +%s)
 
   # Self-update — refreshes ~/.claude install files and managed project rule
@@ -49,6 +54,20 @@ while true; do
         log "Warning: self-update failed; see /tmp/ai-collab-update.log"
       fi
       echo "$NOW" > "$LAST_UPDATE_FILE"
+    fi
+  fi
+
+  # Reboot/session recovery — refreshes project CONTEXT.md files and clears
+  # stale wakeup dedupe entries for unfinished inbox tasks. This keeps agents
+  # oriented after sleep, crash, logout, or machine reboot.
+  if [ -x "$RECOVERY_SCRIPT" ] && [ "${AI_COLLAB_RECOVERY:-1}" != "0" ]; then
+    if [ $((NOW - LAST_RECOVERY)) -ge "${RECOVERY_INTERVAL_SECONDS:-300}" ]; then
+      if python3 "$RECOVERY_SCRIPT" >/tmp/ai-collab-recover.log 2>>"$LOG_FILE"; then
+        log "Recovery completed"
+      else
+        log "Warning: recovery failed; see /tmp/ai-collab-recover.log"
+      fi
+      echo "$NOW" > "$LAST_RECOVERY_FILE"
     fi
   fi
 

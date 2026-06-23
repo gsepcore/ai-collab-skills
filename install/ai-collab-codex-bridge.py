@@ -72,14 +72,14 @@ def wakeup_script() -> Path:
 def adapter_mode(mode: str) -> str:
     normalized = mode.strip().lower()
     if normalized in {"background", "headless", "autonomous"}:
-        return "codex-acp"
+        return "codex-auto"
     if normalized in {"visible", "foreground"}:
         return "antigravity-chat"
     if normalized == "auto":
         return "visible"
     if normalized in {"notify", "notify-only"}:
         return "notify-only"
-    if normalized in {"codex-acp", "antigravity-chat", "visible"}:
+    if normalized in {"codex-auto", "codex-filesystem", "codex-acp", "antigravity-chat", "visible"}:
         return normalized
     raise ValueError(f"unsupported bridge mode: {mode}")
 
@@ -171,8 +171,9 @@ def handle_message(
         "thread_path": str(thread_path),
         "wakeup": wakeup,
         "note": (
-            "background/codex-acp can run autonomous Codex workers; visible "
-            "Antigravity wakeup is best-effort until a public Codex panel API exists."
+            "background/codex-auto tries ACP first, then Codex CLI exec, then "
+            "falls back to filesystem wake receipts; visible Antigravity wakeup "
+            "is best-effort until a public Codex panel API exists."
         ),
     }
 
@@ -217,7 +218,7 @@ class BridgeHandler(http.server.BaseHTTPRequestHandler):
                     "ok": True,
                     "bridge": "codex-antigravity",
                     "version": BRIDGE_VERSION,
-                    "modes": ["background", "visible", "auto", "notify-only"],
+                    "modes": ["background", "visible", "auto", "notify-only", "codex-auto", "codex-filesystem"],
                     "default_mode": DEFAULT_MODE,
                     "visible_status": "degraded-no-public-codex-panel-api",
                 },

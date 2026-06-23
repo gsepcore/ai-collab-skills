@@ -16,10 +16,11 @@
 #   10. Live observer            → ~/.claude/ai-collab-observer.py
 #   11. Doctor script            → ~/.claude/ai-collab-doctor.py
 #   12. Self-updater             → ~/.claude/ai-collab-update.py
-#   13. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
-#   14. OCR engine               → tesseract auto-install when possible
-#   15. Background daemon        → launchd (macOS) / cron (Linux)
-#   16. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#   13. Reboot recovery          → ~/.claude/ai-collab-recover.py
+#   14. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
+#   15. OCR engine               → tesseract auto-install when possible
+#   16. Background daemon        → launchd (macOS) / cron (Linux)
+#   17. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -211,6 +212,7 @@ copy_or_download "install/ai-collab-converse.py"              "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-observer.py"              "$CLAUDE_DIR/ai-collab-observer.py"
 copy_or_download "install/ai-collab-doctor.py"                "$CLAUDE_DIR/ai-collab-doctor.py"
 copy_or_download "install/ai-collab-update.py"                "$CLAUDE_DIR/ai-collab-update.py"
+copy_or_download "install/ai-collab-recover.py"               "$CLAUDE_DIR/ai-collab-recover.py"
 copy_or_download "install/ai-collab-codex-bridge.py"          "$CLAUDE_DIR/ai-collab-codex-bridge.py"
 chmod +x "$CLAUDE_DIR/ai-collab-daemon.sh"
 chmod +x "$CLAUDE_DIR/ai-collab-wakeup.py"
@@ -221,6 +223,7 @@ chmod +x "$CLAUDE_DIR/ai-collab-converse.py"
 chmod +x "$CLAUDE_DIR/ai-collab-observer.py"
 chmod +x "$CLAUDE_DIR/ai-collab-doctor.py"
 chmod +x "$CLAUDE_DIR/ai-collab-update.py"
+chmod +x "$CLAUDE_DIR/ai-collab-recover.py"
 chmod +x "$CLAUDE_DIR/ai-collab-codex-bridge.py"
 
 green "Daemon script        → $CLAUDE_DIR/ai-collab-daemon.sh"
@@ -234,6 +237,7 @@ green "Conversation helper  → $CLAUDE_DIR/ai-collab-converse.py"
 green "Live observer        → $CLAUDE_DIR/ai-collab-observer.py"
 green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"
 green "Self-updater         → $CLAUDE_DIR/ai-collab-update.py"
+green "Reboot recovery      → $CLAUDE_DIR/ai-collab-recover.py"
 green "Codex bridge API     → $CLAUDE_DIR/ai-collab-codex-bridge.py"
 
 # ── 3. Install semantic vision OCR engine ───────────────────────────────────
@@ -327,6 +331,9 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
   add_plist_env "AI_COLLAB_UPDATE_INTERVAL_SECONDS" "${AI_COLLAB_UPDATE_INTERVAL_SECONDS:-21600}"
   add_plist_env "AI_COLLAB_UPDATE_RAW_BASE" "${AI_COLLAB_UPDATE_RAW_BASE:-}"
   add_plist_env "AI_COLLAB_UPDATE_MAX_DEPTH" "${AI_COLLAB_UPDATE_MAX_DEPTH:-}"
+  add_plist_env "AI_COLLAB_RECOVERY" "${AI_COLLAB_RECOVERY:-1}"
+  add_plist_env "AI_COLLAB_RECOVERY_INTERVAL_SECONDS" "${AI_COLLAB_RECOVERY_INTERVAL_SECONDS:-300}"
+  add_plist_env "AI_COLLAB_RECOVERY_CONTEXT_MAX_AGE" "${AI_COLLAB_RECOVERY_CONTEXT_MAX_AGE:-3600}"
 
   ENV_BLOCK=""
   if [[ -n "$ENV_ITEMS" ]]; then
@@ -603,6 +610,7 @@ echo "    💬 Conversation helper — natural agent questions, proposals, decis
 echo "    👁️  Live observer       — writes .ai-collab/live semantic state snapshots"
 echo "    🔎 OCR engine          — powers screenshot text reading when available"
 echo "    🩺 Doctor script       — verifies install health"
+echo "    🧭 Reboot recovery     — restores CONTEXT.md + wakeup retries after restart"
 echo "    📚 /collab skill       — collaboration commands available in Claude Code"
 echo ""
 echo "  Try it now — open Claude Code and type:"

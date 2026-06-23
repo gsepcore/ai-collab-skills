@@ -47,6 +47,8 @@ class TestDoctor(unittest.TestCase):
     def test_happy_path_without_launchd_has_no_failures(self):
         results = _mod.run_checks(self.home, include_launchd=False)
         self.assertNotIn("FAIL", self.levels(results))
+        names = [result.name for result in results]
+        self.assertIn(".claude/ai-collab-recover.py", names)
 
     def test_missing_required_file_is_failure(self):
         (self.home / ".claude/ai-collab-wakeup.py").unlink()
