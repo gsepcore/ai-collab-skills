@@ -1020,21 +1020,13 @@ def run_opencode_auto_adapter(
     runner=subprocess.run,
 ) -> dict[str, str]:
     visible_result = run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
-    cli_result = run_cli_adapter(input_data, timeout=timeout, runner=runner)
-    if cli_result.get("status") == "success":
-        cli_result["fallback_from"] = visible_result.get("adapter_name", "opencode-visible")
-        cli_result["fallback_reason"] = visible_result.get("message", "")
-        cli_result["visible_status"] = visible_result.get("status", "")
-        return cli_result
-
     if visible_result.get("status") == "success":
-        visible_result["fallback_adapter"] = cli_result.get("adapter_name", "cli")
-        visible_result["fallback_failure"] = cli_result.get("message", "")
         return visible_result
 
-    visible_result["fallback_adapter"] = cli_result.get("adapter_name", "cli")
-    visible_result["fallback_failure"] = cli_result.get("message", "")
-    return visible_result
+    cli_result = run_cli_adapter(input_data, timeout=timeout, runner=runner)
+    cli_result["fallback_from"] = visible_result.get("adapter_name", "opencode-visible")
+    cli_result["fallback_reason"] = visible_result.get("message", "")
+    return cli_result
 
 
 def run_kilo_visible_adapter(
@@ -1529,7 +1521,7 @@ def run_visible_adapter(
 ) -> dict[str, str]:
     target = input_data["target_slug"]
     if target == "opencode":
-        return run_opencode_auto_adapter(input_data, timeout=timeout, runner=runner)
+        return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
     if target == "kilo":
         return run_kilo_visible_adapter(input_data, timeout=timeout, runner=runner)
     if target == "hermes":

@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 INSTALL_SH = Path(__file__).parent / "install.sh"
+DAEMON_SH = Path(__file__).parent / "daemon.sh"
 
 
 class TestInstallScript(unittest.TestCase):
@@ -59,6 +60,32 @@ class TestInstallScript(unittest.TestCase):
         self.assertIn('BRIDGE_PLIST_LABEL="com.gsepcore.ai-collab-codex-bridge"', text)
         self.assertIn("Codex bridge loaded", text)
         self.assertIn("AI_COLLAB_NO_CODEX_BRIDGE", text)
+
+
+class TestDaemonScript(unittest.TestCase):
+    def test_shell_syntax(self):
+        completed = subprocess.run(["bash", "-n", str(DAEMON_SH)], capture_output=True, text=True, check=False)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_all_wakeups_run_before_observers(self):
+        text = DAEMON_SH.read_text(encoding="utf-8")
+
+        wake_loop = text.index('for COLLAB_DIR in "${COLLAB_DIRS[@]}"; do')
+        observer_loop = text.index('for COLLAB_DIR in "${COLLAB_DIRS[@]}"; do', wake_loop + 1)
+        wake_command = text.index('python3 "$WAKEUP_SCRIPT"', wake_loop)
+        observer_command = text.index('python3 "$OBSERVER_SCRIPT"', observer_loop)
+
+        self.assertLess(wake_loop, observer_loop)
+        self.assertLess(wake_command, observer_loop)
+        self.assertGreater(observer_command, observer_loop)
+
+    def test_project_discovery_prunes_expensive_non_project_trees(self):
+        text = DAEMON_SH.read_text(encoding="utf-8")
+
+        self.assertIn("-name node_modules", text)
+        self.assertIn("-name Library", text)
+        self.assertIn("-name .git", text)
 
 
 if __name__ == "__main__":

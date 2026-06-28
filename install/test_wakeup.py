@@ -629,7 +629,7 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["adapter_name"], "opencode-visible")
 
-    def test_visible_adapter_notifies_opencode_then_runs_cli(self):
+    def test_visible_adapter_uses_opencode_tui_without_hidden_cli_duplicate(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
         os.environ["AI_COLLAB_OPENCODE_PORTS"] = "12345"
         os.environ["AI_COLLAB_OPENCODE_BIN"] = "/usr/bin/opencode"
@@ -682,11 +682,9 @@ class TestAdapters(unittest.TestCase):
             _mod.get_json = old_get
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["adapter_name"], "cli")
-        self.assertEqual(result["fallback_from"], "opencode-visible")
-        self.assertEqual(result["visible_status"], "success")
+        self.assertEqual(result["adapter_name"], "opencode-visible")
         self.assertEqual(len(posts), 3)
-        self.assertEqual(calls[0][:3], ["/usr/bin/opencode", "run", "read visible inbox"])
+        self.assertEqual(calls, [])
 
     def test_opencode_visible_prefers_port_matching_project(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/gsep"
@@ -798,7 +796,7 @@ class TestAdapters(unittest.TestCase):
         self.assertIn("session.directory=/tmp/other-project", result["message"])
         self.assertEqual(posts, [])
 
-    def test_visible_adapter_falls_back_to_opencode_cli(self):
+    def test_visible_adapter_never_falls_back_to_hidden_opencode_cli(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/new-project"
         os.environ["AI_COLLAB_OPENCODE_PORTS"] = "11111"
         os.environ["AI_COLLAB_OPENCODE_BIN"] = "/usr/bin/opencode"
@@ -843,6 +841,61 @@ class TestAdapters(unittest.TestCase):
                     "synthetic_prompt": "read visible inbox",
                 },
                 mode="visible",
+                runner=fake_runner,
+            )
+        finally:
+            _mod.post_json = old_post
+            _mod.get_json = old_get
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["adapter_name"], "opencode-visible")
+        self.assertEqual(calls, [])
+
+    def test_opencode_auto_explicitly_falls_back_to_cli(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/new-project"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "11111"
+        os.environ["AI_COLLAB_OPENCODE_BIN"] = "/usr/bin/opencode"
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            if command[:2] == ["ps", "ax"]:
+                class PsCompleted:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+
+                return PsCompleted()
+            calls.append(command)
+
+            class Completed:
+                returncode = 0
+                stdout = "done"
+                stderr = ""
+
+            return Completed()
+
+        old_post = _mod.post_json
+        old_get = _mod.get_json
+        try:
+            _mod.post_json = lambda url, payload, **kwargs: (500, "panel refused")
+
+            def fake_get(url, **kwargs):
+                if "/project/current" in url:
+                    return 200, {"worktree": "/tmp/new-project"}
+                if url.endswith("/session"):
+                    return 200, [{"id": "ses_new", "directory": "/tmp/new-project"}]
+                return 404, ""
+
+            _mod.get_json = fake_get
+            result = run_wakeup_adapter(
+                {
+                    "project_path": "/tmp/new-project",
+                    "target_slug": "opencode",
+                    "inbox_path": "/tmp/new-project/.ai-collab/inbox-opencode.md",
+                    "task_id": "task-123",
+                    "synthetic_prompt": "read visible inbox",
+                },
+                mode="opencode-auto",
                 runner=fake_runner,
             )
         finally:

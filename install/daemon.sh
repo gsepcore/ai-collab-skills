@@ -71,13 +71,21 @@ while true; do
     fi
   fi
 
-  # Fix #3 — increased maxdepth from 4 to 6 for deeper project structures
+  # Discover once per tick and skip trees that cannot contain user projects.
+  # Wakeups run for every project before slower observer/screenshot work so a
+  # busy project cannot delay conversations in another one.
+  COLLAB_DIRS=()
   while IFS= read -r -d '' COLLAB_DIR; do
+    COLLAB_DIRS+=("$COLLAB_DIR")
+  done < <(
+    find "$HOME" -maxdepth 6 \
+      \( -type d \( -name .git -o -name node_modules -o -name Library -o -name .Trash -o -name .cache -o -name .npm \) -prune \) \
+      -o -type d -name ".ai-collab" -print0 2>/dev/null
+  )
+
+  for COLLAB_DIR in "${COLLAB_DIRS[@]}"; do
     PROJECT=$(basename "$(dirname "$COLLAB_DIR")")
 
-    # Phase B — scan inboxes separately from normal log notifications.
-    # The Python helper owns frontmatter parsing, retry/backoff, event writes,
-    # and failed-state transitions. This keeps the bash daemon small.
     if [ -x "$WAKEUP_SCRIPT" ]; then
       for inbox in "$COLLAB_DIR"/inbox-*.md; do
         [ -f "$inbox" ] || continue
@@ -88,6 +96,10 @@ while true; do
         python3 "$WAKEUP_SCRIPT" "$PROJECT" "$thread" >/dev/null 2>>"$LOG_FILE" || log "Warning: thread wakeup scan failed for $thread"
       done
     fi
+  done
+
+  for COLLAB_DIR in "${COLLAB_DIRS[@]}"; do
+    PROJECT=$(basename "$(dirname "$COLLAB_DIR")")
 
     # Live observer — writes project-local .ai-collab/live/*.json snapshots,
     # health.json, screenshot semantic sidecars, process hints, git dirtiness,
@@ -187,7 +199,7 @@ PYEOF
       fi
     done
 
-  done < <(find "$HOME" -maxdepth 6 -type d -name ".ai-collab" -print0 2>/dev/null)
+  done
 
   echo "$NOW" > "$LAST_CHECK_FILE"
 done
