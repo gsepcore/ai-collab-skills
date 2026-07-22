@@ -112,6 +112,13 @@ Show the live semantic observer view for the project.
    - text excerpt if present
 8. Read `{root}/.ai-collab/live/director-alerts.jsonl` if present and print the latest 5 alerts first.
 9. If screenshots are not present, mention they are enabled by default but require a visible window matching the current project fingerprint, macOS Screen Recording permission, a supported macOS host, and `AI_COLLAB_OBSERVER_SCREENSHOTS` not being set to `0`.
+10. Whenever a screenshot is captured or inspected for the user, make visual verification part of the deliverable:
+    - For an explicit capture request, take a fresh screenshot; do not silently reuse a stale image.
+    - Create a reasonably sized thumbnail when the original is too large for inline display.
+    - Embed the thumbnail explicitly in the user-visible final response with Markdown image syntax, and include a link to the original image.
+    - Do not rely on an internal image-inspection tool result or a filesystem path alone; those may not render for the user.
+    - State the capture time and briefly summarize what is visibly present.
+    - If the client cannot render or attach the thumbnail, say so clearly instead of claiming it was shown.
 
 ---
 
