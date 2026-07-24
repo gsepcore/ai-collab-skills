@@ -896,6 +896,13 @@ def opencode_port_matches_project(port: int, project_path: str, *, timeout: int,
     return any(same_path(item["path"], project_path) for item in opencode_port_project_candidates(port, timeout=timeout, getter=getter))
 
 
+def opencode_current_project_matches(port: int, project_path: str, *, timeout: int, getter=None) -> bool:
+    return any(
+        item["source"].startswith("project/current.") and same_path(item["path"], project_path)
+        for item in opencode_port_project_candidates(port, timeout=timeout, getter=getter)
+    )
+
+
 def opencode_api_allows_cwd_fallback(port: int, *, timeout: int, getter=None) -> bool:
     current_paths = [
         item["path"]
@@ -1026,7 +1033,12 @@ def run_opencode_visible_adapter(
     api_project_ports: list[int] = []
     cwd_project_ports: list[int] = []
     for port in ports:
-        if project_path and opencode_port_matches_project(port, project_path, timeout=fast_timeout, getter=getter):
+        if project_path and opencode_current_project_matches(
+            port,
+            project_path,
+            timeout=fast_timeout,
+            getter=getter,
+        ):
             api_project_ports.append(port)
             continue
         if (
