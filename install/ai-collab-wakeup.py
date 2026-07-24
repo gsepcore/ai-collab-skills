@@ -693,6 +693,75 @@ def ps_commands(runner=subprocess.run) -> str:
     return completed.stdout or ""
 
 
+def opencode_processes(runner=subprocess.run) -> list[dict[str, int]]:
+    try:
+        completed = runner(
+            ["ps", "ax", "-o", "pid=,command="],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if completed.returncode != 0:
+        return []
+
+    processes: list[dict[str, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for line in (completed.stdout or "").splitlines():
+        match = re.match(r"^\s*(\d+)\s+(.+)$", line)
+        if not match:
+            continue
+        pid = int(match.group(1))
+        command = match.group(2)
+        port_match = re.search(r"\bopencode\b.*?(?:--port(?:=|\s+))(\d+)", command)
+        if not port_match:
+            continue
+        port = int(port_match.group(1))
+        marker = (pid, port)
+        if marker not in seen and 0 < port < 65536:
+            seen.add(marker)
+            processes.append({"pid": pid, "port": port})
+    return processes
+
+
+def process_cwd(pid: int, runner=subprocess.run) -> str | None:
+    proc_cwd = Path(f"/proc/{pid}/cwd")
+    try:
+        if proc_cwd.exists():
+            return os.readlink(proc_cwd)
+    except OSError:
+        pass
+
+    try:
+        completed = runner(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    for line in (completed.stdout or "").splitlines():
+        if line.startswith("n") and len(line) > 1:
+            return line[1:]
+    return None
+
+
+def opencode_processes_by_port(runner=subprocess.run) -> dict[int, list[dict[str, Any]]]:
+    by_port: dict[int, list[dict[str, Any]]] = {}
+    for process in opencode_processes(runner=runner):
+        pid = process["pid"]
+        port = process["port"]
+        cwd = process_cwd(pid, runner=runner)
+        by_port.setdefault(port, []).append({"pid": pid, "cwd": cwd})
+    return by_port
+
+
 def discover_opencode_ports(runner=subprocess.run) -> list[int]:
     ports: list[int] = []
     for value in csv_env("AI_COLLAB_OPENCODE_PORTS"):
@@ -827,16 +896,56 @@ def opencode_port_matches_project(port: int, project_path: str, *, timeout: int,
     return any(same_path(item["path"], project_path) for item in opencode_port_project_candidates(port, timeout=timeout, getter=getter))
 
 
-def opencode_port_diagnostics(ports: list[int], *, timeout: int, getter=None) -> str:
+def opencode_api_allows_cwd_fallback(port: int, *, timeout: int, getter=None) -> bool:
+    current_paths = [
+        item["path"]
+        for item in opencode_port_project_candidates(port, timeout=timeout, getter=getter)
+        if item["source"].startswith("project/current.")
+    ]
+    if not current_paths:
+        return True
+    return all(same_path(path, "/") for path in current_paths)
+
+
+def opencode_port_process_matches_project(
+    port: int,
+    project_path: str,
+    *,
+    processes_by_port: dict[int, list[dict[str, Any]]],
+) -> bool:
+    matches = [
+        process
+        for process in processes_by_port.get(port, [])
+        if process.get("cwd") and same_path(str(process["cwd"]), project_path)
+    ]
+    return len(matches) == 1
+
+
+def opencode_port_diagnostics(
+    ports: list[int],
+    *,
+    timeout: int,
+    getter=None,
+    processes_by_port: dict[int, list[dict[str, Any]]] | None = None,
+) -> str:
     parts: list[str] = []
+    processes_by_port = processes_by_port or {}
     for port in ports:
         candidates = opencode_port_project_candidates(port, timeout=timeout, getter=getter)
+        process_details = processes_by_port.get(port, [])
+        process_text = ", ".join(
+            f"process.pid={item.get('pid')} process.cwd={item.get('cwd') or 'unknown'}"
+            for item in process_details
+        )
         if not candidates:
-            parts.append(f"{port}: no project/session metadata")
+            suffix = f", {process_text}" if process_text else ""
+            parts.append(f"{port}: no project/session metadata{suffix}")
             continue
         paths = ", ".join(f"{item['source']}={item['path']}" for item in candidates[:4])
         if len(candidates) > 4:
             paths += f", +{len(candidates) - 4} more"
+        if process_text:
+            paths += f", {process_text}"
         parts.append(f"{port}: {paths}")
     return "; ".join(parts)
 
@@ -910,16 +1019,65 @@ def run_opencode_visible_adapter(
     fast_timeout = min(timeout, 10)
     # Only deliver visible prompts to a TUI whose project matches the inbox's
     # project_path. Falling back to any other OpenCode port can wake a different
-    # project, which is worse than leaving the event retryable.
-    project_ports: list[int] = []
-    other_ports: list[int] = []
+    # project, which is worse than leaving the event retryable. Non-git
+    # workspaces are reported by OpenCode as the global "/" project, so those
+    # ports may fall back to an exact PID -> cwd match.
+    processes_by_port = opencode_processes_by_port(runner=runner)
+    api_project_ports: list[int] = []
+    cwd_project_ports: list[int] = []
     for port in ports:
         if project_path and opencode_port_matches_project(port, project_path, timeout=fast_timeout, getter=getter):
-            project_ports.append(port)
+            api_project_ports.append(port)
             continue
-        other_ports.append(port)
-    if project_path and not project_ports:
-        diagnostics = opencode_port_diagnostics(ports, timeout=fast_timeout, getter=getter)
+        if (
+            project_path
+            and not synthetic
+            and opencode_api_allows_cwd_fallback(port, timeout=fast_timeout, getter=getter)
+            and opencode_port_process_matches_project(
+                port,
+                project_path,
+                processes_by_port=processes_by_port,
+            )
+        ):
+            cwd_project_ports.append(port)
+
+    if len(api_project_ports) > 1:
+        diagnostics = opencode_port_diagnostics(
+            ports,
+            timeout=fast_timeout,
+            getter=getter,
+            processes_by_port=processes_by_port,
+        )
+        return {
+            "status": "failed",
+            "message": f"multiple OpenCode ports matched project metadata; refusing ambiguous wakeup. candidates: {diagnostics}",
+            "adapter_name": "opencode-visible",
+        }
+    if api_project_ports:
+        ordered_ports = api_project_ports
+        cwd_fallback_port = None
+    elif len(cwd_project_ports) > 1:
+        diagnostics = opencode_port_diagnostics(
+            ports,
+            timeout=fast_timeout,
+            getter=getter,
+            processes_by_port=processes_by_port,
+        )
+        return {
+            "status": "failed",
+            "message": f"multiple OpenCode process cwd values matched project; refusing ambiguous wakeup. candidates: {diagnostics}",
+            "adapter_name": "opencode-visible",
+        }
+    elif cwd_project_ports:
+        ordered_ports = cwd_project_ports
+        cwd_fallback_port = cwd_project_ports[0]
+    elif project_path:
+        diagnostics = opencode_port_diagnostics(
+            ports,
+            timeout=fast_timeout,
+            getter=getter,
+            processes_by_port=processes_by_port,
+        )
         return {
             "status": "failed",
             "message": (
@@ -928,7 +1086,9 @@ def run_opencode_visible_adapter(
             ),
             "adapter_name": "opencode-visible",
         }
-    ordered_ports = project_ports if project_ports else other_ports
+    else:
+        ordered_ports = ports
+        cwd_fallback_port = None
 
     def tui_url(port: int, path: str) -> str:
         query = {}
@@ -939,6 +1099,15 @@ def run_opencode_visible_adapter(
         return f"http://127.0.0.1:{port}{path}{suffix}"
 
     for port in ordered_ports:
+        if port == cwd_fallback_port:
+            refreshed_processes = opencode_processes_by_port(runner=runner)
+            if not opencode_port_process_matches_project(
+                port,
+                project_path,
+                processes_by_port=refreshed_processes,
+            ):
+                last_error = f"port {port}: OpenCode process cwd changed before wakeup; refusing stale target"
+                continue
         if not synthetic:
             # True visible mode targets the active TUI prompt box, then submits
             # it. Posting to /session/{id}/prompt_async can execute in a
@@ -977,7 +1146,7 @@ def run_opencode_visible_adapter(
             port,
             timeout=fast_timeout,
             getter=getter,
-            project_path=project_path if port in project_ports else None,
+            project_path=project_path if port in api_project_ports else None,
         )
         if not session_id:
             last_error = f"port {port}: no matching session found"

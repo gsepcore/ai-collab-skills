@@ -488,6 +488,14 @@ class TestAdapters(unittest.TestCase):
                 return 200, [{"id": "ses_test", "directory": "/tmp/project"}]
             return 404, ""
 
+        def fake_runner(command, **kwargs):
+            class Completed:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Completed()
+
         result = _mod.run_opencode_visible_adapter(
             {
                 "project_path": "/tmp/project",
@@ -497,6 +505,7 @@ class TestAdapters(unittest.TestCase):
                 "synthetic_prompt": "read visible inbox",
             },
             timeout=10,
+            runner=fake_runner,
             poster=fake_poster,
             getter=fake_getter,
         )
@@ -575,6 +584,14 @@ class TestAdapters(unittest.TestCase):
                 return 200, [{"id": "ses_test", "directory": "/tmp/project"}]
             return 404, ""
 
+        def fake_runner(command, **kwargs):
+            class Completed:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Completed()
+
         result = _mod.run_opencode_visible_adapter(
             {
                 "project_path": "/tmp/project",
@@ -584,6 +601,7 @@ class TestAdapters(unittest.TestCase):
                 "synthetic_prompt": "read visible inbox",
             },
             timeout=10,
+            runner=fake_runner,
             poster=fake_poster,
             getter=fake_getter,
         )
@@ -604,6 +622,14 @@ class TestAdapters(unittest.TestCase):
         try:
             _mod.post_json = lambda url, payload, **kwargs: (200, "ok")
 
+            def fake_runner(command, **kwargs):
+                class Completed:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+
+                return Completed()
+
             def fake_get(url, **kwargs):
                 if "/project/current" in url:
                     return 200, {"worktree": "/tmp/project"}
@@ -621,6 +647,7 @@ class TestAdapters(unittest.TestCase):
                     "synthetic_prompt": "read visible inbox",
                 },
                 mode="visible",
+                runner=fake_runner,
             )
         finally:
             _mod.post_json = old_post
@@ -760,6 +787,223 @@ class TestAdapters(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(posts[0][0], "http://127.0.0.1:11111/tui/clear-prompt?directory=%2Ftmp%2Fasistente-nuevo")
+
+    def test_opencode_visible_matches_global_non_git_project_by_process_cwd(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/non-git-project"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "11111,22222"
+        posts = []
+
+        def fake_poster(url, payload, **kwargs):
+            posts.append((url, payload, kwargs))
+            return 200, "ok"
+
+        def fake_getter(url, **kwargs):
+            if "/project/current" in url:
+                return 200, {"worktree": "/"}
+            if url.endswith("/session"):
+                return 200, [{"id": "ses_other", "directory": "/tmp/other-project"}]
+            return 404, ""
+
+        def fake_runner(command, **kwargs):
+            class Completed:
+                returncode = 0
+                stderr = ""
+
+            completed = Completed()
+            if command[:4] == ["ps", "ax", "-o", "pid=,command="]:
+                completed.stdout = (
+                    "98765001 opencode --port 11111\n"
+                    "98765002 opencode --port 22222\n"
+                )
+            elif command[:3] == ["lsof", "-a", "-p"]:
+                pid = command[3]
+                cwd = "/tmp/non-git-project" if pid == "98765001" else "/tmp/other-project"
+                completed.stdout = f"p{pid}\nfcwd\nn{cwd}\n"
+            elif command[:4] == ["ps", "ax", "-o", "command="]:
+                completed.stdout = "opencode --port 11111\nopencode --port 22222\n"
+            else:
+                completed.returncode = 1
+                completed.stdout = ""
+            return completed
+
+        result = _mod.run_opencode_visible_adapter(
+            {
+                "project_path": "/tmp/non-git-project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/non-git-project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            timeout=10,
+            runner=fake_runner,
+            poster=fake_poster,
+            getter=fake_getter,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(len(posts), 3)
+        self.assertEqual(
+            posts[0][0],
+            "http://127.0.0.1:11111/tui/clear-prompt?directory=%2Ftmp%2Fnon-git-project",
+        )
+        self.assertTrue(all("22222" not in url for url, _, _ in posts))
+
+    def test_opencode_visible_cwd_fallback_refuses_cross_project_process(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/non-git-project"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "11111"
+        posts = []
+
+        def fake_poster(url, payload, **kwargs):
+            posts.append((url, payload, kwargs))
+            return 200, "ok"
+
+        def fake_getter(url, **kwargs):
+            if "/project/current" in url:
+                return 200, {"worktree": "/"}
+            if url.endswith("/session"):
+                return 200, [{"id": "ses_other", "directory": "/tmp/other-project"}]
+            return 404, ""
+
+        def fake_runner(command, **kwargs):
+            class Completed:
+                returncode = 0
+                stderr = ""
+
+            completed = Completed()
+            if command[:4] == ["ps", "ax", "-o", "pid=,command="]:
+                completed.stdout = "98765002 opencode --port 11111\n"
+            elif command[:3] == ["lsof", "-a", "-p"]:
+                completed.stdout = "p98765002\nfcwd\nn/tmp/other-project\n"
+            elif command[:4] == ["ps", "ax", "-o", "command="]:
+                completed.stdout = "opencode --port 11111\n"
+            else:
+                completed.returncode = 1
+                completed.stdout = ""
+            return completed
+
+        result = _mod.run_opencode_visible_adapter(
+            {
+                "project_path": "/tmp/non-git-project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/non-git-project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            timeout=10,
+            runner=fake_runner,
+            poster=fake_poster,
+            getter=fake_getter,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("refusing cross-project wakeup", result["message"])
+        self.assertIn("process.cwd=/tmp/other-project", result["message"])
+        self.assertEqual(posts, [])
+
+    def test_opencode_visible_cwd_fallback_does_not_override_explicit_other_project(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/non-git-project"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "11111"
+        posts = []
+
+        def fake_poster(url, payload, **kwargs):
+            posts.append((url, payload, kwargs))
+            return 200, "ok"
+
+        def fake_getter(url, **kwargs):
+            if "/project/current" in url:
+                return 200, {"worktree": "/tmp/other-project"}
+            if url.endswith("/session"):
+                return 200, []
+            return 404, ""
+
+        def fake_runner(command, **kwargs):
+            class Completed:
+                returncode = 0
+                stderr = ""
+
+            completed = Completed()
+            if command[:4] == ["ps", "ax", "-o", "pid=,command="]:
+                completed.stdout = "98765001 opencode --port 11111\n"
+            elif command[:3] == ["lsof", "-a", "-p"]:
+                completed.stdout = "p98765001\nfcwd\nn/tmp/non-git-project\n"
+            elif command[:4] == ["ps", "ax", "-o", "command="]:
+                completed.stdout = "opencode --port 11111\n"
+            else:
+                completed.returncode = 1
+                completed.stdout = ""
+            return completed
+
+        result = _mod.run_opencode_visible_adapter(
+            {
+                "project_path": "/tmp/non-git-project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/non-git-project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            timeout=10,
+            runner=fake_runner,
+            poster=fake_poster,
+            getter=fake_getter,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("refusing cross-project wakeup", result["message"])
+        self.assertEqual(posts, [])
+
+    def test_opencode_visible_cwd_fallback_refuses_ambiguous_same_project_processes(self):
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/non-git-project"
+        os.environ["AI_COLLAB_OPENCODE_PORTS"] = "11111,22222"
+        posts = []
+
+        def fake_poster(url, payload, **kwargs):
+            posts.append((url, payload, kwargs))
+            return 200, "ok"
+
+        def fake_getter(url, **kwargs):
+            if "/project/current" in url:
+                return 200, {"worktree": "/"}
+            if url.endswith("/session"):
+                return 200, []
+            return 404, ""
+
+        def fake_runner(command, **kwargs):
+            class Completed:
+                returncode = 0
+                stderr = ""
+
+            completed = Completed()
+            if command[:4] == ["ps", "ax", "-o", "pid=,command="]:
+                completed.stdout = (
+                    "98765001 opencode --port 11111\n"
+                    "98765002 opencode --port 22222\n"
+                )
+            elif command[:3] == ["lsof", "-a", "-p"]:
+                completed.stdout = f"p{command[3]}\nfcwd\nn/tmp/non-git-project\n"
+            elif command[:4] == ["ps", "ax", "-o", "command="]:
+                completed.stdout = "opencode --port 11111\nopencode --port 22222\n"
+            else:
+                completed.returncode = 1
+                completed.stdout = ""
+            return completed
+
+        result = _mod.run_opencode_visible_adapter(
+            {
+                "project_path": "/tmp/non-git-project",
+                "target_slug": "opencode",
+                "inbox_path": "/tmp/non-git-project/.ai-collab/inbox-opencode.md",
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            },
+            timeout=10,
+            runner=fake_runner,
+            poster=fake_poster,
+            getter=fake_getter,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("refusing ambiguous wakeup", result["message"])
+        self.assertEqual(posts, [])
 
     def test_opencode_visible_refuses_cross_project_fallback(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/new-project"
