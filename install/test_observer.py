@@ -543,6 +543,77 @@ to: opencode
         self.assertEqual(roster["missing_or_unverified"], ["codex"])
         self.assertFalse(roster["agents"][0]["host_surface"]["registered_host_match"])
 
+    def test_background_refresh_does_not_mutate_screenshot_bound_roster(self):
+        live = self.collab / "live"
+        screenshots = live / "screenshots"
+        screenshots.mkdir(parents=True)
+        image = screenshots / "team.png"
+        image.write_bytes(b"png")
+        semantic_path = screenshots / "team.semantic.json"
+        semantic_path.write_text(
+            json.dumps(
+                {
+                    "project_match": True,
+                    "visible_agents": ["codex"],
+                    "agent_visual_hits": {"codex": [{"text": "Codex", "position": "right"}]},
+                    "ocr": {"status": "ok"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        screenshot = {
+            "status": "captured",
+            "path": str(image),
+            "captured_at": "2026-06-15T12:00:00Z",
+            "window": {"app": "Electron", "pid": "900", "title": "demo"},
+            "semantic": {"path": str(semantic_path)},
+        }
+        original_inventory = _mod.ide_bridge_inventory
+        _mod.ide_bridge_inventory = lambda root, runner: [
+            {
+                "owner": "ide-visible-bridge",
+                "pid": 901,
+                "port": 52678,
+                "ide": "Antigravity IDE",
+                "project_paths": [str(self.root)],
+                "inventory_status": "ok",
+                "terminals": [],
+                "host_ancestor_pids": [900],
+            }
+        ]
+        try:
+            initial = _mod.build_visual_roster(
+                root=self.root,
+                live_dir=live,
+                now=self.now,
+                agents=["codex"],
+                snapshots={"codex": {"processes": [], "latest_log": {}}},
+                screenshot=screenshot,
+                required_agents=["codex"],
+                runner=self.fake_runner,
+            )
+            (screenshots / ".last.json").write_text(json.dumps(screenshot), encoding="utf-8")
+            immutable = Path(initial["evidence_path"])
+            original_bytes = immutable.read_bytes()
+
+            refreshed = _mod.build_visual_roster(
+                root=self.root,
+                live_dir=live,
+                now=self.now,
+                agents=["codex"],
+                snapshots={"codex": {"processes": [], "latest_log": {}}},
+                screenshot=None,
+                required_agents=None,
+                runner=self.fake_runner,
+            )
+        finally:
+            _mod.ide_bridge_inventory = original_inventory
+
+        self.assertEqual(initial["required_agents"], ["codex"])
+        self.assertEqual(refreshed["required_agents"], [])
+        self.assertEqual(immutable.read_bytes(), original_bytes)
+        self.assertEqual(json.loads(immutable.read_text(encoding="utf-8"))["required_agents"], ["codex"])
+
     def test_screenshots_can_be_disabled_with_env(self):
         os.environ["AI_COLLAB_OBSERVER_SCREENSHOTS"] = "0"
 

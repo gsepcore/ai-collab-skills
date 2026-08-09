@@ -741,6 +741,7 @@ def build_visual_roster(
     required_agents: list[str] | None = None,
     runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
+    fresh_screenshot = screenshot is not None
     screenshot = screenshot or load_json(live_dir / "screenshots" / ".last.json", {})
     semantic_ref = screenshot.get("semantic") if isinstance(screenshot, dict) else {}
     semantic_path = Path(str(semantic_ref.get("path", ""))) if isinstance(semantic_ref, dict) and semantic_ref.get("path") else None
@@ -889,7 +890,10 @@ def build_visual_roster(
         "agents": entries,
         "evidence_path": str(immutable_path) if immutable_path else "",
     }
-    if immutable_path:
+    # A background observation may reuse .last.json to refresh the canonical
+    # live roster. It must never rewrite the screenshot-bound audit artifact,
+    # whose required-agent contract belongs to the capture that created it.
+    if immutable_path and fresh_screenshot:
         write_json(immutable_path, roster)
     write_json(live_dir / "visual-roster.json", roster)
     return roster
