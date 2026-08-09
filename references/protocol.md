@@ -14,15 +14,16 @@ Prefer the project onboarding helper instead of manually copying snippets:
 python3 ~/.claude/ai-collab-project-setup.py
 ```
 
-It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/inbox-all.md`, and the correct rules files for each selected agent.
+It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/inbox-all.md`, and the correct rules files for each selected agent. Then run `python3 ~/.claude/ai-collab-team.py configure` to assign persistent development-team roles.
 
 **Core rules that make this work:**
 1. Every AI saves a log after EVERY response — automatically, no prompting needed.
 2. Every new AI reads `CONTEXT.md` first — the single-file project brief from all logs.
-3. Every AI performs a full preflight before EVERY response, analysis, or tool action: context/protocol, team roster, direct inbox, `inbox-all.md`, relevant threads/discussions, recent logs from other agents, and active `Do Not Touch` sections.
+3. Every AI performs a full preflight before EVERY response, analysis, or tool action: context/protocol, team roster, `.ai-collab/roles.json` when present, direct inbox, `inbox-all.md`, relevant threads/discussions, recent logs from other agents, and active `Do Not Touch` sections.
 4. Every AI treats `thread-{task_id}.md` as the task conversation channel, and `.ai-collab/discussions/*.md` as natural design/review conversations — `@slug` mentions can wake the mentioned agent when the daemon and adapter are running.
 5. Directed implementation runs have one active director in `.ai-collab/runs/{run_id}/director.json`; all other agents respect that director for the run.
 6. Every AI keeps live observability current in `.ai-collab/live/{agent}.agent.json` before and after commands, tests, file edits, blockers, and handoffs.
+7. Development-team roles guide default routing. Explicit task ownership overrides them, and a vacant role must be resolved with the user/director before delegation.
 
 ---
 

@@ -65,6 +65,7 @@ class TestUpdate(unittest.TestCase):
 
         self.assertIn("install/ai-collab-codex-bridge.py", rels)
         self.assertIn("install/ai-collab-recover.py", rels)
+        self.assertIn("install/ai-collab-team.py", rels)
 
 
 if __name__ == "__main__":

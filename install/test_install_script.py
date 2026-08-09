@@ -33,6 +33,13 @@ class TestInstallScript(unittest.TestCase):
         self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-converse.py"', text)
         self.assertIn("Conversation helper", text)
 
+    def test_team_role_helper_is_installed(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+
+        self.assertIn('copy_or_download "install/ai-collab-team.py"', text)
+        self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-team.py"', text)
+        self.assertIn("Team role onboarding", text)
+
     def test_self_updater_is_installed_and_configured(self):
         text = INSTALL_SH.read_text(encoding="utf-8")
 

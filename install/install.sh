@@ -12,15 +12,16 @@
 #    6. Auto-onboard script      → ~/.claude/ai-collab-auto-onboard.py
 #    7. Project onboarding       → ~/.claude/ai-collab-project-setup.py
 #    8. Multi-agent orchestrator → ~/.claude/ai-collab-orchestrate.py
-#    9. Natural conversation CLI → ~/.claude/ai-collab-converse.py
-#   10. Live observer            → ~/.claude/ai-collab-observer.py
-#   11. Doctor script            → ~/.claude/ai-collab-doctor.py
-#   12. Self-updater             → ~/.claude/ai-collab-update.py
-#   13. Reboot recovery          → ~/.claude/ai-collab-recover.py
-#   14. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
-#   15. OCR engine               → tesseract auto-install when possible
-#   16. Background daemon        → launchd (macOS) / cron (Linux)
-#   17. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#    9. Team role onboarding     → ~/.claude/ai-collab-team.py
+#   10. Natural conversation CLI → ~/.claude/ai-collab-converse.py
+#   11. Live observer            → ~/.claude/ai-collab-observer.py
+#   12. Doctor script            → ~/.claude/ai-collab-doctor.py
+#   13. Self-updater             → ~/.claude/ai-collab-update.py
+#   14. Reboot recovery          → ~/.claude/ai-collab-recover.py
+#   15. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
+#   16. OCR engine               → tesseract auto-install when possible
+#   17. Background daemon        → launchd (macOS) / cron (Linux)
+#   18. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -208,6 +209,7 @@ copy_or_download "install/ai-collab-wakeup.py"                "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-auto-onboard.py"          "$CLAUDE_DIR/ai-collab-auto-onboard.py"
 copy_or_download "install/ai-collab-project-setup.py"         "$CLAUDE_DIR/ai-collab-project-setup.py"
 copy_or_download "install/ai-collab-orchestrate.py"           "$CLAUDE_DIR/ai-collab-orchestrate.py"
+copy_or_download "install/ai-collab-team.py"                  "$CLAUDE_DIR/ai-collab-team.py"
 copy_or_download "install/ai-collab-converse.py"              "$CLAUDE_DIR/ai-collab-converse.py"
 copy_or_download "install/ai-collab-observer.py"              "$CLAUDE_DIR/ai-collab-observer.py"
 copy_or_download "install/ai-collab-doctor.py"                "$CLAUDE_DIR/ai-collab-doctor.py"
@@ -219,6 +221,7 @@ chmod +x "$CLAUDE_DIR/ai-collab-wakeup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-auto-onboard.py"
 chmod +x "$CLAUDE_DIR/ai-collab-project-setup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-orchestrate.py"
+chmod +x "$CLAUDE_DIR/ai-collab-team.py"
 chmod +x "$CLAUDE_DIR/ai-collab-converse.py"
 chmod +x "$CLAUDE_DIR/ai-collab-observer.py"
 chmod +x "$CLAUDE_DIR/ai-collab-doctor.py"
@@ -233,6 +236,7 @@ green "Wakeup detector      → $CLAUDE_DIR/ai-collab-wakeup.py"
 green "Auto-onboard script  → $CLAUDE_DIR/ai-collab-auto-onboard.py"
 green "Project onboarding   → $CLAUDE_DIR/ai-collab-project-setup.py"
 green "Run orchestrator     → $CLAUDE_DIR/ai-collab-orchestrate.py"
+green "Team role onboarding → $CLAUDE_DIR/ai-collab-team.py"
 green "Conversation helper  → $CLAUDE_DIR/ai-collab-converse.py"
 green "Live observer        → $CLAUDE_DIR/ai-collab-observer.py"
 green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"

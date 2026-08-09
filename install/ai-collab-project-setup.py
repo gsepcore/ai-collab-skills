@@ -282,12 +282,19 @@ Identity:
 Mandatory preflight before EVERY response, analysis, or tool action:
 1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise read `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` to know the registered agents, their containers, models, and rule files.
-3. Read your direct inbox `{inbox}` and `.ai-collab/inbox-all.md`. If either has `status: unread`, claim it before doing any other work, execute it, then mark it `status: done`.
-4. Read recent task threads `.ai-collab/thread-*.md` and natural discussions `.ai-collab/discussions/*.md` where you are mentioned or listed as a participant. Answer direct `@{agent}` mentions before unrelated work.
-5. Read the latest session logs in `.ai-collab/*.md` from other agents, skipping `PROTOCOL.md`, `CONTEXT.md`, `TEAM.md`, inbox files, and your own current-session log. Respect every `Do Not Touch (Avoid Conflicts)` section before analyzing, replying, or editing.
-6. If `.ai-collab/live/summary.json` exists, read it for current agent phases, dirty files, alerts, and open conversations before making coordination decisions.
-7. Keep live observability updated in `{live_report}` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
-8. After every response, create or update your session log at `{log_path}`.
+3. Read `.ai-collab/roles.json` if it exists. Treat its development-team roles as the default routing policy; explicit user/director assignments override defaults.
+4. Read your direct inbox `{inbox}` and `.ai-collab/inbox-all.md`. If either has `status: unread`, claim it before doing any other work, execute it, then mark it `status: done`.
+5. Read recent task threads `.ai-collab/thread-*.md` and natural discussions `.ai-collab/discussions/*.md` where you are mentioned or listed as a participant. Answer direct `@{agent}` mentions before unrelated work.
+6. Read the latest session logs in `.ai-collab/*.md` from other agents, skipping `PROTOCOL.md`, `CONTEXT.md`, `TEAM.md`, inbox files, and your own current-session log. Respect every `Do Not Touch (Avoid Conflicts)` section before analyzing, replying, or editing.
+7. If `.ai-collab/live/summary.json` exists, read it for current agent phases, dirty files, alerts, and open conversations before making coordination decisions.
+8. Keep live observability updated in `{live_report}` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
+9. After every response, create or update your session log at `{log_path}`.
+
+Development-team role contract:
+- Use `.ai-collab/roles.json` to decide the default owner for work by discipline.
+- One agent may own several roles. A role with `primary: null` is vacant; ask the user/director before routing that work.
+- Never silently take work from another role owner. Use a task thread for cross-role questions and handoffs.
+- Explicit task ownership in an inbox or directed run is authoritative even when it differs from the default role profile.
 
 Inbox claim contract:
 - Change `status: unread` to `status: claimed`.
@@ -450,6 +457,29 @@ def write_team_md(root: Path, agents: list[str], container: str, models: dict[st
             "",
         ]
     )
+    roles_path = root / ".ai-collab" / "roles.json"
+    roles = read_existing_manifest(roles_path) if roles_path.exists() else {}
+    assignments = roles.get("assignments", {}) if isinstance(roles, dict) else {}
+    if isinstance(assignments, dict) and assignments:
+        lines.extend(
+            [
+                "<!-- AI-COLLAB-ROLES-START -->",
+                "## Development Team Roles",
+                "",
+                "Role assignments guide default task routing. An explicit user/director assignment may override them.",
+                "",
+                "| role | primary agent | responsibility |",
+                "|---|---|---|",
+            ]
+        )
+        for role, item in assignments.items():
+            if not isinstance(item, dict):
+                continue
+            primary = item.get("primary") or "unassigned"
+            label = item.get("label") or str(role).replace("-", " ").title()
+            responsibility = str(item.get("responsibility") or "Own tasks assigned to this team role.").replace("|", "/")
+            lines.append(f"| {label} (`{role}`) | {primary} | {responsibility} |")
+        lines.extend(["", "<!-- AI-COLLAB-ROLES-END -->", ""])
     atomic_write(path, "\n".join(lines))
 
 
@@ -478,10 +508,11 @@ Models: {", ".join(f"{a}={models.get(a, 'unknown')}" for a in agents)}
 First-response checklist:
 1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` and confirm your own `agent_slug`, container, model, and rule file.
-3. Read your direct inbox `.ai-collab/inbox-{{your-agent-slug}}.md` and `.ai-collab/inbox-all.md`.
-4. Read recent logs from other agents, relevant `thread-*.md` / `discussions/*.md`, and active `Do Not Touch` sections before answering or analyzing.
-5. Write your first session log using the exact slug from TEAM.md.
-6. Mark this welcome task `done` only after you have oriented yourself.
+3. Read `.ai-collab/roles.json` when present and identify your development-team responsibilities.
+4. Read your direct inbox `.ai-collab/inbox-{{your-agent-slug}}.md` and `.ai-collab/inbox-all.md`.
+5. Read recent logs from other agents, relevant `thread-*.md` / `discussions/*.md`, and active `Do Not Touch` sections before answering or analyzing.
+6. Write your first session log using the exact slug from TEAM.md.
+7. Mark this welcome task `done` only after you have oriented yourself.
 """
     atomic_write(path, body)
     return "created"
@@ -570,7 +601,8 @@ def main(argv: list[str] | None = None) -> int:
     models = parse_models(args.models)
     container = args.container or ""
 
-    if not args.non_interactive and sys.stdin.isatty():
+    interactive = not args.non_interactive and sys.stdin.isatty()
+    if interactive:
         agents, container, models = run_interactive(root, agents or defaults)
     else:
         agents = agents or defaults
@@ -582,6 +614,14 @@ def main(argv: list[str] | None = None) -> int:
     for agent, statuses in result["rules"].items():
         print(f"  {agent}: {', '.join(statuses)}")
     print(f"  inbox-all: {result['inbox_all']}")
+    if interactive and not (root / ".ai-collab" / "roles.json").exists():
+        configure_roles = choose_interactive("Configure development-team roles now? (yes/no)", "yes")
+        if configure_roles.lower() not in {"n", "no"}:
+            helper = Path(__file__).with_name("ai-collab-team.py")
+            if helper.exists():
+                subprocess.run([sys.executable, str(helper), "--root", str(root), "configure"], check=False)
+            else:
+                print("  team roles: helper missing; run /collab team configure after reinstalling AI Collab")
     return 0
 
 

@@ -1,6 +1,6 @@
 ---
 name: collab
-description: Enable real-time collaboration and directed implementation runs between multiple AI coding agents (Claude Code, OpenCode, Codex, Aider, Hermes, Cursor native chat, Windsurf native chat, Copilot Chat, etc.) working on the same project simultaneously, regardless of IDE/container or LLM model. Use this skill when the user works with more than one AI agent and wants them to share context, read each other's logs, receive tasks, avoid conflicting changes, or choose a director agent to plan and execute a complex multi-agent implementation through inboxes and task threads. Triggers on /collab, /collab orchestrate, "what has codex been doing", "share my context with opencode", "what is the other AI working on", "sync with cursor", "multi-AI", "collab", "read other AI conversation", "lee la conversacion de la otra IA", "qué hizo codex", "comparte contexto", "sincroniza con la otra IA", "haz un plan con varios agentes", "Codex como director".
+description: Enable real-time collaboration and directed implementation runs between multiple AI coding agents (Claude Code, OpenCode, Codex, Aider, Hermes, Cursor native chat, Windsurf native chat, Copilot Chat, etc.) working on the same project simultaneously, regardless of IDE/container or LLM model. Use this skill when the user wants agents to share context, receive tasks, avoid conflicting changes, configure a persistent development team with roles such as senior director, frontend, backend, database, DevOps, QA, security, deployment, or UI/UX design, or route an orchestrated implementation by those roles. Triggers on /collab, /collab team, /collab orchestrate, "assign roles to my agents", "set up my AI development team", "reparte las tareas", "asigna roles", "equipo de desarrolladores", "multi-AI", "collab", "comparte contexto", "haz un plan con varios agentes", or "Codex como director".
 ---
 
 # AI Collab Skill
@@ -176,6 +176,7 @@ First-time setup on a new project, AND safe to re-run later when a new AI joins.
    - `.ai-collab/PROTOCOL.md`
    - `.ai-collab/TEAM.md`
    - `.ai-collab/agents.json`
+   - `.ai-collab/roles.json` after development-team role onboarding
    - `.ai-collab/inbox-all.md`
    - the relevant agent rules files
 5. Report what was done in one line per agent:
@@ -189,7 +190,8 @@ First-time setup on a new project, AND safe to re-run later when a new AI joins.
 
 6. Run `/collab write` immediately to log Claude's current context.
 7. Start `/collab monitor` automatically for this project in the current Claude Code session. Do not ask the user to run it manually. If a monitor for this project is already active, keep it and report "monitor already active." If the current Claude Code runtime cannot launch a persistent Monitor/Task, say that clearly and rely on the installed daemon + macOS/UserPromptSubmit notifications as the fallback.
-8. Summarize the registered agents, their containers, their models, the exact rules files created, and whether the live monitor is active.
+8. If `.ai-collab/roles.json` does not exist, run `/collab team configure`. Show every registered agent and ask the user to choose one primary owner for each standard development role. Allow one agent to own multiple roles and allow explicit vacancies.
+9. Summarize the registered agents, their containers, models, development-team roles, exact rules files created, and whether the live monitor is active.
 
 **Re-run behavior:** This command is idempotent. Re-running it after a new AI joins the project will detect the new AI, append its rules block to its rules file (idempotent — skipped if already there), and merge it into `TEAM.md`. Nothing existing is overwritten or removed.
 
@@ -263,6 +265,40 @@ Add a single AI to the project after the initial setup. Use when:
 → Onboarded opencode → .opencode/rules/ai-collab.md + AGENTS.md (created)
 → Added to TEAM.md roster
 ```
+
+---
+
+## Command: /collab team [configure | show]
+
+Create or update a persistent development-team profile after agents are registered.
+
+**Configure:**
+
+1. Read `.ai-collab/agents.json` and `.ai-collab/TEAM.md`; use their exact agent slugs.
+2. Run `python3 ~/.claude/ai-collab-team.py --root "$ROOT" configure` in an interactive terminal.
+3. Present every registered agent for each standard role: senior director, frontend, backend, database, DevOps, QA, security review, architecture review, functional review, deployment, and UI/UX design.
+4. Let one agent own multiple roles. Accept `unassigned` for vacancies and never route work to a vacancy without asking the user.
+5. Persist the result in `.ai-collab/roles.json` and the generated Development Team Roles section of `TEAM.md`.
+6. Treat roles as default routing, not an unbreakable permission boundary. An explicit user/director owner overrides the profile.
+
+For deterministic non-interactive configuration, repeat `--assign`:
+
+```bash
+python3 ~/.claude/ai-collab-team.py --root "$ROOT" configure --non-interactive --replace \
+  --assign senior-director=codex \
+  --assign frontend=claude-code \
+  --assign backend=claude-code \
+  --assign database=claude-code \
+  --assign devops=opencode \
+  --assign qa=opencode \
+  --assign security-review=opencode \
+  --assign architecture-review=opencode \
+  --assign functional-review=opencode \
+  --assign deployment=opencode \
+  --assign ui-ux-design=unassigned
+```
+
+Use `python3 ~/.claude/ai-collab-team.py --root "$ROOT" show` to display the current profile. When a new or replacement agent joins, onboard it first, then rerun team configuration only for the roles that should move.
 
 ---
 
@@ -389,6 +425,7 @@ Use this when the user gives a large implementation goal and wants multiple agen
 
 **Director selection rules:**
 - If the user names a director, use that agent.
+- Otherwise use the primary owner of `senior-director` from `.ai-collab/roles.json` when configured.
 - If no director is named and you are Claude Code, default to `claude-code`.
 - If no director is named and you are Codex using this skill, default to `codex`.
 - Never create two active directors for the same run. Respect `.ai-collab/runs/{run_id}/director.json`.
@@ -411,6 +448,7 @@ Use this when the user gives a large implementation goal and wants multiple agen
 ```bash
 python3 ~/.claude/ai-collab-orchestrate.py init --goal "$GOAL" --director "$DIRECTOR" --agents "$AGENTS" --title "$TITLE"
 python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK" --title "$TITLE" --owner "$AGENT" --allowed-files "$FILES" --description "$DESC" --validation "$VALIDATION"
+python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK" --title "$TITLE" --role frontend --allowed-files "$FILES" --description "$DESC" --validation "$VALIDATION"
 python3 ~/.claude/ai-collab-orchestrate.py assign --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK"
 python3 ~/.claude/ai-collab-orchestrate.py thread --run-id "$RUN_ID" --task-id "$TASK" --author "$AGENT" --message "$MESSAGE"
 python3 ~/.claude/ai-collab-orchestrate.py set-task --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK" --status done --summary "$SUMMARY"
@@ -418,10 +456,10 @@ python3 ~/.claude/ai-collab-orchestrate.py finalize --run-id "$RUN_ID" --actor "
 ```
 
 **Execution workflow:**
-1. Read `.ai-collab/CONTEXT.md`, `TEAM.md`, active inboxes, and recent logs.
-2. Create the run with the selected director and participating agents.
-3. Write a concrete `PLAN.md`: tasks, dependencies, owners, allowed files, validation.
-4. Add and assign tasks with one owner each. Never assign a task without file boundaries for code edits.
+1. Read `.ai-collab/CONTEXT.md`, `TEAM.md`, `roles.json`, active inboxes, and recent logs.
+2. Create the run with the selected director and participating agents. If none were explicitly selected, use the senior director and assigned role owners from `roles.json`.
+3. Write a concrete `PLAN.md`: tasks, dependencies, required roles, owners, allowed files, and validation.
+4. Add and assign tasks with one owner each. Prefer `--role` for default routing; use `--owner` for an explicit override. Never assign a task without file boundaries for code edits.
 5. Agents ask and answer questions in `thread-{task_id}.md` using normal language and `@slug` mentions. Treat these threads as the conversation with each other.
 6. Director monitors logs, inbox status, and task threads. If blocked, ask a clarifying question in the thread or reassign with an explicit reason.
 7. Before finalizing, run the validation commands appropriate to the repo. Record exact commands and outcomes.

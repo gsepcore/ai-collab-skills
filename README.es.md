@@ -185,6 +185,8 @@ Abre Claude Code dentro de tu proyecto y ejecuta:
 
 Esto crea `.ai-collab/`, agrega `.ai-collab/` a `.gitignore`, copia `PROTOCOL.md`, escribe `TEAM.md` y `agents.json`, crea el inbox inicial y agrega los bloques de reglas correctos para cada agente.
 
+Después inicia el pequeño onboarding de equipo: detecta los agentes registrados y pregunta quién será responsable de dirección senior, frontend, backend, bases de datos, DevOps, QA, seguridad, revisión de arquitectura, revisión funcional, despliegues y diseño UI/UX. Las elecciones se guardan en `.ai-collab/roles.json`; un agente puede ocupar varios puestos y un puesto puede quedar vacante.
+
 ### Configurar otros agentes
 
 Para configuración permanente, usa el helper de onboarding:
@@ -313,6 +315,17 @@ python3 ~/.claude/ai-collab-converse.py --root "$PWD" decision \
 
 Las conversaciones ligadas a una tarea usan `--kind task --task-id TAREA` y escriben el archivo compatible `.ai-collab/thread-{task_id}.md`. Las conversaciones generales viven en `.ai-collab/discussions/`. En ambos casos, una mención directa `@slug` despierta al agente mencionado cuando el daemon adapter está activo, y `/collab observe` muestra las conversaciones abiertas en el resumen live del proyecto.
 
+### `/collab team configure`
+
+Configura el organigrama persistente del equipo después de registrar los agentes:
+
+```bash
+python3 ~/.claude/ai-collab-team.py --root "$PWD" configure
+python3 ~/.claude/ai-collab-team.py --root "$PWD" show
+```
+
+El helper muestra el roster y pregunta quién ocupa cada puesto. Los roles sirven para el enrutamiento predeterminado; una asignación explícita del usuario o director puede sobreescribirlos. Un puesto `unassigned` nunca recibe tareas automáticamente.
+
 ### `/collab orchestrate`
 
 Ejecuta una implementación grande como un run dirigido entre varios agentes. El usuario elige un solo director activo para ese run — por ejemplo Claude Code o Codex — y ese director divide el trabajo, asigna owners, gestiona preguntas entre agentes, valida el resultado y escribe el resumen final.
@@ -342,8 +355,8 @@ Reglas de seguridad:
 Helper:
 
 ```bash
-python3 ~/.claude/ai-collab-orchestrate.py init --goal "Implementar X" --director codex --agents claude-code,opencode --title implementar-x
-python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id RUN --actor codex --task-id tarea-ui --title "UI" --owner opencode --allowed-files "src/ui/**" --description "Implementa la UI y reporta decisiones."
+python3 ~/.claude/ai-collab-orchestrate.py init --goal "Implementar X" --title implementar-x
+python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id RUN --actor codex --task-id tarea-ui --title "UI" --role frontend --allowed-files "src/ui/**" --description "Implementa la UI y reporta decisiones."
 python3 ~/.claude/ai-collab-orchestrate.py assign --run-id RUN --actor codex --task-id tarea-ui
 python3 ~/.claude/ai-collab-orchestrate.py thread --run-id RUN --task-id tarea-ui --author opencode --message "@codex necesito una decisión sobre el alcance."
 ```

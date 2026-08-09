@@ -181,6 +181,49 @@ def registered_agents(root: Path) -> set[str]:
     return result
 
 
+def load_role_profile(root: Path) -> dict[str, Any]:
+    data = read_json(collab_dir(root) / "roles.json", {})
+    if isinstance(data, dict) and isinstance(data.get("assignments"), dict):
+        return data
+    return {"assignments": {}}
+
+
+def role_owner(root: Path, role: str) -> str:
+    normalized = slugify(role)
+    aliases = {
+        "director": "senior-director",
+        "senior": "senior-director",
+        "db": "database",
+        "data": "database",
+        "security": "security-review",
+        "architecture": "architecture-review",
+        "functional": "functional-review",
+        "functionality": "functional-review",
+        "deploy": "deployment",
+        "design": "ui-ux-design",
+        "ui": "ui-ux-design",
+        "ux": "ui-ux-design",
+    }
+    normalized = aliases.get(normalized, normalized)
+    item = load_role_profile(root).get("assignments", {}).get(normalized, {})
+    owner = item.get("primary") if isinstance(item, dict) else None
+    if not owner:
+        raise SystemExit(
+            f"Development-team role is unassigned: {normalized}. "
+            "Run /collab team configure or pass an explicit --owner."
+        )
+    return str(owner)
+
+
+def assigned_role_agents(root: Path) -> list[str]:
+    result: list[str] = []
+    for item in load_role_profile(root).get("assignments", {}).values():
+        owner = item.get("primary") if isinstance(item, dict) else None
+        if owner and owner not in result:
+            result.append(str(owner))
+    return result
+
+
 def thread_path(root: Path, task_id: str) -> Path:
     return collab_dir(root) / f"thread-{task_id}.md"
 
@@ -261,9 +304,10 @@ def cmd_init(args: argparse.Namespace) -> int:
         raise SystemExit(f"Run already exists: {run_id}")
     path.mkdir(parents=True, exist_ok=True)
 
-    agents = parse_csv(args.agents)
+    director_slug = args.director or role_owner(root, "senior-director")
+    agents = parse_csv(args.agents) or [agent for agent in assigned_role_agents(root) if agent != director_slug]
     roster = registered_agents(root)
-    missing = sorted(agent for agent in [args.director, *agents] if agent and roster and agent not in roster)
+    missing = sorted(agent for agent in [director_slug, *agents] if agent and roster and agent not in roster)
     if missing and not args.force:
         raise SystemExit(f"Agent(s) not registered in TEAM.md/agents.json: {', '.join(missing)}")
 
@@ -271,7 +315,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         "schema": "ai-collab.director.v1",
         "run_id": run_id,
         "project": root.name,
-        "director": args.director,
+        "director": director_slug,
         "director_lock": "active",
         "status": "planned",
         "started_by": args.started_by or "user",
@@ -292,7 +336,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         f"# Multi-Agent Plan: {args.title or run_id}",
         "",
         f"Run ID: `{run_id}`",
-        f"Director: `{args.director}`",
+        f"Director: `{director_slug}`",
         f"Agents: `{', '.join(agents)}`",
         "",
         "## Goal",
@@ -312,7 +356,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     atomic_write(path / "PLAN.md", "\n".join(plan))
     write_status(root, run_id, "planned", now)
     print(f"[AI-COLLAB] Run initialized: {run_id}")
-    print(f"  director: {args.director}")
+    print(f"  director: {director_slug}")
     print(f"  path: {path}")
     return 0
 
@@ -325,7 +369,11 @@ def cmd_add_task(args: argparse.Namespace) -> int:
     task_id = args.task_id or f"{args.run_id}-{slugify(args.title)}"
     if any(isinstance(task, dict) and task.get("id") == task_id for task in data["tasks"]):
         raise SystemExit(f"Task already exists: {task_id}")
-    owner = args.owner.strip()
+    requested_owner = (args.owner or "").strip()
+    routed_owner = role_owner(root, args.role) if args.role and not requested_owner else ""
+    owner = requested_owner or routed_owner
+    if not owner:
+        raise SystemExit("Task ownership requires --owner or a configured --role.")
     roster = registered_agents(root)
     if roster and owner not in roster and not args.force:
         raise SystemExit(f"Owner is not registered: {owner}")
@@ -333,6 +381,7 @@ def cmd_add_task(args: argparse.Namespace) -> int:
         "id": task_id,
         "title": args.title,
         "owner": owner,
+        "role": args.role or "",
         "status": "planned",
         "priority": args.priority,
         "created": isoformat_z(now),
@@ -346,7 +395,8 @@ def cmd_add_task(args: argparse.Namespace) -> int:
     }
     data["tasks"].append(task)
     save_tasks(root, args.run_id, data)
-    append_thread(root, args.run_id, task_id, args.actor, f"Task created for @{owner}: {args.description}")
+    role_note = f" for role `{args.role}`" if args.role else ""
+    append_thread(root, args.run_id, task_id, args.actor, f"Task created{role_note} for @{owner}: {args.description}")
     write_status(root, args.run_id, "planned")
     print(f"[AI-COLLAB] Task added: {task_id} -> {owner}")
     return 0
@@ -385,6 +435,8 @@ done_at:
 
 ## Task
 {message.strip()}
+
+Team role: {task.get('role') or '(explicit owner)'}
 
 ## Boundaries
 Allowed files: {', '.join(task.get('allowed_files') or ['(none specified; ask director before editing code)'])}
@@ -492,8 +544,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     init = sub.add_parser("init", help="Create a directed multi-agent run.")
     init.add_argument("--goal", required=True)
-    init.add_argument("--director", required=True)
-    init.add_argument("--agents", required=True, help="Comma-separated participating agents.")
+    init.add_argument("--director", default="", help="Run director. Defaults to the configured senior-director role.")
+    init.add_argument("--agents", default="", help="Comma-separated participating agents. Defaults to agents with configured team roles.")
     init.add_argument("--title", default="")
     init.add_argument("--run-id", default="")
     init.add_argument("--started-by", default="user")
@@ -505,7 +557,8 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--actor", required=True)
     add.add_argument("--task-id", default="")
     add.add_argument("--title", required=True)
-    add.add_argument("--owner", required=True)
+    add.add_argument("--owner", default="", help="Explicit owner. Optional when --role has a configured primary agent.")
+    add.add_argument("--role", default="", help="Development-team role used to route this task, e.g. frontend or qa.")
     add.add_argument("--description", required=True)
     add.add_argument("--priority", default="normal")
     add.add_argument("--depends-on", default="")

@@ -49,6 +49,7 @@ class TestDoctor(unittest.TestCase):
         self.assertNotIn("FAIL", self.levels(results))
         names = [result.name for result in results]
         self.assertIn(".claude/ai-collab-recover.py", names)
+        self.assertIn(".claude/ai-collab-team.py", names)
 
     def test_missing_required_file_is_failure(self):
         (self.home / ".claude/ai-collab-wakeup.py").unlink()

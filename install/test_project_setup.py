@@ -66,6 +66,8 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("ai-collab-converse.py", agents_md)
         self.assertIn("Natural conversation contract:", agents_md)
         self.assertIn("Mandatory preflight before EVERY response, analysis, or tool action:", agents_md)
+        self.assertIn("Read `.ai-collab/roles.json` if it exists", agents_md)
+        self.assertIn("Development-team role contract:", agents_md)
         self.assertIn("Read the latest session logs in `.ai-collab/*.md` from other agents", agents_md)
         self.assertIn("Respect every `Do Not Touch (Avoid Conflicts)` section before analyzing, replying, or editing", agents_md)
 
@@ -79,6 +81,28 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn(".ai-collab/live/opencode.agent.events.jsonl", rules)
         self.assertIn("Mandatory preflight before EVERY response, analysis, or tool action:", rules)
         self.assertIn(".ai-collab/live/summary.json", rules)
+        self.assertIn("roles.json", rules)
+
+    def test_rerun_preserves_roles_in_team_manifest(self):
+        self.setup()
+        roles = {
+            "agents": ["claude-code", "opencode", "codex"],
+            "assignments": {
+                "senior-director": {
+                    "primary": "codex",
+                    "label": "Senior director",
+                    "responsibility": "Own planning and delegation.",
+                }
+            },
+        }
+        import json
+
+        (self.root / ".ai-collab/roles.json").write_text(json.dumps(roles), encoding="utf-8")
+        self.setup()
+
+        team = (self.root / ".ai-collab/TEAM.md").read_text(encoding="utf-8")
+        self.assertIn("## Development Team Roles", team)
+        self.assertIn("Senior director (`senior-director`) | codex", team)
 
     def test_idempotent_rerun_does_not_duplicate_snippets(self):
         self.setup()

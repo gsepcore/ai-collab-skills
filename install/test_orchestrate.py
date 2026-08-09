@@ -48,6 +48,19 @@ class TestOrchestrate(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        (collab / "roles.json").write_text(
+            json.dumps(
+                {
+                    "assignments": {
+                        "senior-director": {"primary": "codex"},
+                        "frontend": {"primary": "claude-code"},
+                        "qa": {"primary": "opencode"},
+                        "ui-ux-design": {"primary": None},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -73,6 +86,81 @@ class TestOrchestrate(unittest.TestCase):
         self.assertEqual(director["director_lock"], "active")
         self.assertTrue((self.root / ".ai-collab/runs/run-1/PLAN.md").exists())
         self.assertTrue((self.root / ".ai-collab/runs/run-1/tasks.json").exists())
+
+    def test_init_infers_director_and_participants_from_roles(self):
+        self.run_cli(
+            "init",
+            "--run-id",
+            "run-role-defaults",
+            "--goal",
+            "Implement a feature with the configured team",
+        )
+
+        director = json.loads(
+            (self.root / ".ai-collab/runs/run-role-defaults/director.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(director["director"], "codex")
+        self.assertEqual(director["agents"], ["claude-code", "opencode"])
+
+    def test_add_task_routes_owner_from_role(self):
+        self.run_cli("init", "--run-id", "run-role-task", "--goal", "Build frontend")
+        self.run_cli(
+            "add-task",
+            "--run-id",
+            "run-role-task",
+            "--actor",
+            "codex",
+            "--task-id",
+            "task-frontend",
+            "--title",
+            "Build UI",
+            "--role",
+            "frontend",
+            "--description",
+            "Implement the interface.",
+        )
+
+        tasks = json.loads((self.root / ".ai-collab/runs/run-role-task/tasks.json").read_text(encoding="utf-8"))
+        self.assertEqual(tasks["tasks"][0]["owner"], "claude-code")
+        self.assertEqual(tasks["tasks"][0]["role"], "frontend")
+
+    def test_add_task_rejects_vacant_role(self):
+        self.run_cli("init", "--run-id", "run-vacant-role", "--goal", "Design product")
+        with self.assertRaises(SystemExit):
+            self.run_cli(
+                "add-task",
+                "--run-id",
+                "run-vacant-role",
+                "--actor",
+                "codex",
+                "--title",
+                "Design UI",
+                "--role",
+                "ui-ux-design",
+                "--description",
+                "Create product design.",
+            )
+
+    def test_explicit_owner_overrides_vacant_role(self):
+        self.run_cli("init", "--run-id", "run-design-override", "--goal", "Prototype design")
+        self.run_cli(
+            "add-task",
+            "--run-id",
+            "run-design-override",
+            "--actor",
+            "codex",
+            "--title",
+            "Prototype UI",
+            "--role",
+            "ui-ux-design",
+            "--owner",
+            "claude-code",
+            "--description",
+            "Create a temporary UI prototype.",
+        )
+
+        tasks = json.loads((self.root / ".ai-collab/runs/run-design-override/tasks.json").read_text(encoding="utf-8"))
+        self.assertEqual(tasks["tasks"][0]["owner"], "claude-code")
 
     def test_add_task_and_assign_writes_inbox_and_thread(self):
         self.run_cli(

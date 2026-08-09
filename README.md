@@ -77,6 +77,8 @@ Worker AIs *can* technically read each other's logs and edit any file too, but t
 
 For large implementation plans, the user can start a **directed run** and choose the director for that run (`claude-code`, `codex`, `opencode`, or another registered agent). The selected director gets a run lock in `.ai-collab/runs/{run_id}/director.json`; every other agent treats that run as worker-owned until the lock is released. This lets Codex direct one run while Claude Code directs another without the two overwriting each other's decisions.
 
+AI Collab can also persist a real development-team profile in `.ai-collab/roles.json`. The onboarding asks which registered agent owns senior direction, frontend, backend, database, DevOps, QA, security review, architecture review, functional review, deployment, and UI/UX design. One agent may own several roles, and vacancies remain explicitly unassigned until the user fills them.
+
 ### 1.5 Director knows the team from session start
 
 For Claude to delegate well, it needs to know who else is on the project. The `Stop` hook regenerates `.ai-collab/CONTEXT.md` after every Claude response, and `CONTEXT.md` includes a **`## Team` section** built from three sources:
@@ -347,6 +349,17 @@ Delegate a task to another AI without leaving your Claude session. Writes `.ai-c
 The third form (`/collab assign all ...`) writes to `inbox-all.md` so every worker AI sees it.
 
 **Why this matters:** you do not have to copy a prompt from Claude's window into Codex's or OpenCode's window. The worker AI self-orients from its inbox, and the daemon can wake addressable agents through inboxes or `@slug` conversation mentions. See [Architecture](#architecture-director-autonomous-workers-project-isolation) for the full flow.
+
+### `/collab team configure`
+
+Run a small development-team onboarding after `/collab setup`. It detects the registered agents, asks who owns each discipline, saves `.ai-collab/roles.json`, and renders the choices in `TEAM.md`.
+
+```bash
+python3 ~/.claude/ai-collab-team.py --root "$PWD" configure
+python3 ~/.claude/ai-collab-team.py --root "$PWD" show
+```
+
+Roles guide default routing. Explicit user/director ownership can override them. Vacant roles are never assigned automatically.
 
 ### `/collab converse`
 
