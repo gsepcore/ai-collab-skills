@@ -116,6 +116,97 @@ def load_json_file(path: Path) -> Any:
         return {}
 
 
+def parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def capability_for(root: Path, agent: str) -> dict[str, Any]:
+    payload = load_json_file(collab_dir(root) / "capabilities.json")
+    rows = payload.get("agents") if isinstance(payload, dict) else []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and normalize_slug(str(row.get("agent", ""))) == normalize_slug(agent):
+            return row
+    return {}
+
+
+def agent_is_active(root: Path, agent: str, threshold_seconds: int) -> bool:
+    live_dir = collab_dir(root) / "live"
+    for path in (live_dir / f"{agent}.agent.json", live_dir / f"{agent}.json"):
+        state = load_json_file(path)
+        if not isinstance(state, dict):
+            continue
+        phase = str(state.get("phase") or state.get("status") or "").lower()
+        updated = parse_iso(str(state.get("updated") or ""))
+        if updated is None:
+            continue
+        age = (utc_now() - updated).total_seconds()
+        if age <= threshold_seconds and phase in {"command", "editing", "running", "working", "responding", "claimed"}:
+            return True
+    return False
+
+
+def internal_grace_seconds(root: Path, agent: str, requested: int) -> int:
+    capability = capability_for(root, agent)
+    policy = capability.get("wake_policy") if isinstance(capability, dict) else {}
+    try:
+        configured = int((policy or {}).get("internal_grace_seconds", 15))
+    except (TypeError, ValueError):
+        configured = requested
+    grace = max(0, requested if requested >= 0 else configured)
+    visible = capability.get("visible") if isinstance(capability, dict) else {}
+    try:
+        sleep_threshold = int(
+            os.environ.get(
+                "AI_COLLAB_DIRECTOR_SLEEP_SECONDS",
+                str((policy or {}).get("sleep_threshold_seconds", 60)),
+            )
+        )
+    except (TypeError, ValueError):
+        sleep_threshold = 60
+    if isinstance(visible, dict) and visible.get("native_chat_only") and not agent_is_active(root, agent, sleep_threshold):
+        return 0
+    return grace
+
+
+def emit_escalation_notice(root: Path, targets: list[str], source: Path, grace_seconds: int) -> None:
+    timestamp = isoformat_z(utc_now())
+    target_text = ", ".join(targets)
+    message = (
+        f"No internal response from {target_text} after {grace_seconds}s; "
+        "AI Collab is proceeding to the exact visible chat now."
+    )
+    notice = {
+        "ai": "AI Collab delivery supervisor",
+        "project": root.name,
+        "file": source.name,
+        "message": message,
+        "timestamp": timestamp,
+        "type": "visible-escalation",
+        "targets": targets,
+    }
+    notification_path = Path(os.environ.get("AI_COLLAB_NOTIFICATIONS_FILE", str(Path.home() / ".ai-collab-notifications.json"))).expanduser()
+    lock_file = with_lock(notification_path)
+    try:
+        rows = load_json_file(notification_path)
+        if not isinstance(rows, list):
+            rows = []
+        rows.append(notice)
+        atomic_write(notification_path, json.dumps(rows[-50:], indent=2, sort_keys=False) + "\n")
+    finally:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+    events = collab_dir(root) / "live" / "delivery-escalations.jsonl"
+    events.parent.mkdir(parents=True, exist_ok=True)
+    with events.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(notice, sort_keys=True) + "\n")
+
+
 def atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=str(path.parent), encoding="utf-8") as tmp:
@@ -495,12 +586,16 @@ def visual_context(message: str, proof: dict[str, Any], participants: list[str])
     )
 
 
-def dispatch_visible(path: Path, root: Path) -> dict[str, Any]:
+def dispatch_visible(path: Path, root: Path, targets: list[str] | None = None) -> dict[str, Any]:
     script = wakeup_script_path()
     if not script:
         return {"ok": False, "reason": "ai-collab-wakeup.py is not installed"}
     env = os.environ.copy()
     env["AI_COLLAB_WAKEUP_ADAPTER"] = "visible"
+    env["AI_COLLAB_FORCE_VISIBLE"] = "1"
+    env["AI_COLLAB_ESCALATION_NOTIFIED"] = "1"
+    if targets:
+        env["AI_COLLAB_WAKE_TARGETS"] = ",".join(targets)
     try:
         completed = subprocess.run(
             [sys.executable, str(script), root.name, str(path)],
@@ -532,6 +627,36 @@ def dispatch_visible(path: Path, root: Path) -> dict[str, Any]:
         "result": result,
         "failed": failed,
         "reason": "" if not failed else "one or more visible agent interfaces rejected the message",
+    }
+
+
+def prepare_visible_surfaces(root: Path, targets: list[str]) -> dict[str, Any]:
+    script = wakeup_script_path()
+    if not script:
+        return {"ok": False, "reason": "ai-collab-wakeup.py is not installed"}
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(script), "--prepare-visible", str(root), ",".join(targets)],
+            cwd=str(root),
+            text=True,
+            capture_output=True,
+            timeout=max(15, int(os.environ.get("AI_COLLAB_CONVERSE_DISPATCH_TIMEOUT", "45"))),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"ok": False, "reason": f"visible surface preparation failed: {exc}"}
+    output = (completed.stdout or "").strip().splitlines()
+    try:
+        result = json.loads(output[-1]) if output else {}
+    except json.JSONDecodeError:
+        return {
+            "ok": False,
+            "reason": f"invalid visible surface preparation response: {(completed.stdout or completed.stderr).strip()[:500]}",
+        }
+    return {
+        "ok": completed.returncode == 0 and result.get("ok") is True,
+        "result": result,
+        "reason": "" if completed.returncode == 0 else "one or more visible agent surfaces could not be focused",
     }
 
 
@@ -591,24 +716,123 @@ def dispatch_and_optionally_wait(
     path: Path,
     *,
     root: Path,
+    author: str,
     recipients: list[str],
     kickoff_at: str,
     queue_only: bool,
+    internal_wait_seconds: int,
     wait_seconds: int,
     visual_agents: list[str],
 ) -> int:
     if queue_only:
         print("[AI-COLLAB] Conversation queued without visible dispatch (--queue-only).")
         return 0
-    dispatch = dispatch_visible(path, root)
-    print("[AI-COLLAB] Visible dispatch: " + json.dumps(dispatch, sort_keys=True))
-    if not dispatch.get("ok"):
+    pending_internal = set(recipients)
+    escalated: list[str] = []
+    dispatch_failed = False
+    started = time.monotonic()
+    grace_by_agent = {
+        recipient: internal_grace_seconds(root, recipient, internal_wait_seconds)
+        for recipient in recipients
+    }
+    while pending_internal:
+        answered = message_authors_after(path, kickoff_at)
+        newly_answered = sorted(pending_internal & answered)
+        if newly_answered:
+            print("[AI-COLLAB] Internal response received from: " + ", ".join(newly_answered))
+            pending_internal -= set(newly_answered)
+        elapsed = time.monotonic() - started
+        due = sorted(agent for agent in pending_internal if elapsed >= grace_by_agent[agent])
+        if due:
+            grace = max(grace_by_agent[agent] for agent in due)
+            print(
+                "[AI-COLLAB] NOTICE: no internal response from " + ", ".join(due)
+                + f" after {grace}s; proceeding to their visible chats after visual verification."
+            )
+            emit_escalation_notice(root, due, path, grace)
+            prepared = prepare_visible_surfaces(root, due)
+            print("[AI-COLLAB] Visible surface preparation: " + json.dumps(prepared, sort_keys=True))
+            if not prepared.get("ok"):
+                print(
+                    "[AI-COLLAB] ERROR: the internal message remains queued, but the exact visible "
+                    "surface could not be focused without sending the prompt.",
+                    file=sys.stderr,
+                )
+                return 4
+            preparation_result = prepared.get("result") if isinstance(prepared.get("result"), dict) else {}
+            preparation_rows = preparation_result.get("results") if isinstance(preparation_result, dict) else []
+            if not isinstance(preparation_rows, list):
+                preparation_rows = []
+            legacy_focus = any(
+                isinstance(row, dict) and row.get("status") == "legacy-focus-on-submit"
+                for row in preparation_rows
+            )
+            if legacy_focus:
+                print(
+                    "[AI-COLLAB] NOTICE: the installed bridge is legacy; submitting to the exact "
+                    "project terminal will focus it, then visual proof and an evidence follow-up are mandatory."
+                )
+                first_dispatch = dispatch_visible(path, root, due)
+                print("[AI-COLLAB] Legacy focus-and-submit: " + json.dumps(first_dispatch, sort_keys=True))
+                if not first_dispatch.get("ok"):
+                    dispatch_failed = True
+                    escalated.extend(due)
+                    pending_internal -= set(due)
+                    continue
+                time.sleep(0.75)
+                proof = visual_proof(root, visual_agents, "after-legacy-focus-submit")
+                print("[AI-COLLAB] Immediate post-submit visual proof: " + json.dumps(proof, sort_keys=True))
+                if not proof.get("ok"):
+                    print(
+                        "[AI-COLLAB] ERROR: the prompt was submitted to the exact terminal, but its "
+                        "visible surface could not be verified afterward. Do not claim a response.",
+                        file=sys.stderr,
+                    )
+                    return 4
+            else:
+                time.sleep(0.75)
+                proof = visual_proof(root, visual_agents, "before-visible-turn")
+                print("[AI-COLLAB] Pre-turn visual proof: " + json.dumps(proof, sort_keys=True))
+                if not proof.get("ok"):
+                    print(
+                        "[AI-COLLAB] ERROR: the internal message remains queued, but visible escalation "
+                        "was refused because visual preflight failed.",
+                        file=sys.stderr,
+                    )
+                    return 4
+            escalation_message = visual_context(
+                "Visible fallback after the internal grace period expired. Read the full thread and reply there.",
+                proof,
+                visual_agents,
+            )
+            append_message(
+                path,
+                root=root,
+                author=author,
+                message=prefix_mentions(escalation_message, due),
+                message_type="handoff",
+                recipients=due,
+                tags=["visible-escalation"],
+            )
+            dispatch = dispatch_visible(path, root, due)
+            label = "Visible evidence follow-up" if legacy_focus else "Visible escalation"
+            print(f"[AI-COLLAB] {label}: " + json.dumps(dispatch, sort_keys=True))
+            escalated.extend(due)
+            pending_internal -= set(due)
+            if not dispatch.get("ok"):
+                dispatch_failed = True
+        if pending_internal:
+            time.sleep(0.25)
+    if dispatch_failed:
         print(
-            "[AI-COLLAB] ERROR: the conversation exists, but visible activation failed. "
-            "Do not claim that any agent started or replied.",
+            "[AI-COLLAB] ERROR: the internal message exists, but one or more visible escalations failed. "
+            "Do not claim that those agents started or replied.",
             file=sys.stderr,
         )
         return 2
+    if not escalated:
+        print("[AI-COLLAB] All recipients answered through internal collaboration; visible escalation was unnecessary.")
+        return 0
     if wait_seconds > 0 and recipients:
         missing = wait_for_replies(path, recipients, kickoff_at, wait_seconds)
         if missing:
@@ -639,22 +863,17 @@ def cmd_start(args: argparse.Namespace) -> int:
     root = root_from_arg(args.root)
     recipients = normalize_slugs(args.to)
     visual_agents = list(dict.fromkeys([normalize_slug(args.author), *recipients]))
-    if not args.queue_only:
-        proof = visual_proof(root, visual_agents, "before-visible-turn")
-        print("[AI-COLLAB] Pre-turn visual proof: " + json.dumps(proof, sort_keys=True))
-        if not proof.get("ok"):
-            print("[AI-COLLAB] ERROR: visible conversation refused because visual preflight failed.", file=sys.stderr)
-            return 4
-        args.message = visual_context(args.message, proof, visual_agents)
     kickoff_at = isoformat_z(utc_now())
     path = start_conversation(args)
     print(f"[AI-COLLAB] Conversation started: {path}")
     return dispatch_and_optionally_wait(
         path,
         root=root,
+        author=args.author,
         recipients=recipients,
         kickoff_at=kickoff_at,
         queue_only=args.queue_only,
+        internal_wait_seconds=args.internal_wait_seconds,
         wait_seconds=args.wait_seconds,
         visual_agents=visual_agents,
     )
@@ -664,21 +883,17 @@ def cmd_reply(args: argparse.Namespace) -> int:
     root = root_from_arg(args.root)
     recipients = normalize_slugs(args.to)
     visual_agents = list(dict.fromkeys([normalize_slug(args.author), *recipients]))
-    if not args.queue_only:
-        proof = visual_proof(root, visual_agents, "before-visible-turn")
-        if not proof.get("ok"):
-            print("[AI-COLLAB] ERROR: visible reply refused because visual preflight failed.", file=sys.stderr)
-            return 4
-        args.message = visual_context(args.message, proof, visual_agents)
     kickoff_at = isoformat_z(utc_now())
     path = reply_conversation(args)
     print(f"[AI-COLLAB] Conversation updated: {path}")
     return dispatch_and_optionally_wait(
         path,
         root=root,
+        author=args.author,
         recipients=recipients,
         kickoff_at=kickoff_at,
         queue_only=args.queue_only,
+        internal_wait_seconds=args.internal_wait_seconds,
         wait_seconds=args.wait_seconds,
         visual_agents=visual_agents,
     )
@@ -688,21 +903,17 @@ def cmd_typed_reply(args: argparse.Namespace) -> int:
     root = root_from_arg(args.root)
     recipients = normalize_slugs(args.to)
     visual_agents = list(dict.fromkeys([normalize_slug(args.author), *recipients]))
-    if not args.queue_only:
-        proof = visual_proof(root, visual_agents, "before-visible-turn")
-        if not proof.get("ok"):
-            print("[AI-COLLAB] ERROR: visible reply refused because visual preflight failed.", file=sys.stderr)
-            return 4
-        args.message = visual_context(args.message, proof, visual_agents)
     kickoff_at = isoformat_z(utc_now())
     path = reply_conversation(args, message_type=args.command)
     print(f"[AI-COLLAB] Conversation updated: {path}")
     return dispatch_and_optionally_wait(
         path,
         root=root,
+        author=args.author,
         recipients=recipients,
         kickoff_at=kickoff_at,
         queue_only=args.queue_only,
+        internal_wait_seconds=args.internal_wait_seconds,
         wait_seconds=args.wait_seconds,
         visual_agents=visual_agents,
     )
@@ -753,6 +964,12 @@ def add_common_reply_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--to", default="", help="Comma-separated recipients. Missing @mentions are prepended.")
     parser.add_argument("--tags", default="")
     parser.add_argument("--queue-only", action="store_true", help="Write without activating visible agent interfaces.")
+    parser.add_argument(
+        "--internal-wait-seconds",
+        type=int,
+        default=int(os.environ["AI_COLLAB_INTERNAL_GRACE_SECONDS"]) if os.environ.get("AI_COLLAB_INTERNAL_GRACE_SECONDS") else -1,
+        help="Wait for an internal thread/inbox response before notifying and escalating to visible chat.",
+    )
     parser.add_argument("--wait-seconds", type=int, default=0, help="Wait for real replies from every --to recipient.")
 
 
@@ -772,6 +989,12 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--run-id", default="")
     start.add_argument("--type", choices=sorted(VALID_MESSAGE_TYPES), default="message")
     start.add_argument("--queue-only", action="store_true", help="Write without activating visible agent interfaces.")
+    start.add_argument(
+        "--internal-wait-seconds",
+        type=int,
+        default=int(os.environ["AI_COLLAB_INTERNAL_GRACE_SECONDS"]) if os.environ.get("AI_COLLAB_INTERNAL_GRACE_SECONDS") else -1,
+        help="Wait for an internal response before notifying and escalating to visible chat.",
+    )
     start.add_argument("--wait-seconds", type=int, default=0, help="Wait for real replies from every --to recipient.")
     start.set_defaults(func=cmd_start)
 

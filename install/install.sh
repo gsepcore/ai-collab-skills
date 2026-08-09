@@ -525,11 +525,16 @@ NEW_HOOKS = {
         "bash -c '"
         "ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd); "
         "CTX=\"$ROOT/.ai-collab/CONTEXT.md\"; "
+        "CAP=\"$ROOT/.ai-collab/capabilities.json\"; "
         "NOTIF=\"$HOME/.ai-collab-notifications.json\"; "
         "if [ -f \"$CTX\" ]; then "
           "echo \"[AI-COLLAB SESSION RECOVERY]\"; "
           "echo \"Project: $(basename $ROOT)\"; "
           "echo \"---\"; cat \"$CTX\"; echo \"---\"; "
+        "fi; "
+        "if [ -f \"$CAP\" ]; then "
+          "echo \"[AI-COLLAB CAPABILITY MATRIX — READ BEFORE DELIVERY]\"; "
+          "cat \"$CAP\"; "
         "fi; "
         "if [ -f \"$NOTIF\" ]; then "
           "CONTENT=$(cat \"$NOTIF\"); "
@@ -629,7 +634,7 @@ os.replace(tmp, settings_file)
 print(f"  Hooks written to {settings_file}")
 PYEOF
 
-green "SessionStart hook  → loads CONTEXT.md + notifications on every new session"
+green "SessionStart hook  → loads CONTEXT.md + capability matrix + notifications"
 green "UserPromptSubmit   → shows pending notifications before each message"
 green "Stop hook          → auto-generates CONTEXT.md after every response"
 green "Claude permissions → limited allow rules for AI Collab conversation/vision helpers"

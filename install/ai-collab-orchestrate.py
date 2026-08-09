@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,7 @@ def visible_wake(root: Path, path: Path) -> dict[str, Any]:
         return {"ok": False, "reason": "ai-collab-wakeup.py is not installed"}
     env = os.environ.copy()
     env["AI_COLLAB_WAKEUP_ADAPTER"] = "visible"
+    env["AI_COLLAB_FORCE_VISIBLE"] = "1"
     try:
         completed = subprocess.run(
             [sys.executable, str(script), root.name, str(path)],
@@ -100,7 +102,7 @@ def visible_wake(root: Path, path: Path) -> dict[str, Any]:
             for row in rows
         )
     else:
-        ok = result.get("action") in {"dispatched", "adapter-updated"}
+        ok = result.get("action") in {"dispatched", "adapter-updated", "deduped"}
     return {"ok": ok, "result": result, "reason": "" if ok else "visible interface did not accept the task"}
 
 
@@ -323,6 +325,20 @@ def active_inbox(path: Path) -> tuple[bool, str]:
     return status in ACTIVE_INBOX_STATES, status
 
 
+def wait_for_inbox_response(path: Path, timeout: int) -> str:
+    deadline = time.monotonic() + max(0, timeout)
+    while time.monotonic() <= deadline:
+        if path.exists():
+            meta, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            status = meta.get("status", "")
+            if status and status != "unread":
+                return status
+        if timeout <= 0:
+            break
+        time.sleep(0.25)
+    return ""
+
+
 def write_status(root: Path, run_id: str, status: str, now: datetime | None = None) -> None:
     now = now or utc_now()
     director = load_director(root, run_id)
@@ -512,10 +528,25 @@ Use `.ai-collab/thread-{task['id']}.md` for questions, review requests, and hand
             f"{message}"
         ),
     )
-    dispatch = visible_wake(root, path)
+    owner_inbox = inbox_path(root, owner)
+    internal_status = wait_for_inbox_response(owner_inbox, args.internal_wait_seconds)
+    if internal_status:
+        dispatch = {
+            "ok": True,
+            "internal": True,
+            "result": {"action": "internal-response", "inbox_status": internal_status},
+            "reason": "",
+        }
+        print(f"[AI-COLLAB] Internal response from @{owner}: inbox status={internal_status}; visible escalation unnecessary.")
+    else:
+        print(
+            f"[AI-COLLAB] NOTICE: @{owner} did not respond internally after "
+            f"{args.internal_wait_seconds}s; proceeding to the exact visible chat."
+        )
+        dispatch = visible_wake(root, owner_inbox)
     task["dispatch"] = {
-        "requested": "visible",
-        "status": "submitted" if dispatch.get("ok") else "failed",
+        "requested": "internal-first-visible-fallback",
+        "status": "internal-response" if dispatch.get("internal") else ("submitted-visibly" if dispatch.get("ok") else "failed"),
         "at": isoformat_z(utc_now()),
         "evidence": dispatch.get("result", {}),
         "reason": dispatch.get("reason", ""),
@@ -523,7 +554,7 @@ Use `.ai-collab/thread-{task['id']}.md` for questions, review requests, and hand
     save_tasks(root, args.run_id, data)
     write_status(root, args.run_id, "assigned" if dispatch.get("ok") else "dispatch-failed")
     print(f"[AI-COLLAB] Task assigned: {task['id']} -> inbox-{owner}.md")
-    print("[AI-COLLAB] Visible dispatch: " + json.dumps(dispatch, sort_keys=True))
+    print("[AI-COLLAB] Delivery result: " + json.dumps(dispatch, sort_keys=True))
     if not dispatch.get("ok"):
         print(
             "[AI-COLLAB] ERROR: task is queued, but the agent was not activated visibly. "
@@ -693,6 +724,12 @@ def build_parser() -> argparse.ArgumentParser:
     assign.add_argument("--actor", required=True)
     assign.add_argument("--task-id", required=True)
     assign.add_argument("--message", default="")
+    assign.add_argument(
+        "--internal-wait-seconds",
+        type=int,
+        default=int(os.environ.get("AI_COLLAB_INTERNAL_GRACE_SECONDS", "15")),
+        help="Wait for an inbox claim/response before notifying and escalating to visible chat.",
+    )
     assign.add_argument("--force", action="store_true")
     assign.set_defaults(func=cmd_assign)
 

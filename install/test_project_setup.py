@@ -43,6 +43,7 @@ class TestProjectSetup(unittest.TestCase):
         self.assertTrue((self.root / ".ai-collab" / "PROTOCOL.md").exists())
         self.assertTrue((self.root / ".ai-collab" / "TEAM.md").exists())
         self.assertTrue((self.root / ".ai-collab" / "agents.json").exists())
+        self.assertTrue((self.root / ".ai-collab" / "capabilities.json").exists())
         self.assertTrue((self.root / ".ai-collab" / "inbox-all.md").exists())
 
         team = (self.root / ".ai-collab" / "TEAM.md").read_text(encoding="utf-8")
@@ -54,6 +55,14 @@ class TestProjectSetup(unittest.TestCase):
         inbox_all = (self.root / ".ai-collab" / "inbox-all.md").read_text(encoding="utf-8")
         self.assertIn("Read recent logs from other agents", inbox_all)
         self.assertIn("before answering or analyzing", inbox_all)
+        import json
+        capabilities = json.loads((self.root / ".ai-collab" / "capabilities.json").read_text(encoding="utf-8"))
+        self.assertEqual(capabilities["conversation_policy"]["delivery_order"], ["internal", "wait-for-response", "notify-user", "visible-chat"])
+        codex = next(item for item in capabilities["agents"] if item["agent"] == "codex")
+        self.assertTrue(codex["visible"]["native_chat_only"])
+        self.assertEqual(codex["visible"]["availability"], "verify-at-runtime")
+        self.assertTrue(codex["visible"]["delivery_is_not_response"])
+        self.assertFalse(codex["wake_policy"]["hidden_fallback_allowed"])
 
     def test_shared_agents_md_can_hold_multiple_agent_snippets(self):
         self.setup()
@@ -67,6 +76,9 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("Natural conversation contract:", agents_md)
         self.assertIn("Mandatory preflight before EVERY response, analysis, or tool action:", agents_md)
         self.assertIn("Read `.ai-collab/roles.json` if it exists", agents_md)
+        self.assertIn("Read `.ai-collab/capabilities.json`", agents_md)
+        self.assertIn("waits the short grace period", agents_md)
+        self.assertIn("director is sleeping or stale", agents_md)
         self.assertIn("Development-team role contract:", agents_md)
         self.assertIn("Read the latest session logs in `.ai-collab/*.md` from other agents", agents_md)
         self.assertIn("Respect every `Do Not Touch (Avoid Conflicts)` section before analyzing, replying, or editing", agents_md)

@@ -190,22 +190,40 @@ def check_cli_projects_allowlist(home: Path) -> list[CheckResult]:
     ]
 
 
+def antigravity_chat_executable() -> str:
+    configured = os.environ.get("AI_COLLAB_ANTIGRAVITY_BIN", "").strip()
+    if configured:
+        resolved = shutil.which(configured) or str(Path(configured).expanduser())
+        if Path(resolved).exists():
+            return resolved
+    for name in ("antigravity-ide", "antigravity"):
+        resolved = shutil.which(name)
+        if resolved:
+            return resolved
+    for candidate in (
+        Path("/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"),
+        Path.home() / ".antigravity-ide/antigravity-ide/bin/antigravity-ide",
+    ):
+        if candidate.exists():
+            return str(candidate)
+    return ""
+
+
 def check_codex_visible_support() -> list[CheckResult]:
-    # Codex visible wakeup (inside Antigravity) is blocked upstream — the
-    # extension openai.chatgpt exposes no public API, no public socket on the
-    # active app-server, and no proposed VS Code API surface reachable to
-    # third-party companion extensions. Three independent reviewers (Cody,
-    # Thomas, Claude) confirmed this on 2026-05-13. This check surfaces the
-    # limitation as a WARN so a fresh installer never silently expects the
-    # invisible wakeup to reach the visible Codex tab.
+    executable = antigravity_chat_executable()
+    if executable:
+        return [
+            ok(
+                "codex-visible",
+                f"supported Antigravity chat CLI available → {executable}; "
+                "delivery is visible, and response still requires Codex-authored evidence",
+            )
+        ]
     return [
         warn(
             "codex-visible",
-            "degraded: invisible wakeup of the visible Antigravity Codex tab "
-            "is blocked upstream (no public API on openai.chatgpt). Available "
-            "modes for Codex today: visible (degraded, best-effort via "
-            "antigravity-chat), codex-acp (parallel invisible worker), manual "
-            "(user types 'lee tu inbox'). OpenCode/Claude unaffected.",
+            "antigravity-ide chat CLI not found; visible Codex delivery will fail closed. "
+            "Install Antigravity IDE or set AI_COLLAB_ANTIGRAVITY_BIN.",
         )
     ]
 

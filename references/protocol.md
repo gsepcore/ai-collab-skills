@@ -14,16 +14,19 @@ Prefer the project onboarding helper instead of manually copying snippets:
 python3 ~/.claude/ai-collab-project-setup.py
 ```
 
-It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/inbox-all.md`, and the correct rules files for each selected agent. Then run `python3 ~/.claude/ai-collab-team.py configure` to assign persistent development-team roles.
+It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/capabilities.json`, `.ai-collab/inbox-all.md`, and the correct rules files for each selected agent. Then run `python3 ~/.claude/ai-collab-team.py configure` to assign persistent development-team roles.
 
 **Core rules that make this work:**
 1. Every AI saves a log after EVERY response — automatically, no prompting needed.
 2. Every new AI reads `CONTEXT.md` first — the single-file project brief from all logs.
-3. Every AI performs a full preflight before EVERY response, analysis, or tool action: context/protocol, team roster, `.ai-collab/roles.json` when present, direct inbox, `inbox-all.md`, relevant threads/discussions, recent logs from other agents, and active `Do Not Touch` sections.
+3. Every AI performs a full preflight before EVERY response, analysis, or tool action: context/protocol, team roster, `.ai-collab/capabilities.json`, `.ai-collab/roles.json` when present, direct inbox, `inbox-all.md`, relevant threads/discussions, recent logs from other agents, and active `Do Not Touch` sections.
 4. Every AI treats `thread-{task_id}.md` as the task conversation channel, and `.ai-collab/discussions/*.md` as natural design/review conversations — `@slug` mentions can wake the mentioned agent when the daemon and adapter are running.
 5. Directed implementation runs have one active director in `.ai-collab/runs/{run_id}/director.json`; all other agents respect that director for the run.
 6. Every AI keeps live observability current in `.ai-collab/live/{agent}.agent.json` before and after commands, tests, file edits, blockers, and handoffs.
 7. Development-team roles guide default routing. Explicit task ownership overrides them, and a vacant role must be resolved with the user/director before delegation.
+8. Delivery is internal-first. Write the inbox/thread, wait the configured short grace period, announce any non-response before visible escalation, and wake only the missing agents in their exact visible project chats.
+9. Prompt submission is not a response. Use distinct states for queued, internal response, escalating visibly, submitted visibly, responded, and failed.
+10. Keep one continuous task/discussion thread through progress questions, blockers, reviews, and handoff. If the director is stale/sleeping, workers use the director's declared visible route in `capabilities.json` and fail closed when that route is degraded.
 
 ---
 
@@ -132,7 +135,7 @@ python3 ~/.claude/ai-collab-converse.py decision --thread discussion-20260616-12
 
 Messages include a parseable `type:` field (`question`, `answer`, `proposal`, `decision`, `blocker`, `review`, `handoff`, or `message`) so agents can skim intent quickly.
 
-The conversation helper runs mandatory pre/post visual proofs and dispatches direct mentions synchronously through the visible adapter, while the daemon provides retries/recovery. When the latest message mentions `@codex`, `@opencode`, `@claude`, or another registered slug, a wake event targets that agent without changing inbox claim state. Only the target agent's own visually attested response or claim advances evidence.
+The conversation helper writes internally first. If the recipient does not answer within its `capabilities.json` grace period, it records a user-visible escalation notice, focuses the exact target surface without sending when supported, runs mandatory visual proof, and dispatches only the missing direct mentions. A still-running legacy bridge may focus on the first exact-terminal submission; in that case immediate post-submit proof and an evidence follow-up are mandatory. The daemon provides retries/recovery. When the latest message mentions `@codex`, `@opencode`, `@claude`, or another registered slug, a wake event targets that agent without changing inbox claim state. Only the target agent's own visually attested response or claim advances evidence.
 
 ---
 

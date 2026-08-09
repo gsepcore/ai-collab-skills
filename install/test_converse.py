@@ -183,7 +183,9 @@ class TestConverse(unittest.TestCase):
     def test_visible_dispatch_failure_is_reported_and_not_treated_as_reply(self):
         original = _mod.dispatch_visible
         original_visual = _mod.visual_proof
-        _mod.dispatch_visible = lambda path, root: {"ok": False, "reason": "no visible bridge"}
+        original_prepare = _mod.prepare_visible_surfaces
+        _mod.dispatch_visible = lambda path, root, targets=None: {"ok": False, "reason": "no visible bridge"}
+        _mod.prepare_visible_surfaces = lambda root, targets: {"ok": True, "result": {"action": "prepare-visible"}}
         _mod.visual_proof = lambda root, agents, stage: {
             "ok": True,
             "result": {
@@ -196,13 +198,171 @@ class TestConverse(unittest.TestCase):
                 [
                     "--root", str(self.root), "start", "--author", "codex", "--topic", "Kickoff",
                     "--to", "claude-code,opencode", "--message", "Give your technical opinion.",
+                    "--internal-wait-seconds", "0",
                 ]
             )
         finally:
             _mod.dispatch_visible = original
             _mod.visual_proof = original_visual
+            _mod.prepare_visible_surfaces = original_prepare
         self.assertEqual(result, 2)
         self.assertTrue(self.only_discussion().exists())
+
+    def test_internal_reply_skips_visible_escalation(self):
+        path = self.collab / "thread-internal.md"
+        kickoff = "2026-08-09T12:00:00Z"
+        _mod.append_message(
+            path,
+            root=self.root,
+            author="codex",
+            message="@opencode please review",
+            recipients=["opencode"],
+            now=_mod.datetime(2026, 8, 9, 12, 0, 0, tzinfo=_mod.timezone.utc),
+        )
+        _mod.append_message(
+            path,
+            root=self.root,
+            author="opencode",
+            message="@codex Claimed; I am reviewing now.",
+            recipients=["codex"],
+            now=_mod.datetime(2026, 8, 9, 12, 0, 1, tzinfo=_mod.timezone.utc),
+        )
+        original = _mod.dispatch_visible
+        visible_calls = []
+        _mod.dispatch_visible = lambda path, root, targets=None: visible_calls.append(targets)
+        try:
+            result = _mod.dispatch_and_optionally_wait(
+                path,
+                root=self.root,
+                author="codex",
+                recipients=["opencode"],
+                kickoff_at=kickoff,
+                queue_only=False,
+                internal_wait_seconds=15,
+                wait_seconds=0,
+                visual_agents=["codex", "opencode"],
+            )
+        finally:
+            _mod.dispatch_visible = original
+
+        self.assertEqual(result, 0)
+        self.assertEqual(visible_calls, [])
+
+    def test_timeout_notifies_before_targeted_visible_escalation(self):
+        path = self.collab / "thread-timeout.md"
+        kickoff = "2026-08-09T12:00:00Z"
+        _mod.append_message(
+            path,
+            root=self.root,
+            author="codex",
+            message="@claude-code @opencode please review",
+            recipients=["claude-code", "opencode"],
+            now=_mod.datetime(2026, 8, 9, 12, 0, 0, tzinfo=_mod.timezone.utc),
+        )
+        _mod.append_message(
+            path,
+            root=self.root,
+            author="claude-code",
+            message="@codex Claimed internally.",
+            recipients=["codex"],
+            now=_mod.datetime(2026, 8, 9, 12, 0, 1, tzinfo=_mod.timezone.utc),
+        )
+        original_dispatch = _mod.dispatch_visible
+        original_visual = _mod.visual_proof
+        original_notice = _mod.emit_escalation_notice
+        original_prepare = _mod.prepare_visible_surfaces
+        visible_targets = []
+        notices = []
+        _mod.dispatch_visible = lambda path, root, targets=None: (
+            visible_targets.append(targets) or {"ok": True, "result": {"action": "thread-mentions"}}
+        )
+        _mod.visual_proof = lambda root, agents, stage: {"ok": True, "skipped": True}
+        _mod.emit_escalation_notice = lambda root, targets, source, grace: notices.append((targets, grace))
+        _mod.prepare_visible_surfaces = lambda root, targets: {"ok": True, "result": {"targets": targets}}
+        output = io.StringIO()
+        try:
+            with redirect_stdout(output):
+                result = _mod.dispatch_and_optionally_wait(
+                    path,
+                    root=self.root,
+                    author="codex",
+                    recipients=["claude-code", "opencode"],
+                    kickoff_at=kickoff,
+                    queue_only=False,
+                    internal_wait_seconds=0,
+                    wait_seconds=0,
+                    visual_agents=["codex", "claude-code", "opencode"],
+                )
+        finally:
+            _mod.dispatch_visible = original_dispatch
+            _mod.visual_proof = original_visual
+            _mod.emit_escalation_notice = original_notice
+            _mod.prepare_visible_surfaces = original_prepare
+
+        self.assertEqual(result, 0)
+        self.assertEqual(visible_targets, [["opencode"]])
+        self.assertEqual(notices, [(["opencode"], 0)])
+        text = output.getvalue()
+        self.assertLess(text.index("NOTICE:"), text.index("Visible escalation:"))
+
+    def test_legacy_bridge_focus_submit_is_verified_then_followed_with_evidence(self):
+        path = self.collab / "thread-legacy.md"
+        kickoff = "2026-08-09T12:00:00Z"
+        _mod.append_message(
+            path,
+            root=self.root,
+            author="codex",
+            message="@opencode please review",
+            recipients=["opencode"],
+            now=_mod.datetime(2026, 8, 9, 12, 0, 0, tzinfo=_mod.timezone.utc),
+        )
+        originals = (
+            _mod.dispatch_visible,
+            _mod.visual_proof,
+            _mod.emit_escalation_notice,
+            _mod.prepare_visible_surfaces,
+        )
+        dispatches = []
+        _mod.dispatch_visible = lambda path, root, targets=None: (
+            dispatches.append(targets) or {"ok": True, "result": {"action": "thread-mentions"}}
+        )
+        _mod.visual_proof = lambda root, agents, stage: {
+            "ok": True,
+            "result": {
+                "visual_roster": str(root / ".ai-collab/live/visual-roster.json"),
+                "screenshot": {"path": str(root / ".ai-collab/live/screenshots/team.png")},
+            },
+        }
+        _mod.emit_escalation_notice = lambda *args, **kwargs: None
+        _mod.prepare_visible_surfaces = lambda root, targets: {
+            "ok": True,
+            "result": {
+                "results": [{"target_slug": "opencode", "status": "legacy-focus-on-submit"}]
+            },
+        }
+        try:
+            result = _mod.dispatch_and_optionally_wait(
+                path,
+                root=self.root,
+                author="codex",
+                recipients=["opencode"],
+                kickoff_at=kickoff,
+                queue_only=False,
+                internal_wait_seconds=0,
+                wait_seconds=0,
+                visual_agents=["codex", "opencode"],
+            )
+        finally:
+            (
+                _mod.dispatch_visible,
+                _mod.visual_proof,
+                _mod.emit_escalation_notice,
+                _mod.prepare_visible_surfaces,
+            ) = originals
+
+        self.assertEqual(result, 0)
+        self.assertEqual(dispatches, [["opencode"], ["opencode"]])
+        self.assertIn("visible-escalation", path.read_text(encoding="utf-8"))
 
     def test_reply_evidence_requires_agent_authored_message(self):
         path = self.collab / "thread-kickoff.md"

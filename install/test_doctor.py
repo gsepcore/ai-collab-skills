@@ -75,12 +75,20 @@ class TestDoctor(unittest.TestCase):
         failures = [result for result in results if result.level == "FAIL"]
         self.assertTrue(any(result.name == ".ai-collab-wakeup-events.json" for result in failures))
 
-    def test_codex_visible_check_is_warn(self):
-        results = _mod.run_checks(self.home, include_launchd=False)
+    def test_codex_visible_check_warns_when_cli_is_missing(self):
+        with patch.object(_mod, "antigravity_chat_executable", return_value=""):
+            results = _mod.run_checks(self.home, include_launchd=False)
         codex_visible = [result for result in results if result.name == "codex-visible"]
         self.assertEqual(len(codex_visible), 1)
         self.assertEqual(codex_visible[0].level, "WARN")
-        self.assertIn("degraded", codex_visible[0].message)
+        self.assertIn("not found", codex_visible[0].message)
+
+    def test_codex_visible_check_is_ok_when_cli_exists(self):
+        with patch.object(_mod, "antigravity_chat_executable", return_value="/usr/bin/antigravity-ide"):
+            results = _mod.run_checks(self.home, include_launchd=False)
+        codex_visible = [result for result in results if result.name == "codex-visible"]
+        self.assertEqual(codex_visible[0].level, "OK")
+        self.assertIn("supported Antigravity chat CLI", codex_visible[0].message)
 
     def test_ocr_engine_check_ok_when_tesseract_exists(self):
         with patch.object(_mod.shutil, "which", return_value="/opt/homebrew/bin/tesseract"):

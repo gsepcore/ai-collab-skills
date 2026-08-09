@@ -111,6 +111,17 @@ ALIASES = {
 
 CONTAINER_CHOICES = ["antigravity", "cursor", "vscode", "windsurf", "terminal", "zed", "jetbrains", "other"]
 
+DEFAULT_INTERNAL_GRACE_SECONDS = max(0, int(os.environ.get("AI_COLLAB_INTERNAL_GRACE_SECONDS", "15")))
+DEFAULT_SLEEP_THRESHOLD_SECONDS = max(1, int(os.environ.get("AI_COLLAB_DIRECTOR_SLEEP_SECONDS", "60")))
+
+
+def visible_adapter_for(agent: str) -> str:
+    if agent in {"claude-code", "opencode", "hermes", "kimi", "kilo"}:
+        return "ide-terminal-visible"
+    if agent == "codex":
+        return "antigravity-chat"
+    return "visible-adapter-required"
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -282,14 +293,15 @@ Identity:
 Mandatory preflight before EVERY response, analysis, or tool action:
 1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise read `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` to know the registered agents, their containers, models, and rule files.
-3. Read `.ai-collab/roles.json` if it exists. Treat its development-team roles as the default routing policy; explicit user/director assignments override defaults.
-4. Read your direct inbox `{inbox}` and `.ai-collab/inbox-all.md`. If either has `status: unread`, claim it before doing any other work, execute it, then mark it `status: done`.
-5. Read recent task threads `.ai-collab/thread-*.md` and natural discussions `.ai-collab/discussions/*.md` where you are mentioned or listed as a participant. Answer direct `@{agent}` mentions before unrelated work.
-6. Read the latest session logs in `.ai-collab/*.md` from other agents, skipping `PROTOCOL.md`, `CONTEXT.md`, `TEAM.md`, inbox files, and your own current-session log. Respect every `Do Not Touch (Avoid Conflicts)` section before analyzing, replying, or editing.
-7. If `.ai-collab/live/summary.json` exists, read it for current agent phases, dirty files, alerts, and open conversations before making coordination decisions.
-8. Read `.ai-collab/live/visual-roster.json` when it exists. For every visible conversation or assigned task, open its fresh `screenshot.path` with your native image capability before responding. If the current model cannot accept images, run `python3 ~/.claude/ai-collab-see.py --root <project> --image <screenshot> --agents <participants>` so the actual PNG pixels are processed directly; cite its SHA-256 and `direct-pixel-ocr` result. A prewritten sidecar or metadata alone is not sight. Identify your own surface and the other required agents, then cross-check the roster's project, PID, TTY, port ownership, and recent logs.
-9. Keep live observability updated in `{live_report}` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
-10. After every response, create or update your session log at `{log_path}`.
+3. Read `.ai-collab/capabilities.json`. Know your internal channels, visible adapter, wake policy, vision method, and every peer's supported routes before sending work. Never treat an unavailable route as successful.
+4. Read `.ai-collab/roles.json` if it exists. Treat its development-team roles as the default routing policy; explicit user/director assignments override defaults.
+5. Read your direct inbox `{inbox}` and `.ai-collab/inbox-all.md`. If either has `status: unread`, claim it before doing any other work, execute it, then mark it `status: done`.
+6. Read recent task threads `.ai-collab/thread-*.md` and natural discussions `.ai-collab/discussions/*.md` where you are mentioned or listed as a participant. Answer direct `@{agent}` mentions before unrelated work.
+7. Read the latest session logs in `.ai-collab/*.md` from other agents, skipping `PROTOCOL.md`, `CONTEXT.md`, `TEAM.md`, inbox files, and your own current-session log. Respect every `Do Not Touch (Avoid Conflicts)` section before analyzing, replying, or editing.
+8. If `.ai-collab/live/summary.json` exists, read it for current agent phases, dirty files, alerts, and open conversations before making coordination decisions.
+9. Read `.ai-collab/live/visual-roster.json` when it exists. For every visible conversation or assigned task, open its fresh `screenshot.path` with your native image capability before responding. If the current model cannot accept images, run `python3 ~/.claude/ai-collab-see.py --root <project> --image <screenshot> --agents <participants>` so the actual PNG pixels are processed directly; cite its SHA-256 and `direct-pixel-ocr` result. A prewritten sidecar or metadata alone is not sight. Identify your own surface and the other required agents, then cross-check the roster's project, PID, TTY, port ownership, and recent logs.
+10. Keep live observability updated in `{live_report}` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
+11. After every response, create or update your session log at `{log_path}`.
 
 Development-team role contract:
 - Use `.ai-collab/roles.json` to decide the default owner for work by discipline.
@@ -307,7 +319,10 @@ Inbox claim contract:
 Natural conversation contract:
 - Use `python3 ~/.claude/ai-collab-converse.py` when you need another agent's judgement instead of hiding the question in a private log.
 - Ask concrete questions with `question --to other-agent`, propose implementation options with `proposal`, record accepted choices with `decision`, and mark blockers with `blocker`.
-- Mention agents explicitly with `@slug`; the helper must synchronously submit the message to each agent's project-matched visible interface. Daemon retries are recovery, not evidence that an agent responded.
+- Mention agents explicitly with `@slug`. The helper writes the inbox/thread first and waits the short grace period from `.ai-collab/capabilities.json`. If the agent does not answer internally, it must notify the user/director before submitting the same message to that agent's exact project-matched visible chat.
+- Keep delivery states distinct: `queued-internally`, `internal-response`, `escalating-visible`, `submitted-visibly`, `responded`, `failed`. A timeout or prompt submission is never a response.
+- When you finish work, need a decision, discover a blocker, or have material progress, append it to the shared thread/log immediately. If the director is sleeping or stale according to its live state, use the helper to wake the director through the visible route declared in `capabilities.json`; for Codex native chat, visible-chat delivery is the only wake evidence that counts.
+- Continue the exchange until the implementation is complete: questions, answers, progress reports, review requests, blockers, decisions, and handoffs belong in the same task thread so the user can follow a fluid conversation.
 - When a visible collaboration prompt reaches you, read the entire referenced thread and append your own substantive opinion, risks, or recommendation to that same thread before unrelated work. Mention the director and any agent whose response you need.
 - Inspect the fresh team screenshot with native vision or the direct-pixel helper before replying. Your thread response must contain `visual_evidence: <screenshot path>` and `visible_peers: <slugs actually seen>`, plus the direct-vision SHA-256 when using the fallback. If neither visual path works or any surface/project/process identity disagrees, write a blocker; do not claim you saw the team.
 - If you are the director and the user asks the team to execute work, begin with `ai-collab-orchestrate.py convene`; require a real thread reply from every requested participant before presenting their opinions or assigning implementation tasks.
@@ -417,6 +432,56 @@ def write_agents_json(root: Path, agents: list[str], container: str, models: dic
     atomic_write(path, json.dumps(manifest, indent=2, sort_keys=False) + "\n")
 
 
+def write_capabilities_json(root: Path, agents: list[str], container: str, models: dict[str, str], now: datetime) -> str:
+    path = root / ".ai-collab" / "capabilities.json"
+    rows: list[dict[str, Any]] = []
+    for agent in sorted(dict.fromkeys(agents)):
+        native_codex = agent == "codex"
+        rows.append(
+            {
+                "agent": agent,
+                "container": container or "unknown",
+                "model": models.get(agent, "unknown"),
+                "internal_channels": ["direct-inbox", "task-thread", "discussion", "session-log"],
+                "visible": {
+                    "adapter": visible_adapter_for(agent),
+                    "project_match_required": True,
+                    "required_when_internal_timeout": True,
+                    "required_when_sleeping": True,
+                    "native_chat_only": native_codex,
+                    "availability": "verify-at-runtime",
+                    "delivery_is_not_response": True,
+                },
+                "vision": {
+                    "required_for_visible_turns": True,
+                    "method": "native-or-direct-pixel-ocr",
+                },
+                "wake_policy": {
+                    "internal_first": True,
+                    "internal_grace_seconds": DEFAULT_INTERNAL_GRACE_SECONDS,
+                    "sleep_threshold_seconds": DEFAULT_SLEEP_THRESHOLD_SECONDS,
+                    "notify_before_visible_escalation": True,
+                    "hidden_fallback_allowed": False,
+                },
+            }
+        )
+    payload = {
+        "schema": "ai-collab.capabilities.v1",
+        "project": root.name,
+        "updated": isoformat_z(now),
+        "conversation_policy": {
+            "delivery_order": ["internal", "wait-for-response", "notify-user", "visible-chat"],
+            "continue_until_terminal_handoff": True,
+            "visible_submission_is_not_response": True,
+            "director_sleeping_requires_visible_wake": True,
+        },
+        "agents": rows,
+    }
+    status = "updated" if path.exists() else "created"
+    atomic_write(path, json.dumps(payload, indent=2, sort_keys=False) + "\n")
+    return status
+
+
 def write_team_md(root: Path, agents: list[str], container: str, models: dict[str, str], rules: dict[str, list[str]], now: datetime) -> None:
     path = root / ".ai-collab" / "TEAM.md"
     existing_agents: list[str] = []
@@ -517,11 +582,12 @@ Models: {", ".join(f"{a}={models.get(a, 'unknown')}" for a in agents)}
 First-response checklist:
 1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` and confirm your own `agent_slug`, container, model, and rule file.
-3. Read `.ai-collab/roles.json` when present and identify your development-team responsibilities.
-4. Read your direct inbox `.ai-collab/inbox-{{your-agent-slug}}.md` and `.ai-collab/inbox-all.md`.
-5. Read recent logs from other agents, relevant `thread-*.md` / `discussions/*.md`, and active `Do Not Touch` sections before answering or analyzing.
-6. Write your first session log using the exact slug from TEAM.md.
-7. Mark this welcome task `done` only after you have oriented yourself.
+3. Read `.ai-collab/capabilities.json`; identify how you send internally, when you escalate visibly, how you wake the director, and which routes are degraded.
+4. Read `.ai-collab/roles.json` when present and identify your development-team responsibilities.
+5. Read your direct inbox `.ai-collab/inbox-{{your-agent-slug}}.md` and `.ai-collab/inbox-all.md`.
+6. Read recent logs from other agents, relevant `thread-*.md` / `discussions/*.md`, and active `Do Not Touch` sections before answering or analyzing.
+7. Write your first session log using the exact slug from TEAM.md.
+8. Mark this welcome task `done` only after you have oriented yourself and understood the complete team capability matrix.
 """
     atomic_write(path, body)
     return "created"
@@ -573,6 +639,7 @@ def setup_project(
         result["rules"][agent] = statuses
         rule_paths[agent] = paths
     write_agents_json(root, normalized_agents, container, models, rule_paths, now)
+    result["capabilities"] = write_capabilities_json(root, normalized_agents, container, models, now)
     write_team_md(root, normalized_agents, container, models, rule_paths, now)
     result["inbox_all"] = write_inbox_all(root, normalized_agents, container, models, now)
     return result
@@ -622,6 +689,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  root: {result['root']}")
     for agent, statuses in result["rules"].items():
         print(f"  {agent}: {', '.join(statuses)}")
+    print(f"  capabilities: {result['capabilities']}")
     print(f"  inbox-all: {result['inbox_all']}")
     if interactive and not (root / ".ai-collab" / "roles.json").exists():
         configure_roles = choose_interactive("Configure development-team roles now? (yes/no)", "yes")

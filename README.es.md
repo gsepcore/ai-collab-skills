@@ -216,7 +216,7 @@ Los únicos estados degradados dependen del sistema o de APIs externas, y se rep
 
 - El permiso Screen Recording de macOS puede bloquear screenshots hasta que el usuario conceda acceso al terminal/IDE que ejecuta el daemon.
 - OCR se instala automáticamente cuando existe un package manager soportado; si el sistema bloquea la instalación, la visión semántica sigue en modo metadata-only y `health.json` lo explica.
-- La pestaña Codex ya abierta dentro de Antigravity no puede recibir inyección visible de forma confiable hasta que OpenAI/Antigravity exponga una API pública; OpenCode, colaboración por filesystem, snapshots del observer, screenshots, OCR, inboxes y rutas Codex ACP/manual siguen disponibles.
+- El wake visible de Codex usa el CLI oficial `antigravity-ide chat --reuse-window` cuando está instalado. AI Collab sigue tratando la aceptación del CLI solo como `submitted visibly`; Codex no ha `responded` hasta que aparezca su propio mensaje en el thread/chat compartido. Si falta ese CLI, la ruta falla cerrado y la matriz de capacidades reporta la degradación.
 
 ### Bridge API Codex / Antigravity
 
@@ -234,7 +234,7 @@ curl -s http://127.0.0.1:8765/v1/codex/message \
   -d '{"project_path":"'"$(pwd)"'","from_agent":"opencode","topic":"Need Codex","message":"@codex revisa esto","mode":"background"}'
 ```
 
-`mode: background` usa `codex-auto`: intenta `codex-acp` primero, después un worker real no interactivo con `codex exec`, y por último un recibo filesystem degradado que escribe live state y log de sesión. `mode: visible` usa `antigravity-chat`, que sigue siendo best-effort hasta que Antigravity/Codex exponga una API pública de prompt entrante. Contrato completo: `references/codex-antigravity-bridge.md`.
+`mode: background` usa `codex-auto`: intenta `codex-acp` primero, después un worker real no interactivo con `codex exec`, y por último un recibo filesystem degradado que escribe live state y log de sesión. `mode: visible` usa el CLI oficial `antigravity-ide chat --reuse-window` y falla cerrado si no está disponible. Contrato completo: `references/codex-antigravity-bridge.md`.
 
 Puedes ejecutar `python3 ~/.claude/ai-collab-doctor.py` en cualquier momento para ver si la máquina está completamente verde o qué permiso/API externa limita alguna función.
 
@@ -277,7 +277,7 @@ Vista rápida de cada IA activa en el proyecto — nombre, última actualizació
 
 ### `/collab assign [nombre-ia] [descripción de la tarea]`
 
-Delega una tarea a otra IA sin salir de tu sesión de Claude. Escribe `.ai-collab/inbox-{nombre-ia}.md` con `status: unread`. La próxima vez que abras esa IA (en cualquier IDE o terminal, en el mismo directorio del proyecto), lee su archivo de reglas, recoge la tarea de su inbox, la ejecuta, y marca `status: done`.
+Delega una tarea a otra IA sin salir de la sesión del director. AI Collab escribe primero `.ai-collab/inbox-{nombre-ia}.md` con `status: unread` y espera un lapso corto configurable para recibir un claim o respuesta real. Si el agente sigue en silencio, AI Collab te avisa cuál no respondió y después envía el prompt a su chat visual exacto dentro del proyecto. Enviar el prompt visiblemente nunca cuenta como respuesta; solo cuentan el claim, la actualización live o el mensaje escrito por el propio agente en el thread.
 
 ```
 /collab assign codex publica v1.2.0 en npm y crea el tag de release en GitHub
@@ -292,6 +292,8 @@ La tercera forma (`/collab assign all ...`) escribe en `inbox-all.md` para que c
 ### `/collab converse`
 
 Abre una conversación natural entre agentes sin crear primero una tarea formal. Úsalo cuando los agentes necesiten preguntarse cosas, comparar soluciones, pedir revisión, corregirse, registrar una decisión o dejar un handoff.
+
+La conversación es interna primero y continua: se escribe el thread compartido antes de cualquier wake visible; los agentes que responden siguen por el canal interno y solo se escala a los que permanecen en silencio después del aviso explícito. El mismo thread conserva avances, dudas, recomendaciones, revisiones y cierre. Cuando el director está dormido o stale, los workers usan la ruta declarada en `.ai-collab/capabilities.json`; si la entrada visual de un Codex nativo no está disponible, se reporta como degradada y jamás se simula.
 
 ```bash
 python3 ~/.claude/ai-collab-converse.py --root "$PWD" start \
@@ -568,6 +570,8 @@ Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`,
 | `AI_COLLAB_RECOVERY` | `1` | Activa recovery del daemon después de reinicio/pérdida de sesión. Define `0` para desactivar refresh automático de `CONTEXT.md` y reparación de dedupe de wakeups. |
 | `AI_COLLAB_RECOVERY_INTERVAL_SECONDS` | `300` | Frecuencia con la que el daemon ejecuta recovery. Default: 5 minutos. |
 | `AI_COLLAB_RECOVERY_CONTEXT_MAX_AGE` | `3600` | Edad máxima de `CONTEXT.md` antes de que recovery lo refresque, incluso si no detecta logs más nuevos. |
+| `AI_COLLAB_INTERNAL_GRACE_SECONDS` | `15` | Segundos para esperar un claim/respuesta real antes de avisar y escalar solo los agentes silenciosos al chat visible. |
+| `AI_COLLAB_DIRECTOR_SLEEP_SECONDS` | `60` | Umbral de estado live stale para tratar a un director nativo como dormido y dirigir preguntas/avances de los workers a su chat visible. |
 | `AI_COLLAB_CODEX_BRIDGE_PORT` | `8765` | Puerto para `ai-collab-codex-bridge.py serve`. |
 | `AI_COLLAB_CODEX_BRIDGE_MODE` | `background` | Modo default del bridge: `background`, `visible`, `auto` o `notify-only`. |
 | `AI_COLLAB_CODEX_BRIDGE_TOKEN` | _(off)_ | Bearer token opcional requerido por el bridge HTTP API. |

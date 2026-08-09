@@ -38,6 +38,7 @@ DEFAULT_BACKOFF_SECONDS = (5, 25, 125)
 DEFAULT_EVENTS_FILE = Path.home() / ".ai-collab-wakeup-events.json"
 DEFAULT_STATE_FILE = Path.home() / ".ai-collab-wakeup-state.json"
 DEFAULT_LOG_FILE = Path("/tmp/ai-collab-wakeup.log")
+DEFAULT_NOTIFICATIONS_FILE = Path.home() / ".ai-collab-notifications.json"
 DEFAULT_ADAPTER = "visible"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
 DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude", "claude-code", "hermes", "kimi", "kilo")
@@ -240,6 +241,101 @@ def project_agent_known(project_root: Path, target_slug: str) -> bool:
 
 def find_mentions(message: str) -> list[str]:
     return sorted(dict.fromkeys(match.group(1).lower() for match in MENTION_RE.finditer(message)))
+
+
+def capability_for(project_root: Path, target_slug: str) -> dict[str, Any]:
+    payload = load_json(project_root / ".ai-collab" / "capabilities.json", {})
+    rows = payload.get("agents") if isinstance(payload, dict) else []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and str(row.get("agent", "")).strip().lower() == target_slug.lower():
+            return row
+    return {}
+
+
+def agent_is_active(project_root: Path, target_slug: str, now: datetime, threshold_seconds: int) -> bool:
+    live = project_root / ".ai-collab" / "live"
+    for path in (live / f"{target_slug}.agent.json", live / f"{target_slug}.json"):
+        state = load_json(path, {})
+        if not isinstance(state, dict):
+            continue
+        updated = parse_iso(str(state.get("updated") or ""))
+        phase = str(state.get("phase") or state.get("status") or "").lower()
+        if updated and (now - updated).total_seconds() <= threshold_seconds:
+            if phase in {"command", "editing", "running", "working", "responding", "claimed"}:
+                return True
+    return False
+
+
+def internal_grace_seconds(project_root: Path, target_slug: str, now: datetime) -> int:
+    if truthy_env("AI_COLLAB_FORCE_VISIBLE"):
+        return 0
+    capability = capability_for(project_root, target_slug)
+    if not capability:
+        return 0
+    policy = capability.get("wake_policy") if isinstance(capability, dict) else {}
+    visible = capability.get("visible") if isinstance(capability, dict) else {}
+    try:
+        grace = max(
+            0,
+            int(
+                os.environ.get(
+                    "AI_COLLAB_INTERNAL_GRACE_SECONDS",
+                    str((policy or {}).get("internal_grace_seconds", 15)),
+                )
+            ),
+        )
+    except (TypeError, ValueError):
+        grace = 15
+    try:
+        threshold = max(
+            1,
+            int(
+                os.environ.get(
+                    "AI_COLLAB_DIRECTOR_SLEEP_SECONDS",
+                    str((policy or {}).get("sleep_threshold_seconds", 60)),
+                )
+            ),
+        )
+    except (TypeError, ValueError):
+        threshold = 60
+    if isinstance(visible, dict) and visible.get("native_chat_only"):
+        if not agent_is_active(project_root, target_slug, now, threshold):
+            return 0
+    return grace
+
+
+def emit_escalation_notice(project_root: Path, targets: list[str], source: Path, grace_seconds: int, now: datetime) -> None:
+    if truthy_env("AI_COLLAB_ESCALATION_NOTIFIED"):
+        return
+    message = (
+        f"No internal response from {', '.join(targets)} after {grace_seconds}s; "
+        "AI Collab is proceeding to the exact visible chat now."
+    )
+    notice = {
+        "ai": "AI Collab delivery supervisor",
+        "project": project_root.name,
+        "file": source.name,
+        "message": message,
+        "timestamp": isoformat_z(now),
+        "type": "visible-escalation",
+        "targets": targets,
+    }
+    notification_path = Path(os.environ.get("AI_COLLAB_NOTIFICATIONS_FILE", str(DEFAULT_NOTIFICATIONS_FILE))).expanduser()
+    lock_file = with_lock(notification_path)
+    try:
+        rows = load_json(notification_path, [])
+        if not isinstance(rows, list):
+            rows = []
+        rows.append(notice)
+        write_json(notification_path, rows[-50:])
+    finally:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+    events = project_root / ".ai-collab" / "live" / "delivery-escalations.jsonl"
+    events.parent.mkdir(parents=True, exist_ok=True)
+    with events.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(notice, sort_keys=True) + "\n")
 
 
 def latest_thread_message(body: str) -> dict[str, str] | None:
@@ -969,6 +1065,75 @@ def run_ide_terminal_visible_adapter(
     }
 
 
+def prepare_ide_terminal_visible_surface(
+    project_path: str,
+    target: str,
+    *,
+    timeout: int = 15,
+    poster=None,
+    registry_dir: Path = DEFAULT_IDE_BRIDGE_DIR,
+) -> dict[str, Any]:
+    """Focus an exact project terminal without submitting a prompt."""
+    poster = poster or post_json
+    if target not in {"claude", "claude-code", "opencode", "hermes"}:
+        return {
+            "status": "skipped",
+            "target_slug": target,
+            "message": "target is not backed by an integrated terminal",
+            "adapter_name": "ide-terminal-visible-prepare",
+        }
+    candidates = ide_bridge_candidates(project_path, registry_dir=registry_dir)
+    if len(candidates) != 1:
+        return {
+            "status": "failed",
+            "target_slug": target,
+            "message": (
+                "no exact project IDE bridge" if not candidates
+                else "multiple project IDE bridges; refusing ambiguous focus"
+            ),
+            "adapter_name": "ide-terminal-visible-prepare",
+        }
+    bridge = candidates[0]
+    status, response = poster(
+        f"http://127.0.0.1:{bridge['port']}/terminal/show",
+        {"project_path": project_path, "target_slug": target},
+        timeout=min(timeout, 15),
+        headers={"Authorization": f"Bearer {bridge['token']}"},
+    )
+    if 200 <= status < 300:
+        try:
+            detail = json.loads(response) if isinstance(response, str) else response
+        except json.JSONDecodeError:
+            detail = {}
+        detail = detail if isinstance(detail, dict) else {}
+        return {
+            "status": "success",
+            "target_slug": target,
+            "message": "exact visible integrated terminal focused without submitting a prompt",
+            "adapter_name": "ide-terminal-visible-prepare",
+            "terminal_name": str(detail.get("terminal_name") or ""),
+            "agent_pid": detail.get("agent_pid") or "",
+            "tty": str(detail.get("tty") or ""),
+        }
+    if status == 404:
+        return {
+            "status": "legacy-focus-on-submit",
+            "target_slug": target,
+            "message": (
+                "installed bridge predates focus-only preparation; exact terminal identity is available, "
+                "so submission must focus first and be followed immediately by visual proof"
+            ),
+            "adapter_name": "ide-terminal-visible-prepare",
+        }
+    detail = response.strip().replace("\n", " ") if isinstance(response, str) else str(response)
+    return {
+        "status": "failed",
+        "target_slug": target,
+        "message": f"IDE bridge rejected focus-only preparation ({status}): {detail[:400]}",
+        "adapter_name": "ide-terminal-visible-prepare",
+    }
+
+
 def auth_headers_from_env(prefix: str) -> dict[str, str]:
     bearer = os.environ.get(f"AI_COLLAB_{prefix}_BEARER_TOKEN")
     if bearer:
@@ -1425,12 +1590,18 @@ def antigravity_executable() -> str | None:
     configured = os.environ.get("AI_COLLAB_ANTIGRAVITY_BIN")
     if configured:
         return configured
-    found = executable_for("antigravity")
-    if found:
-        return found
-    fallback = Path.home() / ".antigravity/antigravity/bin/antigravity"
-    if fallback.exists() and os.access(fallback, os.X_OK):
-        return str(fallback)
+    for name in ("antigravity-ide", "antigravity"):
+        found = executable_for(name)
+        if found:
+            return found
+    fallbacks = (
+        Path("/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"),
+        Path.home() / ".antigravity-ide/antigravity-ide/bin/antigravity-ide",
+        Path.home() / ".antigravity/antigravity/bin/antigravity",
+    )
+    for fallback in fallbacks:
+        if fallback.exists() and os.access(fallback, os.X_OK):
+            return str(fallback)
     return None
 
 
@@ -1487,8 +1658,8 @@ def run_antigravity_chat_adapter(
 
     if completed.returncode == 0:
         return {
-            "status": "degraded",
-            "message": "prompt sent to Antigravity chat with --reuse-window",
+            "status": "success",
+            "message": "prompt submitted to the reused Antigravity IDE chat window",
             "adapter_name": "antigravity-chat",
         }
 
@@ -2064,6 +2235,9 @@ def process_thread(
 
     author_slug = message["author_slug"]
     targets = [slug for slug in find_mentions(message["content"]) if slug != author_slug]
+    target_filter = set(csv_env("AI_COLLAB_WAKE_TARGETS"))
+    if target_filter:
+        targets = [slug for slug in targets if slug in target_filter]
     if not targets:
         return {"action": "ignored", "reason": "no-mentions"}
 
@@ -2089,6 +2263,14 @@ def process_thread(
             )
             continue
 
+        if inbox_name:
+            primary_inbox = collab_root / inbox_name
+            if primary_inbox.exists():
+                inbox_meta, _inbox_body = parse_frontmatter(primary_inbox.read_text(encoding="utf-8"))
+                if inbox_meta.get("status") in {"unread", "claimed", "running", "blocked", "review"}:
+                    results.append({"target_slug": target_slug, "action": "inbox-primary"})
+                    continue
+
         state_key = f"thread:{task_id}:{msg_hash}:{target_slug}"
         entry = state.get(state_key, {})
         if entry is True:
@@ -2103,6 +2285,21 @@ def process_thread(
             continue
         if attempts >= max_attempts:
             results.append({"target_slug": target_slug, "action": "failed", "attempts": attempts})
+            continue
+
+
+        grace = internal_grace_seconds(project_root, target_slug, now)
+        sent_at = parse_iso(message.get("timestamp"))
+        elapsed_internal = (now - sent_at).total_seconds() if sent_at else grace
+        if elapsed_internal < grace:
+            results.append(
+                {
+                    "target_slug": target_slug,
+                    "action": "internal-grace",
+                    "grace_seconds": grace,
+                    "elapsed_seconds": elapsed_internal,
+                }
+            )
             continue
 
         wait_seconds = backoff_for_attempts(attempts)
@@ -2138,6 +2335,7 @@ def process_thread(
                 "and relevant participants, then update your log. Do not merely acknowledge the wakeup."
             ),
         }
+        emit_escalation_notice(project_root, [target_slug], thread_path, grace, now)
         adapter_result = dispatch_wake_event(
             event,
             events_file=events_file,
@@ -2212,6 +2410,19 @@ def process_inbox(
     attempts = coerce_int(meta.get("attempts"), 0)
     last_attempt = parse_iso(meta.get("last_attempt"))
 
+    project_root = inbox_path.parent.parent
+    grace = internal_grace_seconds(project_root, target_slug, now)
+    queued_at = parse_iso(meta.get("updated"))
+    elapsed_internal = (now - queued_at).total_seconds() if queued_at else grace
+    if attempts == 0 and elapsed_internal < grace:
+        return {
+            "action": "internal-grace",
+            "task_id": task_id,
+            "target_slug": target_slug,
+            "grace_seconds": grace,
+            "elapsed_seconds": elapsed_internal,
+        }
+
     if attempts >= max_attempts:
         meta["status"] = "failed"
         meta["done_at"] = isoformat_z(now)
@@ -2259,6 +2470,7 @@ def process_inbox(
             "Read it, execute it, mark it status: done, and update your log."
         ),
     }
+    emit_escalation_notice(project_root, [target_slug], inbox_path, grace, now)
     adapter_result = dispatch_wake_event(
         event,
         events_file=events_file,
@@ -2351,8 +2563,22 @@ def process_inbox(
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) >= 4 and argv[1] == "--prepare-visible":
+        project_root = Path(argv[2]).expanduser().resolve()
+        targets = [value.strip().lower() for value in argv[3].split(",") if value.strip()]
+        results = [prepare_ide_terminal_visible_surface(str(project_root), target) for target in targets]
+        ok = all(
+            result.get("status") in {"success", "skipped", "legacy-focus-on-submit"}
+            for result in results
+        )
+        print(json.dumps({"action": "prepare-visible", "ok": ok, "results": results}, sort_keys=True))
+        return 0 if ok else 1
     if len(argv) < 3:
-        print("Usage: ai-collab-wakeup.py <project> <inbox.md|thread.md>", file=sys.stderr)
+        print(
+            "Usage: ai-collab-wakeup.py <project> <inbox.md|thread.md> | "
+            "--prepare-visible <project-root> <agent,...>",
+            file=sys.stderr,
+        )
         return 2
 
     project = argv[1]

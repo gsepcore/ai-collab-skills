@@ -53,7 +53,8 @@ Modes:
   non-interactive `codex exec` worker, then falls back to a degraded
   `codex-filesystem` receipt so delivery is still visible in `.ai-collab`
   without claiming a real Codex turn.
-- `visible`: maps to `antigravity-chat`; best-effort visible Antigravity chat.
+- `visible`: maps to `antigravity-chat`; uses the supported
+  `antigravity-ide chat --reuse-window` CLI and fails closed when unavailable.
 - `auto`: uses the default visible wakeup routing.
 - `codex-filesystem`: writes a Codex wake receipt, live state, and session log
   without claiming control of the visible Codex panel or an LLM turn.
@@ -79,5 +80,6 @@ python3 ~/.claude/ai-collab-codex-bridge.py send \
 unavailable, the filesystem fallback records a degraded receipt by writing
 Codex artifacts, but it is not an LLM turn and is not the user's current visible
 Codex tab.
-`visible` can try Antigravity chat, but exact visible-tab injection remains
-degraded until Antigravity/Codex exposes a supported inbound prompt API.
+`visible` submits through the supported Antigravity IDE chat CLI. CLI exit zero
+proves visible submission, not a Codex response; require Codex's own authored
+thread/chat message before advancing the state to `responded`.

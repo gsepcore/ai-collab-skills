@@ -203,7 +203,7 @@ That's it. The installer sets up **sixteen components** automatically:
 | 🩺 Doctor script | Verifies installed files, hooks, daemon, and queues | `~/.claude/ai-collab-doctor.py` |
 | ⬆️ Self-updater | Refreshes the global install and managed project snippets automatically | `~/.claude/ai-collab-update.py` |
 | 🧭 Reboot recovery | Regenerates `CONTEXT.md` and re-arms unfinished wakeups after restart | `~/.claude/ai-collab-recover.py` |
-| 🌉 Codex bridge API | Localhost API facade for addressing Codex via ACP/background or visible best-effort | `~/.claude/ai-collab-codex-bridge.py` |
+| 🌉 Codex bridge API | Localhost API facade for addressing Codex via ACP/background or the supported Antigravity chat CLI | `~/.claude/ai-collab-codex-bridge.py` |
 | 🪝 `SessionStart` hook | Loads `CONTEXT.md` + notifications on session open | `~/.claude/settings.json` |
 | 🪝 `UserPromptSubmit` hook | Shows pending AI notifications before each message | `~/.claude/settings.json` |
 | 🪝 `Stop` hook | Auto-regenerates `CONTEXT.md` after each Claude response | `~/.claude/settings.json` |
@@ -226,7 +226,7 @@ The only degraded states are external to the skill and are reported explicitly i
 
 - macOS Screen Recording permission can block screenshots until the user grants access to the terminal/IDE running the daemon.
 - OCR is installed automatically when a supported package manager is available; if the system blocks installation, semantic vision continues in metadata-only mode and `health.json` explains it.
-- The already-open Codex tab inside Antigravity cannot be injected into reliably until OpenAI/Antigravity exposes a public API; OpenCode, filesystem collaboration, observer snapshots, screenshots, OCR, inboxes, and ACP/manual Codex paths remain available.
+- Codex visible wake uses the official `antigravity-ide chat --reuse-window` CLI when it is installed. AI Collab still treats CLI acceptance only as `submitted visibly`; Codex has not `responded` until its own message appears in the shared thread/chat. If that CLI is absent, the route fails closed and the capability matrix reports the degradation.
 
 Run `python3 ~/.claude/ai-collab-doctor.py` any time to see whether the current machine is fully green or which external permission/API is limiting a feature.
 
@@ -246,7 +246,7 @@ curl -s http://127.0.0.1:8765/v1/codex/message \
   -d '{"project_path":"'"$(pwd)"'","from_agent":"opencode","topic":"Need Codex","message":"@codex please review this","mode":"background"}'
 ```
 
-`mode: background` routes to `codex-auto`: it tries `codex-acp` first, then a real non-interactive `codex exec` worker, then a degraded filesystem receipt that writes live state and a session log. `mode: visible` routes to `antigravity-chat`, which remains best-effort until Antigravity/Codex exposes a supported inbound prompt API. Full contract: `references/codex-antigravity-bridge.md`.
+`mode: background` routes to `codex-auto`: it tries `codex-acp` first, then a real non-interactive `codex exec` worker, then a degraded filesystem receipt that writes live state and a session log. `mode: visible` uses the official `antigravity-ide chat --reuse-window` CLI and fails closed when unavailable. Full contract: `references/codex-antigravity-bridge.md`.
 
 ### After installing — set up your project
 
@@ -338,7 +338,7 @@ One-line overview of every AI active on this project — name, last update, and 
 
 ### `/collab assign [ai-name] [task description]`
 
-Delegate a task to another AI without leaving your Claude session. Writes `.ai-collab/inbox-{ai-name}.md` with `status: unread`. The daemon records a wake event for that agent and **by default dispatches the `visible` adapter automatically** — for OpenCode it now writes the prompt into the running TUI and submits it, so the user can see the task arrive before the worker reads the inbox, executes the task, and marks it `status: done`. No manual activation needed after `curl … | bash`.
+Delegate a task to another AI without leaving your director session. AI Collab writes `.ai-collab/inbox-{ai-name}.md` with `status: unread` first and waits a short configurable grace period for a real claim/response. If the agent stays silent, AI Collab tells you which agent did not respond, then submits the prompt to that agent's exact visible project chat. A visible submission never counts as a response; only the target's own claim, live update, or authored thread reply does.
 
 ```
 /collab assign codex publish v1.2.0 to npm and tag the release on GitHub
@@ -364,6 +364,8 @@ Roles guide default routing. Explicit user/director ownership can override them.
 ### `/collab converse`
 
 Start a natural agent discussion without creating a formal inbox task first. Use it when agents need to ask each other questions, compare implementation options, request review, correct a misunderstanding, record a decision, or hand off context.
+
+The conversation is internal-first and continuous: the shared thread is written before any visible wake, responsive agents stay on the internal channel, and only silent agents are escalated after an explicit notice. The same thread carries progress checks, doubts, recommendations, review, and completion. When the director is sleeping/stale, workers use the director's route declared in `.ai-collab/capabilities.json`; an unavailable native Codex inbound route is reported as degraded, never simulated.
 
 ```bash
 python3 ~/.claude/ai-collab-converse.py --root "$PWD" start \
@@ -610,6 +612,8 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_RECOVERY` | `1` | Enables daemon recovery after restart/session loss. Set `0` to disable automatic `CONTEXT.md` refresh and wakeup dedupe repair. |
 | `AI_COLLAB_RECOVERY_INTERVAL_SECONDS` | `300` | How often the daemon runs recovery. Default is 5 minutes. |
 | `AI_COLLAB_RECOVERY_CONTEXT_MAX_AGE` | `3600` | Maximum age for `CONTEXT.md` before recovery refreshes it, even if no newer logs are detected. |
+| `AI_COLLAB_INTERNAL_GRACE_SECONDS` | `15` | Seconds to wait for a real inbox/thread response before notifying and escalating only silent agents to visible chat. |
+| `AI_COLLAB_DIRECTOR_SLEEP_SECONDS` | `60` | Stale-live-state threshold used to treat a native-chat director as sleeping and route worker questions/progress directly to its visible chat. |
 | `AI_COLLAB_CODEX_BRIDGE_PORT` | `8765` | Port for `ai-collab-codex-bridge.py serve`. |
 | `AI_COLLAB_CODEX_BRIDGE_MODE` | `background` | Default bridge mode: `background`, `visible`, `auto`, or `notify-only`. |
 | `AI_COLLAB_CODEX_BRIDGE_TOKEN` | _(off)_ | Optional bearer token required by the bridge HTTP API. |
@@ -651,8 +655,8 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_KILO_BASIC_AUTH` | _(empty)_ | Optional `user:password` for local Kilo servers that return HTTP 401. |
 | `AI_COLLAB_KILO_BEARER_TOKEN` | _(empty)_ | Optional bearer token for local Kilo servers that require token auth. |
 | `AI_COLLAB_HERMES_URI_TEMPLATE` | `vscode://layerdynamics.hermes-vscode?prompt={prompt}` | URI template for `hermes-uri`. `{prompt}` is URL-encoded and prefilled into the Hermes chat panel; the user may still need to press send. |
-| `AI_COLLAB_ANTIGRAVITY_BIN` | _(auto-detected)_ | Override the `antigravity` executable used by `antigravity-chat`. |
-| `AI_COLLAB_ANTIGRAVITY_MODE` | `agent` | Mode passed to `antigravity chat --mode` for visible Codex/Antigravity wakeups. |
+| `AI_COLLAB_ANTIGRAVITY_BIN` | _(auto-detected)_ | Override the `antigravity-ide` executable used by `antigravity-chat`. |
+| `AI_COLLAB_ANTIGRAVITY_MODE` | `agent` | Mode passed to `antigravity-ide chat --mode` for visible Codex/Antigravity wakeups. |
 
 ### Semantic live observer and screenshots
 
@@ -709,36 +713,29 @@ On macOS, the first capture may trigger the normal Screen Recording permission p
 Behavior:
 
 - `@claude-code` or `inbox-claude-code.md` uses the installed `gsepcore.ai-collab-visible-bridge` extension to locate the exact integrated terminal by agent process and project cwd, reveal it, and submit the prompt as terminal input. Reload the IDE once after install/update so the bridge activates.
+- New bridge sessions support focus-only preparation before the screenshot. An older bridge that is still active is handled explicitly: the exact-terminal submission focuses the pane, AI Collab takes immediate visual proof, and a second evidence-bearing prompt completes the visible handoff. Neither submission is called a response.
 - `@opencode` or `inbox-opencode.md` uses the OpenCode TUI endpoints: `POST /tui/clear-prompt`, `POST /tui/append-prompt`, then `POST /tui/submit-prompt`. This targets the visible prompt box instead of a background session, so the user can see the delegated task arrive. Set `AI_COLLAB_OPENCODE_SYNTHETIC=1` only if you explicitly prefer hidden prompts through `POST /session/{id}/prompt_async` and accept that this can feel like background/headless work when no visible response appears.
 - `@kilo` or `inbox-kilo.md` uses the same visible TUI endpoint pattern when a Kilo server is open. If Kilo returns HTTP 401, set `AI_COLLAB_KILO_BASIC_AUTH` or `AI_COLLAB_KILO_BEARER_TOKEN`.
 - `@hermes` or `inbox-hermes.md` can open/prefill the Hermes chat through `AI_COLLAB_HERMES_URI_TEMPLATE`. This is visible but may require the user to press send.
-- `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent`. **Codex visible-tab wakeup remains degraded** — see "Known limitations" below.
+- `@codex` or `inbox-codex.md` uses `antigravity-ide chat --reuse-window --mode agent`. CLI acceptance means `submitted visibly`; only a later Codex-authored message means `responded`.
 - `@kimi` supports ACP/CLI wakeups, but no verified visible-panel injection endpoint has been found yet.
 - If no visible panel/port/session exists, the adapter fails safely and normal retry/backoff applies.
 
 Visible prompt submission never marks an inbox as claimed. Only the target agent may claim it during its own real turn. Likewise, the director may say an agent "responded" only when that agent appended its own message to the shared thread.
 
-### Known limitations — Codex visible-tab wakeup
+### Codex visible wake contract
 
-On 2026-05-13 three independent reviewers (Codex, OpenCode, Claude Code) confirmed that **waking the Codex panel already open inside Antigravity is blocked upstream**. The reasons:
+Antigravity IDE exposes a supported `chat` CLI. AI Collab auto-detects `antigravity-ide` (including the macOS app bundle), invokes `chat --reuse-window --mode agent`, and includes the inbox/thread file as context. It does not use private extension APIs, app-server pipes, proposed APIs, or file-descriptor injection.
 
-- `openai.chatgpt` extension exposes no public API (`exportsType: undefined`).
-- The active `codex app-server` is connected only by private stdio pipes inherited from Antigravity helper processes — no public socket.
-- VS Code proposed chat APIs require an explicit allowlist that third-party companion extensions cannot enter.
-- ACP is a viable protocol, but only when spawning a *new* Codex worker — it cannot attach to the existing visible session.
-- FD hijacking is technically possible but indistinguishable from malware; refused on security grounds.
-
-Until OpenAI or Antigravity publishes a supported injection surface, Codex has three real modes today:
+Codex has these modes:
 
 | Mode | What it does | Tradeoff |
 |---|---|---|
-| `visible` (default) | `antigravity chat --reuse-window` best-effort | May or may not reach the visible tab. Degraded. |
+| `visible` (default) | `antigravity-ide chat --reuse-window` | Submits to the reused visible chat; still requires a Codex-authored reply before claiming response. |
 | `codex-auto` | Tries ACP first, then a real `codex exec` worker, then a filesystem receipt | Autonomous when ACP or CLI works; final fallback is deterministic, not an LLM turn |
 | `codex-acp` (opt-in) | Spawns a fresh ACP Codex worker when the ACP command works | Runs invisibly, not in the user's open panel |
 | `codex-filesystem` | Writes a Codex answer to the thread/inbox plus live state and log | Proves wake delivery without claiming visible-session control |
-| Manual (1 click) | User types "lee tu inbox" in the tab | 100% reliable + visible, requires one human click |
-
-OpenCode and Claude Code remain automatable, but AI Collab treats visible trust as the default: OpenCode wakeups are visible unless `AI_COLLAB_OPENCODE_SYNTHETIC=1` is explicitly enabled. Full investigation: `claude-acp-active-codex-analysis.md`, `codex-bridge-blocker.md`, `codex-acp-investigation.md`, `opencode-codex-bridge-investigation.md` (these live in the `.ai-collab/` of any project where the team has investigated — they document the dead-end analysis so future contributors do not retry the same paths).
+Every mode preserves honest evidence: a successful command or bridge response is only delivery. The director may claim `responded` only after Codex writes its own message to the shared conversation. If `antigravity-ide` is unavailable or returns an error, visible delivery fails closed and normal retry/notice behavior applies.
 
 ### Codex ACP wakeup (opt-in)
 

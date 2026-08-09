@@ -62,6 +62,8 @@ class TestOrchestrate(unittest.TestCase):
             encoding="utf-8",
         )
         self._visible_wake = _mod.visible_wake
+        self._wait_for_inbox_response = _mod.wait_for_inbox_response
+        _mod.wait_for_inbox_response = lambda path, timeout: ""
         _mod.visible_wake = lambda root, path: {
             "ok": True,
             "result": {
@@ -73,6 +75,7 @@ class TestOrchestrate(unittest.TestCase):
 
     def tearDown(self):
         _mod.visible_wake = self._visible_wake
+        _mod.wait_for_inbox_response = self._wait_for_inbox_response
         self.tmp.cleanup()
 
     def run_cli(self, *args):
@@ -213,7 +216,57 @@ class TestOrchestrate(unittest.TestCase):
         self.assertIn("Assigned to @opencode", thread)
         tasks = json.loads((self.root / ".ai-collab/runs/run-2/tasks.json").read_text(encoding="utf-8"))
         self.assertEqual(tasks["tasks"][0]["status"], "assigned")
-        self.assertEqual(tasks["tasks"][0]["dispatch"]["status"], "submitted")
+        self.assertEqual(tasks["tasks"][0]["dispatch"]["status"], "submitted-visibly")
+
+    def test_assign_skips_visible_escalation_after_internal_claim(self):
+        self.run_cli(
+            "init",
+            "--run-id",
+            "run-internal-response",
+            "--goal",
+            "Coordinate work",
+            "--director",
+            "codex",
+            "--agents",
+            "opencode",
+        )
+        self.run_cli(
+            "add-task",
+            "--run-id",
+            "run-internal-response",
+            "--actor",
+            "codex",
+            "--task-id",
+            "task-internal",
+            "--title",
+            "Review implementation",
+            "--owner",
+            "opencode",
+            "--description",
+            "Review the implementation.",
+        )
+        visible_calls = []
+        _mod.wait_for_inbox_response = lambda path, timeout: "claimed"
+        _mod.visible_wake = lambda root, path: visible_calls.append((root, path))
+
+        result = self.run_cli(
+            "assign",
+            "--run-id",
+            "run-internal-response",
+            "--actor",
+            "codex",
+            "--task-id",
+            "task-internal",
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(visible_calls, [])
+        tasks = json.loads(
+            (self.root / ".ai-collab/runs/run-internal-response/tasks.json").read_text(encoding="utf-8")
+        )
+        dispatch = tasks["tasks"][0]["dispatch"]
+        self.assertEqual(dispatch["status"], "internal-response")
+        self.assertEqual(dispatch["evidence"]["inbox_status"], "claimed")
 
     def test_assign_fails_closed_when_visible_agent_cannot_be_activated(self):
         self.run_cli("init", "--run-id", "run-visible-fail", "--goal", "Coordinate", "--director", "codex", "--agents", "opencode")

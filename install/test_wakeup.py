@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -32,6 +32,7 @@ run_wakeup_adapter = _mod.run_wakeup_adapter
 run_codex_acp_adapter = _mod.run_codex_acp_adapter
 run_acp_adapter = _mod.run_acp_adapter
 run_ide_terminal_visible_adapter = _mod.run_ide_terminal_visible_adapter
+prepare_ide_terminal_visible_surface = _mod.prepare_ide_terminal_visible_surface
 
 
 SAMPLE_INBOX = """\
@@ -134,6 +135,46 @@ class TestProcessInbox(unittest.TestCase):
         self.assertEqual(meta["claimed_at"], "")
         self.assertEqual(meta["visible_adapter"], "mock-success")
         self.assertEqual(meta["visible_dispatched_at"], "2026-05-12T12:00:00Z")
+
+    def test_capability_grace_waits_before_visible_inbox_dispatch(self):
+        (self.inbox.parent / "capabilities.json").write_text(
+            json.dumps(
+                {
+                    "agents": [
+                        {
+                            "agent": "codex",
+                            "visible": {"adapter": "mock-success", "native_chat_only": False},
+                            "wake_policy": {"internal_grace_seconds": 15, "sleep_threshold_seconds": 60},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_inbox()
+
+        waiting = process_inbox(
+            self.inbox,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+        dispatched = process_inbox(
+            self.inbox,
+            "gsep",
+            now=self.now + timedelta(seconds=16),
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+
+        self.assertEqual(waiting["action"], "internal-grace")
+        self.assertEqual(waiting["grace_seconds"], 15)
+        self.assertEqual(dispatched["action"], "dispatched")
 
     def test_done_produces_no_event(self):
         self.write_inbox(SAMPLE_INBOX.replace("status: unread", "status: done"))
@@ -1336,7 +1377,7 @@ class TestAdapters(unittest.TestCase):
             runner=fake_runner,
         )
 
-        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["status"], "success")
         self.assertEqual(result["adapter_name"], "antigravity-chat")
         self.assertEqual(calls[0][0][:5], ["/usr/bin/antigravity", "chat", "--mode", "agent", "--reuse-window"])
         self.assertIn("--add-file", calls[0][0])
@@ -1631,6 +1672,60 @@ for line in sys.stdin:
         self.assertEqual(result["status"], "degraded")
         self.assertEqual(calls[0][0], ["open", "test://hermes?prompt=hello%20visible"])
 
+    def test_focus_only_visible_preparation_does_not_send_prompt(self):
+        with tempfile.TemporaryDirectory() as d:
+            registry = Path(d)
+            (registry / "bridge.json").write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "port": 43123,
+                        "token": "secret",
+                        "project_paths": ["/tmp/project"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            calls = []
+
+            def fake_poster(url, payload, **kwargs):
+                calls.append((url, payload, kwargs))
+                return 200, json.dumps({"terminal_name": "OpenCode", "agent_pid": 42, "tty": "ttys001"})
+
+            result = prepare_ide_terminal_visible_surface(
+                "/tmp/project",
+                "opencode",
+                poster=fake_poster,
+                registry_dir=registry,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(calls[0][0].endswith("/terminal/show"))
+        self.assertNotIn("prompt", calls[0][1])
+
+    def test_legacy_bridge_prepare_requires_focus_on_submit_without_faking_focus(self):
+        with tempfile.TemporaryDirectory() as d:
+            registry = Path(d)
+            (registry / "bridge.json").write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "port": 43123,
+                        "token": "secret",
+                        "project_paths": ["/tmp/project"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = prepare_ide_terminal_visible_surface(
+                "/tmp/project",
+                "opencode",
+                poster=lambda *args, **kwargs: (404, '{"status":"failed","message":"not found"}'),
+                registry_dir=registry,
+            )
+
+        self.assertEqual(result["status"], "legacy-focus-on-submit")
+
     def test_visible_adapter_blocks_project_not_in_allowlist(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/some/other/project"
         result = run_wakeup_adapter(
@@ -1725,6 +1820,79 @@ project: gsep
             message=message,
             now=self.now,
         )
+
+    def write_capabilities(self, agent, *, native_chat_only=False, grace=15, sleep_threshold=60):
+        (self.collab / "capabilities.json").write_text(
+            json.dumps(
+                {
+                    "agents": [
+                        {
+                            "agent": agent,
+                            "visible": {
+                                "adapter": "mock-success",
+                                "native_chat_only": native_chat_only,
+                            },
+                            "wake_policy": {
+                                "internal_grace_seconds": grace,
+                                "sleep_threshold_seconds": sleep_threshold,
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_thread_waits_for_internal_response_before_visible_escalation(self):
+        self.write_capabilities("opencode")
+        append_thread_message(
+            self.thread,
+            task_id="task-123",
+            project="gsep",
+            inbox_name="",
+            author_slug="codex",
+            message="@opencode please review this.",
+            now=self.now,
+        )
+
+        waiting = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+        dispatched = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now + timedelta(seconds=16),
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+
+        self.assertEqual(waiting["results"][0]["action"], "internal-grace")
+        self.assertEqual(waiting["results"][0]["grace_seconds"], 15)
+        self.assertEqual(dispatched["results"][0]["action"], "dispatched")
+
+    def test_sleeping_native_codex_escalates_without_internal_grace(self):
+        self.write_capabilities("codex", native_chat_only=True)
+        self.append()
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+
+        self.assertEqual(result["results"][0]["action"], "dispatched")
 
     def test_thread_mention_produces_wake_event(self):
         self.append()

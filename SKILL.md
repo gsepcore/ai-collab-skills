@@ -15,11 +15,13 @@ Each AI writes a Markdown log to `{project-root}/.ai-collab/`. Any AI with files
 
 Agents can also hold natural conversations: task-specific threads live at `.ai-collab/thread-{task_id}.md`, and broader design/review discussions live at `.ai-collab/discussions/*.md`. `@slug` mentions in either place are scanned by the daemon and can wake the mentioned agent.
 
+Every onboarded project also has `.ai-collab/capabilities.json`. Each agent must read it during preflight so it knows the available internal channels, its exact visible adapter, whether that route is verified or degraded, its visual-evidence duties, and how to contact a sleeping director. Delivery is internal-first: write the inbox/thread, allow the configured short grace period for a real response, notify the user/director before escalation, then target only the non-responsive agents in their visible chats.
+
 The installed daemon also writes semantic live snapshots to `{project-root}/.ai-collab/live/`. These are the project-scoped "eyes" layer: current inbox/task state, latest log summary, self-reported commands/edits from each agent, process hints tied to the current project, git dirty files, director alerts, `health.json`, automatic project-window screenshots, and `.semantic.json` screenshot sidecars unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`. The installer attempts to install the local OCR engine (`tesseract`) by default; if unavailable, vision remains functional in metadata-only mode and `health.json` reports the degradation.
 
 The daemon also runs the self-updater and reboot recovery by default. The self-updater refreshes the global `~/.claude` install from the configured GitHub branch, then re-applies managed `AI-COLLAB-START` / `AI-COLLAB-END` rule blocks in already-onboarded projects and refreshes generated `PROTOCOL.md` files with backups. Recovery refreshes stale/missing `CONTEXT.md` files and removes stale wakeup dedupe entries for unfinished inbox tasks after restart/session loss. Set `AI_COLLAB_AUTO_UPDATE=0` or `AI_COLLAB_RECOVERY=0` to disable either layer, or tune `AI_COLLAB_UPDATE_INTERVAL_SECONDS` / `AI_COLLAB_RECOVERY_INTERVAL_SECONDS`.
 
-For Codex/Antigravity automation, the installer includes a local bridge API at `~/.claude/ai-collab-codex-bridge.py`. Use it when another agent needs a stable API-shaped way to address Codex. It writes normal `.ai-collab/discussions/` messages and routes to `codex-auto` background mode, `antigravity-chat` visible best-effort mode, `codex-filesystem` deterministic wake receipt, or `notify-only`. `codex-auto` tries ACP first, then a real non-interactive `codex exec` worker, then the degraded filesystem receipt. Read `references/codex-antigravity-bridge.md` before changing or relying on this bridge.
+For Codex/Antigravity automation, the installer includes a local bridge API at `~/.claude/ai-collab-codex-bridge.py`. Use it when another agent needs a stable API-shaped way to address Codex. It writes normal `.ai-collab/discussions/` messages and routes to `codex-auto` background mode, `antigravity-chat` visible mode through the official `antigravity-ide chat --reuse-window` CLI when available, `codex-filesystem` deterministic wake receipt, or `notify-only`. `codex-auto` tries ACP first, then a real non-interactive `codex exec` worker, then the degraded filesystem receipt. A successful visible submission still is not a Codex response; require Codex's own authored message. Read `references/codex-antigravity-bridge.md` before changing or relying on this bridge.
 
 **Conceptual model:** this skill is agent-first. `agent` is the runtime doing work, `container` is the IDE/terminal where it is visible, and `model` is metadata about the LLM behind it. Do not treat IDEs and agents as the same thing.
 
@@ -126,7 +128,7 @@ Show the live semantic observer view for the project.
 
 Start or continue a natural agent-to-agent discussion for questions, proposals, reviews, blockers, decisions, and handoffs.
 
-This is a visible execution contract, not a narration feature. With recipients in `--to`, the helper first captures the real project window and verifies every required agent surface in `.ai-collab/live/visual-roster.json`; only then does it submit the message to each project-matched visible interface. Every recipient must inspect that image with its own vision capability and attest what it saw in the shared thread. A file write, port, process, log, or wake event alone is never enough. Any mismatch fails closed without a hidden CLI substitute.
+This is an internal-first execution contract, not a narration feature. With recipients in `--to`, the helper writes the shared thread first and waits the configured short grace period. Agents that answer internally are never disturbed in their visible chat. For each non-responsive agent, the helper prints and records a notice, focuses the exact surface without submitting when the bridge supports it, captures the real project window, verifies every required surface in `.ai-collab/live/visual-roster.json`, appends the visual fallback context, and only then submits the prompt. If an already-running legacy bridge lacks focus-only support, the exact-terminal submission focuses the pane, immediate visual proof is mandatory, and an evidence-bearing follow-up completes the handoff. Every recipient must inspect that image and attest what it saw in the shared thread. A file write, port, process, log, prompt submission, or wake event alone is never a response. Any mismatch fails closed without a hidden CLI substitute.
 
 **Steps:**
 1. Find project root.
@@ -151,9 +153,10 @@ This is a visible execution contract, not a narration feature. With recipients i
    python3 ~/.claude/ai-collab-converse.py --root "$ROOT" decision --thread "$THREAD" --author codex --message "$DECISION"
    ```
 
-5. Require every invited agent to inspect the fresh screenshot and append a substantive, agent-authored reply with its opinion, risks, `visual_evidence: <path>`, and `visible_peers: <slugs>`. `--wait-seconds` exits nonzero when a real reply or visual attestation is missing.
-6. Require the automatic post-turn screenshot. Treat adapter success only as "submitted visibly," visual roster success as "visually verified," and say "responded" only after the thread contains that agent's own compliant message.
-7. Use `/collab observe` to inspect `visual-roster.json`, agent/process/TTY/port ownership, open conversations, and latest replies.
+5. Keep the same thread open for follow-up questions, progress requests, blockers, reviews, and handoffs until a terminal result exists. Do not reduce the collaboration to isolated wakeups.
+6. Require every visibly escalated agent to inspect the fresh screenshot and append a substantive, agent-authored reply with its opinion, risks, `visual_evidence: <path>`, and `visible_peers: <slugs>`. `--wait-seconds` exits nonzero when a real reply or visual attestation is missing.
+7. Require the automatic post-turn screenshot. Use only these delivery claims: `queued internally`, `internal response`, `escalating visibly`, `submitted visibly`, `responded`, or `failed`. Say `responded` only after the thread contains that agent's own compliant message.
+8. Use `/collab observe` to inspect `visual-roster.json`, agent/process/TTY/port ownership, open conversations, and latest replies.
 
 ---
 
@@ -179,6 +182,7 @@ First-time setup on a new project, AND safe to re-run later when a new AI joins.
    - `.ai-collab/PROTOCOL.md`
    - `.ai-collab/TEAM.md`
    - `.ai-collab/agents.json`
+   - `.ai-collab/capabilities.json`
    - `.ai-collab/roles.json` after development-team role onboarding
    - `.ai-collab/inbox-all.md`
    - the relevant agent rules files
@@ -232,7 +236,7 @@ Expose a localhost API facade that other agents can call to address Codex.
 3. Tell callers to POST to `/v1/codex/message` with `project_path`, `from_agent`, `topic`, `message`, and `mode`.
 4. Be explicit about visibility:
    - `mode: background` uses `codex-auto`: try `codex-acp`, then a real non-interactive `codex exec` worker, then fall back to a degraded deterministic filesystem receipt.
-   - `mode: visible` uses `antigravity-chat` and is best-effort/degraded until a real panel API exists.
+   - `mode: visible` uses `antigravity-chat` through `antigravity-ide chat --reuse-window`; it fails closed when that CLI is unavailable.
    - `mode: codex-filesystem` proves wake delivery through `.ai-collab` files without claiming visible-session control.
 
 ---
@@ -460,14 +464,14 @@ python3 ~/.claude/ai-collab-orchestrate.py finalize --run-id "$RUN_ID" --actor "
 ```
 
 **Execution workflow:**
-1. Read `.ai-collab/CONTEXT.md`, `TEAM.md`, `roles.json`, active inboxes, and recent logs.
+1. Read `.ai-collab/CONTEXT.md`, `TEAM.md`, `capabilities.json`, `roles.json`, active inboxes, and recent logs.
 2. Create the run with the selected director and participating agents. If none were explicitly selected, use the senior director and assigned role owners from `roles.json`.
 3. Convene the visible team. The helper must force a fresh pre-turn screenshot, build an immutable per-capture visual roster plus `.ai-collab/live/visual-roster.json`, and refuse dispatch unless every requested agent is visible in the correct project surface. Each agent must inspect the actual PNG with native vision or `ai-collab-see.py`, which directly processes the pixels for models without image input.
 4. Wait for a real thread reply from every participant. Every reply must include `visual_evidence:` and `visible_peers:`; after replies, require a second fresh visual proof showing the project interfaces. Show the user the actual agent-authored recommendations. Never paraphrase a missing or visually unverified reply as if that agent provided it.
 5. Write a concrete `PLAN.md`: tasks, dependencies, required roles, owners, allowed files, and validation.
-6. Add and assign tasks with one owner each. Prefer `--role` for default routing; use `--owner` for an explicit override. Assignment performs immediate visible dispatch and exits nonzero when the target interface rejects it.
-7. Agents ask and answer questions in `thread-{task_id}.md` using normal language and `@slug` mentions. Treat these threads as the conversation with each other.
-8. Director monitors logs, inbox status, and task threads. If blocked, ask a clarifying question in the thread or reassign with an explicit reason.
+6. Add and assign tasks with one owner each. Prefer `--role` for default routing; use `--owner` for an explicit override. Assignment writes the inbox/thread first, waits briefly for a claim, announces non-response, then escalates only that agent to its verified visible route. It exits nonzero when the visible route rejects the prompt.
+7. Agents ask and answer questions in `thread-{task_id}.md` using normal language and `@slug` mentions. Keep progress, doubts, recommendations, reviews, and handoffs in that same continuous conversation.
+8. Director monitors logs, inbox status, and task threads. If blocked or progress is stale, ask internally first and follow the same notice-before-visible-fallback contract. When the director is stale/sleeping, workers use the director's `capabilities.json` visible route; native Codex must be contacted through its visible chat and a degraded route must be reported honestly.
 9. Before finalizing, run the validation commands appropriate to the repo. Record exact commands and outcomes.
 10. Finalize only when all tasks are `done` or explicitly `failed`, validation evidence exists, and `final-summary.md` is written.
 
@@ -517,7 +521,8 @@ done_at:
 {detailed task description with files, constraints, and exit criteria}
 ```
 
-5. Confirm: "Task written to inbox-{ai-name}.md (task_id: {task_id}) — the daemon will record a wake event for {ai-name}; with an execution adapter configured it can wake automatically, otherwise {ai-name} will pick it up on next response."
+5. Wait the `capabilities.json` internal grace period for the target to claim/respond. If it does not, tell the user/director which agent did not respond and that visible fallback is starting, then submit to that agent's exact visible project chat. Never report prompt submission as a response.
+6. Confirm one precise state: `queued internally`, `internal response`, `submitted visibly`, `responded`, or `failed`, with the matching inbox/thread/adapter evidence.
 
 **Schema fields (all required):**
 
@@ -539,6 +544,8 @@ done_at:
 ```
 
 **How other AIs respond:** Every AI checks `inbox-{its-name}.md` and `inbox-all.md` at the start of every response. If `status: unread`, the agent first sets `status: claimed` + `claimed_by` + `claimed_at`, then executes the task, then marks `status: done` and sets `done_at`. The installed daemon also scans inboxes and task threads, creating wake events for direct tasks and `@slug` mentions so configured adapters can activate each agent's monitor path. See `claude-task-lifecycle-spec.md` for the full state machine, conflict resolution, and director semantics.
+
+**Sleeping-director rule:** Workers normally reply through the inbox/thread/log. If they have progress, a question, a blocker, or a completed implementation and the director's live state is missing/stale, they must use the director's declared visible route from `.ai-collab/capabilities.json`. A native-chat-only director such as Codex is addressed in its visible chat; if that inbound route cannot be verified, record and surface the failure instead of fabricating a wake or answer.
 
 **Director rules (when reassigning or overriding):**
 
