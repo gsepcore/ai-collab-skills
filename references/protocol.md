@@ -8,13 +8,13 @@ Add these snippets to your project once. Each AI agent will then automatically p
 - `container` is where the agent is visible: `antigravity`, `cursor`, `vscode`, `windsurf`, `terminal`, etc.
 - `model` is the LLM behind the agent: `openai/gpt-5.5`, `minimax/m2.7`, `anthropic/claude-opus-4.7`, etc.
 
-Prefer the project onboarding helper instead of manually copying snippets:
+Prefer the unified install-or-migrate helper instead of manually copying snippets:
 
 ```bash
-python3 ~/.claude/ai-collab-project-setup.py
+python3 ~/.claude/ai-collab-setup.py --root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ```
 
-It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/capabilities.json`, `.ai-collab/inbox-all.md`, and the correct rules files for each selected agent. Then run `python3 ~/.claude/ai-collab-team.py configure` to assign persistent development-team roles.
+It first refreshes both installed skill copies and all global runtime components, then safely migrates the current project. It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/capabilities.json`, `.ai-collab/inbox-all.md`, the correct rules files, and `.ai-collab/setup-report.json` while preserving roles, inboxes, runs, threads, discussions, and user-authored content. Then run `python3 ~/.claude/ai-collab-team.py configure` to assign persistent development-team roles when none exist.
 
 **Core rules that make this work:**
 1. Every AI saves a log after EVERY response — automatically, no prompting needed.

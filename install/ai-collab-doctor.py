@@ -24,6 +24,7 @@ REQUIRED_CLAUDE_FILES = (
     ".claude/ai-collab-check-notifications.py",
     ".claude/ai-collab-wakeup.py",
     ".claude/ai-collab-auto-onboard.py",
+    ".claude/ai-collab-setup.py",
     ".claude/ai-collab-project-setup.py",
     ".claude/ai-collab-orchestrate.py",
     ".claude/ai-collab-team.py",
@@ -41,6 +42,8 @@ REQUIRED_CLAUDE_FILES = (
 REQUIRED_SKILL_FILES = (
     ".claude/skills/collab/SKILL.md",
     ".claude/skills/collab/references/protocol.md",
+    ".codex/skills/collab/SKILL.md",
+    ".codex/skills/collab/references/protocol.md",
 )
 
 OPTIONAL_JSON_QUEUES = (

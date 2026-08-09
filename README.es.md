@@ -183,7 +183,7 @@ Abre Claude Code dentro de tu proyecto y ejecuta:
 /collab setup
 ```
 
-Esto crea `.ai-collab/`, agrega `.ai-collab/` a `.gitignore`, copia `PROTOCOL.md`, escribe `TEAM.md` y `agents.json`, crea el inbox inicial y agrega los bloques de reglas correctos para cada agente.
+Esto actualiza primero toda la instalación global —incluidas las copias de la skill para Claude y Codex— y luego crea o migra el proyecto. Conserva el historial y los roles, refresca `PROTOCOL.md`, `TEAM.md`, `agents.json`, `capabilities.json` y los bloques de reglas, valida daemon y puentes visuales y guarda el resultado exacto en `.ai-collab/setup-report.json`.
 
 Después inicia el pequeño onboarding de equipo: detecta los agentes registrados y pregunta quién será responsable de dirección senior, frontend, backend, bases de datos, DevOps, QA, seguridad, revisión de arquitectura, revisión funcional, despliegues y diseño UI/UX. Las elecciones se guardan en `.ai-collab/roles.json`; un agente puede ocupar varios puestos y un puesto puede quedar vacante.
 
@@ -367,14 +367,16 @@ python3 ~/.claude/ai-collab-orchestrate.py thread --run-id RUN --task-id tarea-u
 
 ### `/collab setup`
 
-Configuración inicial para un proyecto. Ejecutar una sola vez por proyecto.
+Comando único para instalar o actualizar AI Collab y crear o migrar un proyecto activo. Es seguro ejecutarlo nuevamente.
 
-- Crea la carpeta `.ai-collab/`
-- La agrega a `.gitignore`
-- Copia `PROTOCOL.md` al directorio
-- Pregunta qué herramientas de IA usas y genera los snippets
+- Reinstala las skills actuales de Claude y Codex, helpers, hooks, daemon, bridges y extensión del IDE
+- Crea o migra `.ai-collab/` y actualiza `PROTOCOL.md` conservando un backup
+- Conserva roles, inboxes, runs, threads, discusiones, agentes personalizados y contenido escrito por el usuario
+- Regenera los bloques administrados y la matriz completa de capacidades sin duplicados
+- Ejecuta el diagnóstico estricto y guarda `.ai-collab/setup-report.json`
 - **Siembra `inbox-all.md` con una tarea de onboarding** — el primer worker que abra este proyecto se auto-orienta automáticamente (preservado intacto si el archivo ya existe)
 - Escribe el primer log de Claude
+- Pide a los agentes activos que confirmen las capacidades nuevas usando primero la mensajería interna y después el chat visible si no responden
 
 ```
 /collab setup
@@ -716,13 +718,14 @@ Y elimina la línea `.ai-collab/` de `.gitignore` si la agregaste.
 
 Para otras IAs: elimina el bloque `## AI Collab Protocol` de `.cursorrules`, `.windsurfrules`, o `.github/copilot-instructions.md`.
 
-### Eliminar el skill de Claude Code
+### Eliminar las skills de Claude Code y Codex
 
 ```bash
 rm -rf ~/.claude/skills/collab/
+rm -rf ~/.codex/skills/collab/
 ```
 
-El skill dejará de aparecer en las herramientas disponibles de Claude. Las carpetas `.ai-collab/` de tus proyectos son independientes — eliminar el skill no las borra.
+La skill dejará de aparecer en las herramientas disponibles de ambos agentes. Las carpetas `.ai-collab/` de tus proyectos son independientes — eliminar las skills no las borra.
 
 ---
 

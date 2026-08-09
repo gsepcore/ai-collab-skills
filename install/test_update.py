@@ -60,12 +60,30 @@ class TestUpdate(unittest.TestCase):
         self.assertEqual(models["opencode"], "minimax/m2.5")
         self.assertEqual(models["codex"], "openai/gpt-5.5")
 
+    def test_project_args_omits_unknown_model_to_keep_generated_snippets_stable(self):
+        project = self.home / "app"
+        collab = project / ".ai-collab"
+        collab.mkdir(parents=True)
+        (collab / "agents.json").write_text(
+            json.dumps({"agents": [{"agent": "codex", "container": "unknown", "model": "unknown"}]}),
+            encoding="utf-8",
+        )
+
+        agents, container, models = _mod.project_args_from_manifest(project)
+
+        self.assertEqual(agents, ["claude-code", "codex"])
+        self.assertEqual(container, "unknown")
+        self.assertEqual(models, {})
+
     def test_global_update_includes_codex_bridge_and_recovery(self):
         rels = [rel for rel, _dest, _executable in _mod.GLOBAL_FILES]
+        destinations = [str(dest) for _rel, dest, _executable in _mod.GLOBAL_FILES]
 
         self.assertIn("install/ai-collab-codex-bridge.py", rels)
         self.assertIn("install/ai-collab-recover.py", rels)
         self.assertIn("install/ai-collab-team.py", rels)
+        self.assertIn("install/ai-collab-setup.py", rels)
+        self.assertTrue(any(".codex/skills/collab/SKILL.md" in path for path in destinations))
 
 
 if __name__ == "__main__":

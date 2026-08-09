@@ -187,11 +187,13 @@ git clone https://github.com/gsepcore/ai-collab-skills.git
 bash ai-collab-skills/install/install.sh
 ```
 
-That's it. The installer sets up **sixteen components** automatically:
+That's it. The installer sets up the complete runtime automatically:
 
 | Component | What it does | Where |
 |-----------|-------------|-------|
 | 📚 Claude Code skill | `/collab` commands available in all sessions | `~/.claude/skills/collab/` |
+| 📚 Codex skill | The same current `/collab` workflow is discoverable by Codex | `~/.codex/skills/collab/` |
+| 🧩 Unified setup | Reinstalls globals, migrates one project safely, verifies preservation and health | `~/.claude/ai-collab-setup.py` |
 | 🔄 Background daemon | Watches every `.ai-collab/` directory 24/7 | launchd (macOS) / cron (Linux) |
 | 📨 Wakeup detector | Detects unread inbox tasks and dispatches the configured adapter | `~/.claude/ai-collab-wakeup.py` |
 | 🧭 Auto-onboard | Detects a new agent's first log and appends its rules snippet + TEAM entry | `~/.claude/ai-collab-auto-onboard.py` |
@@ -459,15 +461,17 @@ python3 ~/.claude/ai-collab-orchestrate.py thread \
 
 ### `/collab setup`
 
-First-time setup for a project. Run this once per project.
+The single install-or-migrate command for both new and already-running projects. It is safe to rerun.
 
-- Creates `.ai-collab/` directory
-- Adds it to `.gitignore`
-- Copies `PROTOCOL.md` into the directory
-- Asks which AI tools you use and generates the rules snippets
+- Reinstalls the current Claude and Codex skills, helpers, hooks, daemon, bridges, and IDE extension
+- Creates or migrates `.ai-collab/` and refreshes `PROTOCOL.md` with a backup
+- Preserves roles, inboxes, runs, task threads, discussions, custom agents, and user-authored rule content
+- Regenerates managed rule blocks and the complete capability matrix without duplicates
+- Runs strict install/project verification and writes `.ai-collab/setup-report.json`
 - **Seeds `inbox-all.md` with a welcome onboarding task** — first worker AI to open this project self-orients automatically (preserved unchanged if file already exists)
 - Writes Claude's first log entry
 - Starts Claude's live `/collab monitor` automatically for this project when the Claude Code runtime supports persistent Monitor/Task execution
+- Asks already-running agents to acknowledge the refreshed capabilities through the normal internal-first/visible-fallback conversation path
 
 ```
 /collab setup

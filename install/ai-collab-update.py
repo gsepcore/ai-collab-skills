@@ -31,6 +31,8 @@ RAW_BASE = os.environ.get(
 
 CLAUDE_DIR = Path.home() / ".claude"
 SKILL_DIR = CLAUDE_DIR / "skills" / "collab"
+CODEX_DIR = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+CODEX_SKILL_DIR = CODEX_DIR / "skills" / "collab"
 STATE_FILE = CLAUDE_DIR / "ai-collab-update-state.json"
 IDE_BRIDGE_SOURCE = CLAUDE_DIR / "ai-collab-vscode-bridge"
 IDE_BRIDGE_VSIX = CLAUDE_DIR / "ai-collab-visible-bridge.vsix"
@@ -38,11 +40,14 @@ IDE_BRIDGE_VSIX = CLAUDE_DIR / "ai-collab-visible-bridge.vsix"
 GLOBAL_FILES: list[tuple[str, Path, bool]] = [
     ("SKILL.md", SKILL_DIR / "SKILL.md", False),
     ("references/protocol.md", SKILL_DIR / "references" / "protocol.md", False),
+    ("SKILL.md", CODEX_SKILL_DIR / "SKILL.md", False),
+    ("references/protocol.md", CODEX_SKILL_DIR / "references" / "protocol.md", False),
     ("install/daemon.sh", CLAUDE_DIR / "ai-collab-daemon.sh", True),
     ("install/ai-collab-summary.py", CLAUDE_DIR / "ai-collab-summary.py", True),
     ("install/ai-collab-check-notifications.py", CLAUDE_DIR / "ai-collab-check-notifications.py", True),
     ("install/ai-collab-wakeup.py", CLAUDE_DIR / "ai-collab-wakeup.py", True),
     ("install/ai-collab-auto-onboard.py", CLAUDE_DIR / "ai-collab-auto-onboard.py", True),
+    ("install/ai-collab-setup.py", CLAUDE_DIR / "ai-collab-setup.py", True),
     ("install/ai-collab-project-setup.py", CLAUDE_DIR / "ai-collab-project-setup.py", True),
     ("install/ai-collab-orchestrate.py", CLAUDE_DIR / "ai-collab-orchestrate.py", True),
     ("install/ai-collab-team.py", CLAUDE_DIR / "ai-collab-team.py", True),
@@ -174,7 +179,7 @@ def project_args_from_manifest(root: Path) -> tuple[list[str], str, dict[str, st
                 continue
             agents.append(agent)
             model = str(item.get("model") or "").strip()
-            if model:
+            if model and model.lower() not in {"unknown", "unknown model"}:
                 models[agent] = model
             container = str(item.get("container") or "").strip()
             if container and container not in containers:

@@ -4,25 +4,26 @@
 #  https://github.com/gsepcore/ai-collab-skills
 #
 #  What this installs:
-#    1. Claude Code skill        → ~/.claude/skills/collab/
+#    1. Claude/Codex skills      → ~/.claude/skills/collab/ + ~/.codex/skills/collab/
 #    2. Daemon script            → ~/.claude/ai-collab-daemon.sh
 #    3. Summary script           → ~/.claude/ai-collab-summary.py
 #    4. Notifications script     → ~/.claude/ai-collab-check-notifications.py
 #    5. Wakeup detector script   → ~/.claude/ai-collab-wakeup.py
 #    6. Auto-onboard script      → ~/.claude/ai-collab-auto-onboard.py
-#    7. Project onboarding       → ~/.claude/ai-collab-project-setup.py
-#    8. Multi-agent orchestrator → ~/.claude/ai-collab-orchestrate.py
-#    9. Team role onboarding     → ~/.claude/ai-collab-team.py
-#   10. Natural conversation CLI → ~/.claude/ai-collab-converse.py
-#   11. Live observer            → ~/.claude/ai-collab-observer.py
-#   12. Doctor script            → ~/.claude/ai-collab-doctor.py
-#   13. Self-updater             → ~/.claude/ai-collab-update.py
-#   14. Reboot recovery          → ~/.claude/ai-collab-recover.py
-#   15. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
-#   16. Visible IDE bridge       → VS Code/Antigravity/Cursor/Windsurf extension
-#   17. OCR engine               → tesseract auto-install when possible
-#   18. Background daemon        → launchd (macOS) / cron (Linux)
-#   19. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#    7. Unified setup/migrator   → ~/.claude/ai-collab-setup.py
+#    8. Project onboarding       → ~/.claude/ai-collab-project-setup.py
+#    9. Multi-agent orchestrator → ~/.claude/ai-collab-orchestrate.py
+#   10. Team role onboarding     → ~/.claude/ai-collab-team.py
+#   11. Natural conversation CLI → ~/.claude/ai-collab-converse.py
+#   12. Live observer            → ~/.claude/ai-collab-observer.py
+#   13. Doctor script            → ~/.claude/ai-collab-doctor.py
+#   14. Self-updater             → ~/.claude/ai-collab-update.py
+#   15. Reboot recovery          → ~/.claude/ai-collab-recover.py
+#   16. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
+#   17. Visible IDE bridge       → VS Code/Antigravity/Cursor/Windsurf extension
+#   18. OCR engine               → tesseract auto-install when possible
+#   19. Background daemon        → launchd (macOS) / cron (Linux)
+#   20. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -36,7 +37,9 @@ set -euo pipefail
 # ── Config ────────────────────────────────────────────────────────────────────
 REPO="https://github.com/gsepcore/ai-collab-skills"
 RAW="https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main"
-SKILL_DIR="$HOME/.claude/skills/collab"
+CLAUDE_SKILL_DIR="$HOME/.claude/skills/collab"
+CODEX_BASE_DIR="${CODEX_HOME:-$HOME/.codex}"
+CODEX_SKILL_DIR="$CODEX_BASE_DIR/skills/collab"
 CLAUDE_DIR="$HOME/.claude"
 PLIST_LABEL="com.gsepcore.ai-collab"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
@@ -47,6 +50,7 @@ SKIP_DAEMON="${AI_COLLAB_NO_DAEMON:-}"  # set to 1 to skip daemon
 SKIP_CODEX_BRIDGE="${AI_COLLAB_NO_CODEX_BRIDGE:-}"  # set to 1 to skip Codex bridge API
 INSTALL_OCR="${AI_COLLAB_INSTALL_OCR:-1}"  # set to 0 to skip OCR engine install
 SKIP_IDE_BRIDGE="${AI_COLLAB_NO_IDE_BRIDGE:-}"  # set to 1 to skip visible integrated-terminal bridge
+SKIP_PROJECT_SETUP="${AI_COLLAB_SKIP_PROJECT_SETUP:-}"  # internal: unified setup prevents installer recursion
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 bold()    { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -236,11 +240,14 @@ fi
 echo ""
 bold "Step 1/6 — Installing Claude Code skill"
 
-mkdir -p "$SKILL_DIR/references"
-copy_or_download "SKILL.md"                      "$SKILL_DIR/SKILL.md"
-copy_or_download "references/protocol.md"        "$SKILL_DIR/references/protocol.md"
+mkdir -p "$CLAUDE_SKILL_DIR/references" "$CODEX_SKILL_DIR/references"
+copy_or_download "SKILL.md"                      "$CLAUDE_SKILL_DIR/SKILL.md"
+copy_or_download "references/protocol.md"        "$CLAUDE_SKILL_DIR/references/protocol.md"
+copy_or_download "SKILL.md"                      "$CODEX_SKILL_DIR/SKILL.md"
+copy_or_download "references/protocol.md"        "$CODEX_SKILL_DIR/references/protocol.md"
 
-green "Claude Code skill installed → $SKILL_DIR/"
+green "Claude Code skill installed → $CLAUDE_SKILL_DIR/"
+green "Codex skill installed       → $CODEX_SKILL_DIR/"
 info  "Use /collab read, /collab write, /collab setup, /collab assign, etc."
 
 # ── 2. Install daemon + summary scripts ─────────────────────────────────────
@@ -252,6 +259,7 @@ copy_or_download "install/ai-collab-summary.py"               "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-check-notifications.py"   "$CLAUDE_DIR/ai-collab-check-notifications.py"
 copy_or_download "install/ai-collab-wakeup.py"                "$CLAUDE_DIR/ai-collab-wakeup.py"
 copy_or_download "install/ai-collab-auto-onboard.py"          "$CLAUDE_DIR/ai-collab-auto-onboard.py"
+copy_or_download "install/ai-collab-setup.py"                 "$CLAUDE_DIR/ai-collab-setup.py"
 copy_or_download "install/ai-collab-project-setup.py"         "$CLAUDE_DIR/ai-collab-project-setup.py"
 copy_or_download "install/ai-collab-orchestrate.py"           "$CLAUDE_DIR/ai-collab-orchestrate.py"
 copy_or_download "install/ai-collab-team.py"                  "$CLAUDE_DIR/ai-collab-team.py"
@@ -265,6 +273,7 @@ copy_or_download "install/ai-collab-codex-bridge.py"          "$CLAUDE_DIR/ai-co
 chmod +x "$CLAUDE_DIR/ai-collab-daemon.sh"
 chmod +x "$CLAUDE_DIR/ai-collab-wakeup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-auto-onboard.py"
+chmod +x "$CLAUDE_DIR/ai-collab-setup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-project-setup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-orchestrate.py"
 chmod +x "$CLAUDE_DIR/ai-collab-team.py"
@@ -281,6 +290,7 @@ green "CONTEXT.md script    → $CLAUDE_DIR/ai-collab-summary.py"
 green "Notifications script → $CLAUDE_DIR/ai-collab-check-notifications.py"
 green "Wakeup detector      → $CLAUDE_DIR/ai-collab-wakeup.py"
 green "Auto-onboard script  → $CLAUDE_DIR/ai-collab-auto-onboard.py"
+green "Unified setup        → $CLAUDE_DIR/ai-collab-setup.py"
 green "Project onboarding   → $CLAUDE_DIR/ai-collab-project-setup.py"
 green "Run orchestrator     → $CLAUDE_DIR/ai-collab-orchestrate.py"
 green "Team role onboarding → $CLAUDE_DIR/ai-collab-team.py"
@@ -645,7 +655,9 @@ bold "Step 6/6 — Project onboarding (optional)"
 
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 
-if [[ -n "$PROJECT_ROOT" ]]; then
+if [[ -n "$SKIP_PROJECT_SETUP" ]]; then
+  info "Project setup skipped — unified setup will migrate the current project after the global reinstall."
+elif [[ -n "$PROJECT_ROOT" ]]; then
   info "Detected project: $PROJECT_ROOT"
   if ask "Run agent-first onboarding for this project now?"; then
     if [[ -n "$YES" ]]; then
@@ -673,7 +685,7 @@ info "  Windsurf native  → .windsurfrules"
 info "  Copilot Chat     → .github/copilot-instructions.md"
 echo ""
 info "Run this any time inside a project:"
-info "  python3 ~/.claude/ai-collab-project-setup.py"
+info "  python3 ~/.claude/ai-collab-setup.py"
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
@@ -686,7 +698,7 @@ echo "    🪝 UserPromptSubmit    — shows notifications before each message"
 echo "    🪝 Stop hook           — auto-generates CONTEXT.md after each response"
 echo "    📨 Wakeup detector     — detects unread inbox tasks"
 echo "    🧭 Auto-onboard        — registers new agents after their first log"
-echo "    🧩 Project onboarding  — registers agents, IDE/container, model, rules"
+echo "    🧩 Unified setup       — updates globals, migrates the project, verifies health"
 echo "    🎛️  Run orchestrator    — director-selected multi-agent implementation runs"
 echo "    💬 Conversation helper — natural agent questions, proposals, decisions"
 echo "    👁️  Live observer       — writes .ai-collab/live semantic state snapshots"
@@ -696,7 +708,7 @@ echo "    🧭 Reboot recovery     — restores CONTEXT.md + wakeup retries afte
 echo "    📚 /collab skill       — collaboration commands available in Claude Code"
 echo ""
 echo "  Try it now — open Claude Code and type:"
-echo "    /collab setup          — set up a new project"
+echo "    /collab setup          — install/update globally and migrate this project"
 echo "    /collab read           — see what other AIs have been working on"
 echo "    /collab write          — save your current context"
 echo "    /collab assign codex [task]  — send a task to another AI"

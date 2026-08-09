@@ -26,7 +26,7 @@ Keep instructions action-oriented. Explain the *why* when something is non-obvio
 ## Testing
 
 Test the skill by:
-1. Installing it in `~/.claude/skills/collab/`
+1. Installing it in both `~/.claude/skills/collab/` and `~/.codex/skills/collab/`
 2. Running `/collab setup` in a test project
 3. Adding your tool's snippet to the appropriate rules file
 4. Verifying the AI reads and writes logs correctly

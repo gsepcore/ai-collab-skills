@@ -17,6 +17,7 @@ echo "  - ~/.claude/ai-collab-summary.py"
 echo "  - ~/.claude/ai-collab-check-notifications.py"
 echo "  - ~/.claude/ai-collab-wakeup.py"
 echo "  - ~/.claude/ai-collab-auto-onboard.py"
+echo "  - ~/.claude/ai-collab-setup.py"
 echo "  - ~/.claude/ai-collab-project-setup.py"
 echo "  - ~/.claude/ai-collab-orchestrate.py"
 echo "  - ~/.claude/ai-collab-team.py"
@@ -32,6 +33,7 @@ echo "  - ~/.ai-collab-last-check"
 echo "  - ~/.ai-collab-wakeup-events.json"
 echo "  - ~/.ai-collab-wakeup-state.json"
 echo "  - ~/.claude/skills/collab/"
+echo "  - ~/.codex/skills/collab/"
 echo "  - AI-collab hooks from ~/.claude/settings.json"
 echo ""
 echo "NOT removed: .ai-collab/ directories in your projects (your logs stay safe)"
@@ -67,6 +69,7 @@ fi
 [ -f "$HOME/.claude/ai-collab-check-notifications.py" ]  && rm -f "$HOME/.claude/ai-collab-check-notifications.py"  && echo "✓ Removed ai-collab-check-notifications.py"
 [ -f "$HOME/.claude/ai-collab-wakeup.py" ]               && rm -f "$HOME/.claude/ai-collab-wakeup.py"               && echo "✓ Removed ai-collab-wakeup.py"
 [ -f "$HOME/.claude/ai-collab-auto-onboard.py" ]         && rm -f "$HOME/.claude/ai-collab-auto-onboard.py"         && echo "✓ Removed ai-collab-auto-onboard.py"
+[ -f "$HOME/.claude/ai-collab-setup.py" ]                && rm -f "$HOME/.claude/ai-collab-setup.py"                && echo "✓ Removed ai-collab-setup.py"
 [ -f "$HOME/.claude/ai-collab-project-setup.py" ]        && rm -f "$HOME/.claude/ai-collab-project-setup.py"        && echo "✓ Removed ai-collab-project-setup.py"
 [ -f "$HOME/.claude/ai-collab-orchestrate.py" ]          && rm -f "$HOME/.claude/ai-collab-orchestrate.py"          && echo "✓ Removed ai-collab-orchestrate.py"
 [ -f "$HOME/.claude/ai-collab-team.py" ]                 && rm -f "$HOME/.claude/ai-collab-team.py"                 && echo "✓ Removed ai-collab-team.py"
@@ -101,6 +104,10 @@ done
 SKILL_DIR="$HOME/.claude/skills/collab"
 if [ -d "$SKILL_DIR" ]; then
     rm -rf "$SKILL_DIR" && echo "✓ Removed Claude Code skill (~/.claude/skills/collab/)"
+fi
+CODEX_SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/collab"
+if [ -d "$CODEX_SKILL_DIR" ]; then
+    rm -rf "$CODEX_SKILL_DIR" && echo "✓ Removed Codex skill ($CODEX_SKILL_DIR/)"
 fi
 
 # Remove AI-collab hooks from ~/.claude/settings.json

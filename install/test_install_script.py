@@ -49,6 +49,15 @@ class TestInstallScript(unittest.TestCase):
         self.assertIn('add_plist_env "AI_COLLAB_AUTO_UPDATE" "${AI_COLLAB_AUTO_UPDATE:-1}"', text)
         self.assertIn('add_plist_env "AI_COLLAB_UPDATE_INTERVAL_SECONDS" "${AI_COLLAB_UPDATE_INTERVAL_SECONDS:-21600}"', text)
 
+    def test_unified_setup_is_installed_without_recursive_project_setup(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+
+        self.assertIn('copy_or_download "install/ai-collab-setup.py"', text)
+        self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-setup.py"', text)
+        self.assertIn('copy_or_download "SKILL.md"                      "$CODEX_SKILL_DIR/SKILL.md"', text)
+        self.assertIn('SKIP_PROJECT_SETUP="${AI_COLLAB_SKIP_PROJECT_SETUP:-}"', text)
+        self.assertIn('if [[ -n "$SKIP_PROJECT_SETUP" ]]; then', text)
+
     def test_recovery_is_installed_and_configured(self):
         text = INSTALL_SH.read_text(encoding="utf-8")
 

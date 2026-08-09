@@ -162,23 +162,31 @@ This is an internal-first execution contract, not a narration feature. With reci
 
 ## Command: /collab setup
 
-First-time setup on a new project, AND safe to re-run later when a new AI joins. Idempotent.
+Use one idempotent command for first-time installation, global updates, existing-project migration, and final health verification.
 
 **Steps:**
 
 1. Find project root.
-2. Run the deterministic onboarding helper:
+2. Run the deterministic unified setup helper:
 
    ```bash
-   python3 ~/.claude/ai-collab-project-setup.py --root "$ROOT" --refresh-protocol
+   python3 ~/.claude/ai-collab-setup.py --root "$ROOT"
    ```
 
-   If the helper is not installed, fall back to the bundled copy in this repo: `install/ai-collab-project-setup.py`.
-3. The helper must ask/record:
+   If the helper is not installed but this repository is available, run `python3 install/ai-collab-setup.py --root "$ROOT" --installer-source .`. Otherwise bootstrap once with the published installer and then rerun `/collab setup`.
+3. Let the helper perform the complete lifecycle in this order:
+   - reinstall/update both Claude and Codex skill copies, helpers, hooks, daemon services, Codex bridge, and visible IDE bridge from the current release
+   - suppress the installer's nested project onboarding to prevent recursion
+   - preserve the existing `agents.json` roster, models, container, custom agents, roles, inboxes, runs, task threads, discussions, and user-authored rule content
+   - refresh `PROTOCOL.md` with a timestamped backup and replace only managed AI Collab marker blocks
+   - regenerate `TEAM.md`, `agents.json`, `capabilities.json`, and relevant runtime rule blocks
+   - run strict global doctor checks and project capability checks
+   - write `.ai-collab/setup-report.json` with before/after fingerprints, preservation results, migration status, and reload guidance
+4. Ask/record project values only when they are not already present:
    - IDE/container: `antigravity`, `cursor`, `vscode`, `windsurf`, `terminal`, `other`
    - agents: `claude-code`, `opencode`, `codex`, `aider`, `hermes`, `cursor-native`, `windsurf-native`, `copilot-chat`, or custom
    - LLM model for each agent, e.g. `openai/gpt-5.5`, `anthropic/claude-opus-4.7`, `minimax/m2.7`
-4. Verify these files exist after setup:
+5. Verify these files exist after setup:
    - `.ai-collab/PROTOCOL.md`
    - `.ai-collab/TEAM.md`
    - `.ai-collab/agents.json`
@@ -186,7 +194,7 @@ First-time setup on a new project, AND safe to re-run later when a new AI joins.
    - `.ai-collab/roles.json` after development-team role onboarding
    - `.ai-collab/inbox-all.md`
    - the relevant agent rules files
-5. Report what was done in one line per agent:
+6. Report what was done in one line per agent:
 
    ```
    ✓ claude-code → CLAUDE.md (created/appended)
@@ -195,12 +203,13 @@ First-time setup on a new project, AND safe to re-run later when a new AI joins.
    ✓ cursor-native → .cursorrules (created/appended)
    ```
 
-6. Run `/collab write` immediately to log Claude's current context.
-7. Start `/collab monitor` automatically for this project in the current Claude Code session. Do not ask the user to run it manually. If a monitor for this project is already active, keep it and report "monitor already active." If the current Claude Code runtime cannot launch a persistent Monitor/Task, say that clearly and rely on the installed daemon + macOS/UserPromptSubmit notifications as the fallback.
-8. If `.ai-collab/roles.json` does not exist, run `/collab team configure`. Show every registered agent and ask the user to choose one primary owner for each standard development role. Allow one agent to own multiple roles and allow explicit vacancies.
-9. Summarize the registered agents, their containers, models, development-team roles, exact rules files created, and whether the live monitor is active.
+7. For an already-running project, start one setup-refresh discussion with every registered agent. Ask each agent to read its refreshed rule block plus `.ai-collab/capabilities.json` and append its own acknowledgement. Apply the internal-first grace period and visible fallback; do not claim an agent refreshed until its agent-authored acknowledgement exists.
+8. Run `/collab write` immediately to log the current context.
+9. Start `/collab monitor` automatically for this project in the current Claude Code session. Do not ask the user to run it manually. If a monitor for this project is already active, keep it and report "monitor already active." If the current runtime cannot launch a persistent Monitor/Task, say that clearly and rely on the installed daemon + prompt hooks as the fallback.
+10. If `.ai-collab/roles.json` does not exist, run `/collab team configure`. Show every registered agent and ask the user to choose one primary owner for each standard development role. Allow one agent to own multiple roles and allow explicit vacancies.
+11. Summarize the global install, registered agents, containers, models, development-team roles, preservation audit, exact rules files, doctor result, agent acknowledgements, and whether one IDE window reload is recommended.
 
-**Re-run behavior:** This command is idempotent. Re-running it after a new AI joins the project will detect the new AI, append its rules block to its rules file (idempotent — skipped if already there), and merge it into `TEAM.md`. Nothing existing is overwritten or removed.
+**Re-run behavior:** Treat every invocation as install-or-migrate. Re-running it updates the global installation and current project to the same release, adds newly detected agents, refreshes managed blocks without duplication, and fails honestly if an existing inbox, run, role file, task thread, or discussion changed during migration. Never remove user-authored content or collaboration history.
 
 ## Command: /collab update
 
