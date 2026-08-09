@@ -72,6 +72,33 @@ class TestConverse(unittest.TestCase):
         self.assertIn("to: opencode", text)
         self.assertIn("@opencode Should we add an adapter?", text)
 
+    def test_incidental_at_annotation_is_not_registered_as_participant(self):
+        (self.collab / "agents.json").write_text(
+            json.dumps(
+                {
+                    "agents": [
+                        {"agent": "codex"},
+                        {"agent": "opencode"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.run_cli(
+            "start",
+            "--author",
+            "opencode",
+            "--topic",
+            "Visual coordinates",
+            "--to",
+            "codex",
+            "--message",
+            "The Codex label is visible @left:1408 in the right pane.",
+        )
+
+        meta, _body = _mod.parse_frontmatter(self.only_discussion().read_text(encoding="utf-8"))
+        self.assertEqual(meta["participants"], "codex, opencode")
+
     def test_reply_proposal_and_json_summary(self):
         self.run_cli(
             "start",

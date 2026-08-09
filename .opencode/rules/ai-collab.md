@@ -17,8 +17,9 @@ Mandatory preflight before EVERY response, analysis, or tool action:
 5. Read recent task threads `.ai-collab/thread-*.md` and natural discussions `.ai-collab/discussions/*.md` where you are mentioned or listed as a participant. Answer direct `@opencode` mentions before unrelated work.
 6. Read the latest session logs in `.ai-collab/*.md` from other agents, skipping `PROTOCOL.md`, `CONTEXT.md`, `TEAM.md`, inbox files, and your own current-session log. Respect every `Do Not Touch (Avoid Conflicts)` section before analyzing, replying, or editing.
 7. If `.ai-collab/live/summary.json` exists, read it for current agent phases, dirty files, alerts, and open conversations before making coordination decisions.
-8. Keep live observability updated in `.ai-collab/live/opencode.agent.json` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
-9. After every response, create or update your session log at `.ai-collab/opencode-{YYYYMMDD-HHMMSS}.md`.
+8. Read `.ai-collab/live/visual-roster.json` when it exists. For every visible conversation or assigned task, open its fresh `screenshot.path` with your native image capability before responding. If the current model cannot accept images, run `python3 ~/.claude/ai-collab-see.py --root <project> --image <screenshot> --agents <participants>` so the actual PNG pixels are processed directly; cite its SHA-256 and `direct-pixel-ocr` result. A prewritten sidecar or metadata alone is not sight. Identify your own surface and the other required agents, then cross-check the roster's project, PID, TTY, port ownership, and recent logs.
+9. Keep live observability updated in `.ai-collab/live/opencode.agent.json` before and after meaningful work: commands, tests, file edits, blockers, and handoffs.
+10. After every response, create or update your session log at `.ai-collab/opencode-{YYYYMMDD-HHMMSS}.md`.
 
 Development-team role contract:
 - Use `.ai-collab/roles.json` to decide the default owner for work by discipline.
@@ -36,13 +37,21 @@ Inbox claim contract:
 Natural conversation contract:
 - Use `python3 ~/.claude/ai-collab-converse.py` when you need another agent's judgement instead of hiding the question in a private log.
 - Ask concrete questions with `question --to other-agent`, propose implementation options with `proposal`, record accepted choices with `decision`, and mark blockers with `blocker`.
-- Mention agents explicitly with `@slug`; the daemon wakes the mentioned agent from task threads and `.ai-collab/discussions/*.md`.
+- Mention agents explicitly with `@slug`; the helper must synchronously submit the message to each agent's project-matched visible interface. Daemon retries are recovery, not evidence that an agent responded.
+- When a visible collaboration prompt reaches you, read the entire referenced thread and append your own substantive opinion, risks, or recommendation to that same thread before unrelated work. Mention the director and any agent whose response you need.
+- Inspect the fresh team screenshot with native vision or the direct-pixel helper before replying. Your thread response must contain `visual_evidence: <screenshot path>` and `visible_peers: <slugs actually seen>`, plus the direct-vision SHA-256 when using the fallback. If neither visual path works or any surface/project/process identity disagrees, write a blocker; do not claim you saw the team.
+- If you are the director and the user asks the team to execute work, begin with `ai-collab-orchestrate.py convene`; require a real thread reply from every requested participant before presenting their opinions or assigning implementation tasks.
+- The director must require both pre-turn and post-turn visual proofs. `.ai-collab/live/visual-roster.json` must say `status: verified` for every required participant and must distinguish agent-owned ports from IDE-bridge routing ports.
+- Apply surface-specific identity evidence. Terminal agents require one exact project PID/TTY and their own listening port when applicable. An IDE-native chat has no invented child PID or port: verify the captured window PID is an ancestor-host of the exact project bridge, plus a position-bound top-band agent label and actual pane pixels (`registered-shared-project-host+position-bound-top-band-label`).
+- Never roleplay another agent or claim it started, reviewed, agreed, or completed work from an inbox write, daemon event, process listing, or prompt submission alone.
+- Evidence vocabulary is strict: `queued` requires an inbox/thread on disk; `submitted visibly` requires a successful project-matched adapter result; `visually verified` requires a fresh screenshot plus verified visual roster; `responded` requires an agent-authored thread message with its visual attestation; `started` requires the agent's own inbox claim/live update; `completed` requires `status: done`, `done_at`, and an agent-authored handoff.
+- If visible delivery or the required reply fails, report exactly which agent failed and stop attributing work to it. Never fall back to a hidden/headless worker for a visible team conversation.
 - Do not edit previous messages. Correct yourself by appending a new message.
 
 Required log frontmatter:
 ```yaml
 ---
-ai: OpenCode (unknown)
+ai: OpenCode (unknown model)
 agent: opencode
 container: unknown
 model: unknown

@@ -97,6 +97,25 @@ def find_mentions(message: str) -> list[str]:
     return sorted(dict.fromkeys(match.group(1).lower() for match in MENTION_RE.finditer(message)))
 
 
+def registered_agent_slugs(root: Path) -> set[str]:
+    payload = load_json_file(collab_dir(root) / "agents.json")
+    rows = payload.get("agents") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return set()
+    return {
+        normalize_slug(str(row.get("agent", "")))
+        for row in rows
+        if isinstance(row, dict) and str(row.get("agent", "")).strip()
+    }
+
+
+def load_json_file(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
 def atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=str(path.parent), encoding="utf-8") as tmp:
@@ -291,8 +310,17 @@ def append_message(
                 meta.setdefault("run_id", run_id)
             meta["updated"] = timestamp
 
+        registered = registered_agent_slugs(root)
         mentioned = find_mentions(message)
+        if registered:
+            mentioned = [slug for slug in mentioned if slug in registered]
         participants = parse_csv(meta.get("participants"))
+        if registered:
+            explicitly_addressed = {author, *recipients}
+            participants = [
+                slug for slug in participants
+                if slug in registered or slug in explicitly_addressed
+            ]
         for slug in [author, *recipients, *mentioned]:
             if slug and slug not in participants:
                 participants.append(slug)
