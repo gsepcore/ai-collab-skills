@@ -157,7 +157,7 @@ discussions/*.md       natural agent questions, proposals, decisions, blockers
 @opencode              wake OpenCode from the latest conversation message
 ```
 
-Conversation mentions create wake events with `source_type: thread`, `reason: thread-mention`, `source_path`, `thread_path`, and the target slug. They do not claim or mutate the inbox task. The inbox remains the canonical task state; the thread/discussion is the conversation layer agents use to ask questions, compare options, assign review, record decisions, and report progress to each other.
+Conversation mentions create wake events with `source_type: thread`, `reason: thread-mention`, `source_path`, `thread_path`, and the target slug. Before synchronous dispatch, the helper forces a fresh project screenshot and writes both the current `.ai-collab/live/visual-roster.json` and an immutable `.visual-roster.json` beside that screenshot. Every invited agent must inspect the actual PNG—natively or through `ai-collab-see.py`, which processes the pixels directly for text-only models—and include `visual_evidence:` plus `visible_peers:` in its own thread reply. The roster maps surface, host/agent process, PID/TTY, owned ports, bridge route, and logs. Any mismatch or missing proof exits nonzero; ports/logs alone are not sight.
 
 ### 3. Each project is its own isolation bubble
 
@@ -371,7 +371,8 @@ python3 ~/.claude/ai-collab-converse.py --root "$PWD" start \
   --topic "Billing API boundary" \
   --to opencode \
   --type question \
-  --message "Can you compare the adapter approach with changing the shared API directly?"
+  --message "Can you compare the adapter approach with changing the shared API directly?" \
+  --wait-seconds 180
 
 python3 ~/.claude/ai-collab-converse.py --root "$PWD" proposal \
   --thread discussion-20260616-120000-billing-api-boundary \
@@ -385,7 +386,7 @@ python3 ~/.claude/ai-collab-converse.py --root "$PWD" decision \
   --message "Decision: use the adapter. Do not change the public API in this task."
 ```
 
-Task-bound conversations can still use the same helper with `--kind task --task-id TASK`, which writes the compatible `.ai-collab/thread-{task_id}.md` file. General discussions go to `.ai-collab/discussions/`. In both cases, direct `@slug` mentions wake the mentioned agent when the daemon adapter is running, and `/collab observe` shows open conversations in the live project summary.
+Task-bound conversations can still use the same helper with `--kind task --task-id TASK`, which writes the compatible `.ai-collab/thread-{task_id}.md` file. General discussions go to `.ai-collab/discussions/`. Direct `@slug` mentions run mandatory pre/post visual proofs, are submitted immediately to exact visible interfaces, and `--wait-seconds` requires a real response plus visual attestation from every recipient. Use `--queue-only` only when visible execution is explicitly not wanted.
 
 ### `/collab orchestrate`
 
@@ -421,6 +422,13 @@ python3 ~/.claude/ai-collab-orchestrate.py init \
   --director codex \
   --agents claude-code,opencode \
   --title billing-settings
+
+python3 ~/.claude/ai-collab-orchestrate.py convene \
+  --run-id 20260527-120000-billing-settings \
+  --actor codex \
+  --participants claude-code,opencode \
+  --message "Discuss the goal. Give your technical opinion, risks, and recommended plan." \
+  --wait-seconds 180
 
 python3 ~/.claude/ai-collab-orchestrate.py add-task \
   --run-id 20260527-120000-billing-settings \
@@ -513,9 +521,9 @@ Thirteen components keep Claude informed and able to dispatch inbox tasks:
 1. **launchd daemon** (macOS) / **cron** (Linux) — watches every `.ai-collab/` directory on your machine every 15 seconds. Tags each notification with the `project` field (basename of the project root) so notifications can be filtered downstream. Auto-starts on login, survives sleep and reboots.
 2. **Notification queue** — `~/.ai-collab-notifications.json` is a lightweight, capped (50 entries) message queue written atomically (`tempfile + os.replace`) to survive concurrent writes. The daemon writes to it; the hooks read from it.
 3. **Notification reader script** — `~/.claude/ai-collab-check-notifications.py` is invoked by the `UserPromptSubmit` hook. It uses an `fcntl` lock to coordinate with the daemon, **filters notifications by active project**, caps output to 10 items / 500 chars per message / 4 KB total, drops notifications older than 24 h, defends against malformed JSON, and always exits 0 (never blocks your prompt). All limits are tunable — see [Environment variables](#environment-variables) below.
-4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md`, `thread-*.md`, and `discussions/*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; conversation mentions use `reason: thread-mention`. **By default it uses `visible`** so OpenCode/Codex get invisible synthetic wakeups in their running panels with zero manual activation; you can downgrade to `cli` (headless execution) or `notify-only` (safe logging only) via `AI_COLLAB_WAKEUP_ADAPTER`.
-5. **Natural conversation helper** — `~/.claude/ai-collab-converse.py` creates append-only task threads and general discussions with typed messages (`question`, `proposal`, `decision`, `blocker`, `review`, `handoff`) that agents can read and answer naturally.
-6. **Live observer** — `~/.claude/ai-collab-observer.py` writes `.ai-collab/live/{agent}.json`, `summary.json`, `health.json`, screenshot PNGs, and `.semantic.json` sidecars every daemon tick. It combines inbox status, latest logs, open conversations, agent self-reports, running process hints tied to the project fingerprint, git dirtiness, stale-claim alerts, OCR/metadata vision, and project-scoped automatic screenshots.
+4. **Wakeup detector** — `~/.claude/ai-collab-wakeup.py` scans `inbox-*.md`, `thread-*.md`, and `discussions/*.md` separately from normal log notifications. It writes durable wake events to `~/.ai-collab-wakeup-events.json`, tracks retry/dedupe state in `~/.ai-collab-wakeup-state.json`, logs to `/tmp/ai-collab-wakeup.log`, and dispatches the configured adapter. Direct inbox tasks use `reason: unread-inbox`; conversation mentions use `reason: thread-mention`. **By default it uses `visible`**: OpenCode receives the prompt in its active TUI and Claude Code receives it in the exact project-matched integrated terminal through the installed IDE bridge. Visible failure is reported; it does not silently switch to `cli`/headless execution.
+5. **Natural conversation helper** — `~/.claude/ai-collab-converse.py` creates append-only task threads and general discussions with typed messages (`question`, `proposal`, `decision`, `blocker`, `review`, `handoff`). Visible turns require pre/post screenshots and each recipient's agent-authored visual attestation.
+6. **Live observer and visual roster** — `~/.claude/ai-collab-observer.py` writes current/immutable rosters and screenshot evidence. `ai-collab-see.py` gives text-only agents direct computer vision over the PNG and reports its SHA-256. Terminal agents are bound to an exact project PID/TTY and their own port; native IDE chats require the captured host PID to be an ancestor of the exact project bridge, plus a position-bound label and actual pane pixels. No unrelated Electron window or fake per-panel PID/port is accepted.
 7. **Project onboarding** — `~/.claude/ai-collab-project-setup.py` creates the agent-first project manifest (`TEAM.md`, `agents.json`), welcome inbox, and runtime rules files. It records agent, container, and model explicitly so a fresh project does not depend on guesswork.
 8. **Auto-onboard detector** — `~/.claude/ai-collab-auto-onboard.py` runs from the daemon when a new `{slug}-{YYYYMMDD-HHMMSS}.md` log appears. Known slugs get an agent-specific `AI-COLLAB-START agent={slug}` rules block if missing, plus a merged `.ai-collab/TEAM.md` roster entry. Unknown slugs produce a low-priority `.ai-collab/inbox-all.md` notice telling Claude Code to run `/collab onboard {slug}`. The operation is idempotent and never overwrites existing rules content.
 9. **Run orchestrator** — `~/.claude/ai-collab-orchestrate.py` creates `.ai-collab/runs/{run_id}/`, records the selected director, writes safe task assignments to normal inboxes, and appends task-thread messages that agents can answer naturally.
@@ -625,7 +633,7 @@ All optional. Set them in your shell rc file (`~/.zshrc`, `~/.bashrc`, etc.) to 
 | `AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT` | `120` | Seconds before a CLI adapter run is considered failed. |
 | `AI_COLLAB_WAKEUP_CLI_PROJECTS` | _(empty = all projects)_ | Optional allowlist for executable adapters. By default, any project with a `.ai-collab/` directory is allowed — the user opted in by setting it up there. Set this only if you want to restrict the daemon to specific projects: comma-separated basenames or absolute paths. |
 | `AI_COLLAB_WAKEUP_CLI_TARGETS` | `codex,opencode,claude,claude-code,hermes,kimi,kilo` | Optional comma-separated target allowlist for CLI execution. |
-| `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode,kilo,hermes` | Optional comma-separated target allowlist for visible adapters. Falls back to `AI_COLLAB_WAKEUP_CLI_TARGETS` if set. |
+| `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode,claude,claude-code,kilo,hermes` | Optional comma-separated target allowlist for visible adapters. Falls back to `AI_COLLAB_WAKEUP_CLI_TARGETS` if set. |
 | `AI_COLLAB_WAKEUP_DRY_RUN` | _(off)_ | Set to `1` to record what would be woken without executing any CLI command. |
 | `AI_COLLAB_CODEX_BIN` | _(auto-detected)_ | Override the `codex` executable path used by the CLI adapter. |
 | `AI_COLLAB_OPENCODE_BIN` | _(auto-detected)_ | Override the `opencode` executable path used by the CLI adapter. |
@@ -700,12 +708,15 @@ On macOS, the first capture may trigger the normal Screen Recording permission p
 
 Behavior:
 
+- `@claude-code` or `inbox-claude-code.md` uses the installed `gsepcore.ai-collab-visible-bridge` extension to locate the exact integrated terminal by agent process and project cwd, reveal it, and submit the prompt as terminal input. Reload the IDE once after install/update so the bridge activates.
 - `@opencode` or `inbox-opencode.md` uses the OpenCode TUI endpoints: `POST /tui/clear-prompt`, `POST /tui/append-prompt`, then `POST /tui/submit-prompt`. This targets the visible prompt box instead of a background session, so the user can see the delegated task arrive. Set `AI_COLLAB_OPENCODE_SYNTHETIC=1` only if you explicitly prefer hidden prompts through `POST /session/{id}/prompt_async` and accept that this can feel like background/headless work when no visible response appears.
 - `@kilo` or `inbox-kilo.md` uses the same visible TUI endpoint pattern when a Kilo server is open. If Kilo returns HTTP 401, set `AI_COLLAB_KILO_BASIC_AUTH` or `AI_COLLAB_KILO_BEARER_TOKEN`.
 - `@hermes` or `inbox-hermes.md` can open/prefill the Hermes chat through `AI_COLLAB_HERMES_URI_TEMPLATE`. This is visible but may require the user to press send.
 - `@codex` or `inbox-codex.md` uses `antigravity chat --reuse-window --mode agent`. **Codex visible-tab wakeup remains degraded** — see "Known limitations" below.
 - `@kimi` supports ACP/CLI wakeups, but no verified visible-panel injection endpoint has been found yet.
 - If no visible panel/port/session exists, the adapter fails safely and normal retry/backoff applies.
+
+Visible prompt submission never marks an inbox as claimed. Only the target agent may claim it during its own real turn. Likewise, the director may say an agent "responded" only when that agent appended its own message to the shared thread.
 
 ### Known limitations — Codex visible-tab wakeup
 

@@ -35,7 +35,7 @@ All AIs write Markdown session logs to `{project-root}/.ai-collab/`.
 - Any AI with filesystem access can read any log
 - The daemon (if installed) detects new/updated logs within 15 seconds and notifies the user
 - The daemon also scans `inbox-*.md`, `thread-*.md`, and `discussions/*.md`: unread inboxes target an agent mailbox, while `@slug` mentions in conversations target that agent's monitor/adapter path.
-- The daemon also writes semantic live snapshots to `.ai-collab/live/{agent}.json`, `.ai-collab/live/summary.json`, `.ai-collab/live/health.json`, and `.ai-collab/live/director-alerts.jsonl`. Process hints and screenshots are project-scoped: the default screenshot mode captures only a visible window matching the current project fingerprint and skips unrelated workspaces. Screenshots and `.semantic.json` sidecars are written under `.ai-collab/live/screenshots/` by default unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`. The installer attempts to install the local OCR engine (`tesseract`) by default; if unavailable, semantic vision remains metadata-only and the health file explains why.
+- The daemon also writes semantic live snapshots to `.ai-collab/live/{agent}.json`, `.ai-collab/live/summary.json`, `.ai-collab/live/health.json`, `.ai-collab/live/visual-roster.json`, and `.ai-collab/live/director-alerts.jsonl`. Process hints and screenshots are project-scoped. The visual roster correlates the real image with each visible surface, exact-project PID/TTY/process, owned ports, bridge routes, and recent logs. An IDE bridge's local port belongs to routing infrastructure; it is never mislabeled as the agent's own port. Screenshots and `.semantic.json` sidecars live under `.ai-collab/live/screenshots/`; Retina images are downscaled only in a disposable OCR copy while the original evidence remains unchanged.
 
 Every log should include these frontmatter fields when the agent supports them:
 
@@ -115,18 +115,24 @@ Rules for every agent:
 - Use `@slug` to ask another agent for help or review. Example: `@codex please verify the release script`.
 - Do not edit past thread messages. Append corrections as new messages.
 - Do not write to a thread/discussion whose frontmatter says `status: closed`.
+- A direct mention must be submitted to the project-matched visible interface. Never replace visible delivery with a hidden worker.
+- Before a visible turn, require a fresh screenshot and its immutable `.visual-roster.json` evidence file with every requested participant verified. Each recipient must open the PNG with native vision or run `ai-collab-see.py` so the actual pixels are processed directly, identify itself and its peers, and compare that sight with project/PID/TTY/port/log evidence.
+- On a visible collaboration wake, append a substantive opinion/recommendation to the same thread, mention the director, and include `visual_evidence: <screenshot path>` plus `visible_peers: <slugs actually seen>` before unrelated work.
+- Require a fresh post-turn visual proof. A wake event or adapter success proves only submission. `visually verified` requires the image and roster; `responded` requires a compliant agent-authored thread message; `started` requires the agent's own inbox claim/live update; `completed` requires done state plus handoff evidence.
+- Missing/stale images, failed OCR, ambiguous processes/ports, unreadable visual evidence, or any identity mismatch are blockers. Fail closed rather than substituting logs, ports, or a hidden worker.
+- Use the surface-specific standard recorded by the roster. Terminal/TUI surfaces require an exact project PID/TTY and their own port when one exists. IDE-native chat panels share the outer IDE process and may have no agent-owned port; require the captured host PID to be an ancestor of the exact project bridge, then verify the position-bound label and actual pane pixels (`registered-shared-project-host+position-bound-top-band-label`). Shared hosting is expected, but an unrelated Electron window fails.
 
 Use the deterministic helper when available:
 
 ```bash
-python3 ~/.claude/ai-collab-converse.py start --author codex --topic "API boundary" --to opencode --message "Can you compare option A vs B?"
+python3 ~/.claude/ai-collab-converse.py start --author codex --topic "API boundary" --to opencode --message "Can you compare option A vs B?" --wait-seconds 180
 python3 ~/.claude/ai-collab-converse.py question --thread discussion-20260616-120000-api-boundary --author opencode --to codex --message "Which files are safe to touch?"
 python3 ~/.claude/ai-collab-converse.py decision --thread discussion-20260616-120000-api-boundary --author codex --message "Decision: keep API v1 stable and add an adapter."
 ```
 
 Messages include a parseable `type:` field (`question`, `answer`, `proposal`, `decision`, `blocker`, `review`, `handoff`, or `message`) so agents can skim intent quickly.
 
-The daemon watches conversation updates. When the latest message mentions `@codex`, `@opencode`, `@claude`, or another registered slug, it creates a wake event for that target without changing inbox state. This is the per-agent monitor path: each agent has an addressable mailbox plus a mention-driven conversation channel.
+The conversation helper runs mandatory pre/post visual proofs and dispatches direct mentions synchronously through the visible adapter, while the daemon provides retries/recovery. When the latest message mentions `@codex`, `@opencode`, `@claude`, or another registered slug, a wake event targets that agent without changing inbox claim state. Only the target agent's own visually attested response or claim advances evidence.
 
 ---
 
@@ -151,6 +157,8 @@ Workers must follow these rules:
 - Keep your session log updated after every meaningful change.
 
 The deterministic helper is `python3 ~/.claude/ai-collab-orchestrate.py`.
+
+Before task assignment, the director runs `convene` and waits for one real thread response per participant. If any interface or response fails, the director reports the named failure and must not manufacture that agent's opinion or progress.
 
 ---
 

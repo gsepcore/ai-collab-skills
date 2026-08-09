@@ -22,9 +22,11 @@ echo "  - ~/.claude/ai-collab-orchestrate.py"
 echo "  - ~/.claude/ai-collab-team.py"
 echo "  - ~/.claude/ai-collab-converse.py"
 echo "  - ~/.claude/ai-collab-observer.py"
+echo "  - ~/.claude/ai-collab-see.py"
 echo "  - ~/.claude/ai-collab-doctor.py"
 echo "  - ~/.claude/ai-collab-update.py"
 echo "  - ~/.claude/ai-collab-codex-bridge.py"
+echo "  - gsepcore.ai-collab-visible-bridge IDE extension and its local build files"
 echo "  - ~/.ai-collab-notifications.json"
 echo "  - ~/.ai-collab-last-check"
 echo "  - ~/.ai-collab-wakeup-events.json"
@@ -70,9 +72,24 @@ fi
 [ -f "$HOME/.claude/ai-collab-team.py" ]                 && rm -f "$HOME/.claude/ai-collab-team.py"                 && echo "✓ Removed ai-collab-team.py"
 [ -f "$HOME/.claude/ai-collab-converse.py" ]             && rm -f "$HOME/.claude/ai-collab-converse.py"             && echo "✓ Removed ai-collab-converse.py"
 [ -f "$HOME/.claude/ai-collab-observer.py" ]             && rm -f "$HOME/.claude/ai-collab-observer.py"             && echo "✓ Removed ai-collab-observer.py"
+[ -f "$HOME/.claude/ai-collab-see.py" ]                  && rm -f "$HOME/.claude/ai-collab-see.py"                  && echo "✓ Removed ai-collab-see.py"
 [ -f "$HOME/.claude/ai-collab-doctor.py" ]               && rm -f "$HOME/.claude/ai-collab-doctor.py"               && echo "✓ Removed ai-collab-doctor.py"
 [ -f "$HOME/.claude/ai-collab-update.py" ]               && rm -f "$HOME/.claude/ai-collab-update.py"               && echo "✓ Removed ai-collab-update.py"
 [ -f "$HOME/.claude/ai-collab-codex-bridge.py" ]         && rm -f "$HOME/.claude/ai-collab-codex-bridge.py"         && echo "✓ Removed ai-collab-codex-bridge.py"
+
+for ide_cli in \
+    "$(command -v antigravity-ide 2>/dev/null || true)" \
+    "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide" \
+    "$(command -v code 2>/dev/null || true)" \
+    "$(command -v cursor 2>/dev/null || true)" \
+    "$(command -v windsurf 2>/dev/null || true)"; do
+    [ -n "$ide_cli" ] && [ -x "$ide_cli" ] || continue
+    "$ide_cli" --uninstall-extension gsepcore.ai-collab-visible-bridge >/dev/null 2>&1 || true
+done
+[ -f "$HOME/.claude/ai-collab-build-vscode-bridge.py" ] && rm -f "$HOME/.claude/ai-collab-build-vscode-bridge.py"
+[ -f "$HOME/.claude/ai-collab-visible-bridge.vsix" ] && rm -f "$HOME/.claude/ai-collab-visible-bridge.vsix"
+[ -d "$HOME/.claude/ai-collab-vscode-bridge" ] && rm -rf "$HOME/.claude/ai-collab-vscode-bridge"
+[ -d "$HOME/.ai-collab/ide-bridges" ] && rm -rf "$HOME/.ai-collab/ide-bridges"
 
 # Remove notification queue files
 [ -f "$HOME/.ai-collab-notifications.json" ] && rm -f "$HOME/.ai-collab-notifications.json" && echo "✓ Removed notifications queue"

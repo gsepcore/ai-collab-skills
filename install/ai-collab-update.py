@@ -14,6 +14,7 @@ import json
 import os
 import stat
 import subprocess
+import shutil
 import sys
 import tempfile
 import urllib.error
@@ -31,6 +32,8 @@ RAW_BASE = os.environ.get(
 CLAUDE_DIR = Path.home() / ".claude"
 SKILL_DIR = CLAUDE_DIR / "skills" / "collab"
 STATE_FILE = CLAUDE_DIR / "ai-collab-update-state.json"
+IDE_BRIDGE_SOURCE = CLAUDE_DIR / "ai-collab-vscode-bridge"
+IDE_BRIDGE_VSIX = CLAUDE_DIR / "ai-collab-visible-bridge.vsix"
 
 GLOBAL_FILES: list[tuple[str, Path, bool]] = [
     ("SKILL.md", SKILL_DIR / "SKILL.md", False),
@@ -45,10 +48,14 @@ GLOBAL_FILES: list[tuple[str, Path, bool]] = [
     ("install/ai-collab-team.py", CLAUDE_DIR / "ai-collab-team.py", True),
     ("install/ai-collab-converse.py", CLAUDE_DIR / "ai-collab-converse.py", True),
     ("install/ai-collab-observer.py", CLAUDE_DIR / "ai-collab-observer.py", True),
+    ("install/ai-collab-see.py", CLAUDE_DIR / "ai-collab-see.py", True),
     ("install/ai-collab-doctor.py", CLAUDE_DIR / "ai-collab-doctor.py", True),
     ("install/ai-collab-update.py", CLAUDE_DIR / "ai-collab-update.py", True),
     ("install/ai-collab-recover.py", CLAUDE_DIR / "ai-collab-recover.py", True),
     ("install/ai-collab-codex-bridge.py", CLAUDE_DIR / "ai-collab-codex-bridge.py", True),
+    ("install/build-vscode-bridge.py", CLAUDE_DIR / "ai-collab-build-vscode-bridge.py", True),
+    ("install/vscode-ai-collab-bridge/package.json", IDE_BRIDGE_SOURCE / "package.json", False),
+    ("install/vscode-ai-collab-bridge/extension.js", IDE_BRIDGE_SOURCE / "extension.js", False),
 ]
 
 
@@ -100,6 +107,48 @@ def update_global(timeout: float, dry_run: bool) -> dict[str, Any]:
                 mode = dest.stat().st_mode
                 dest.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return {"changed": changed, "unchanged": unchanged, "errors": errors}
+
+
+def ide_cli_candidates() -> list[Path]:
+    paths = [
+        shutil.which("antigravity-ide"),
+        "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
+        shutil.which("code"),
+        "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+        shutil.which("cursor"),
+        "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+        shutil.which("windsurf"),
+        "/Applications/Windsurf.app/Contents/Resources/app/bin/windsurf",
+    ]
+    result: list[Path] = []
+    for value in paths:
+        if not value:
+            continue
+        path = Path(value)
+        if path.exists() and os.access(path, os.X_OK) and path not in result:
+            result.append(path)
+    return result
+
+
+def refresh_visible_bridge(dry_run: bool) -> dict[str, Any]:
+    builder = CLAUDE_DIR / "ai-collab-build-vscode-bridge.py"
+    if not builder.exists() or not (IDE_BRIDGE_SOURCE / "package.json").exists():
+        return {"status": "failed", "reason": "visible bridge source is incomplete"}
+    commands: list[list[str]] = [
+        [sys.executable, str(builder), "--source", str(IDE_BRIDGE_SOURCE), "--output", str(IDE_BRIDGE_VSIX)]
+    ]
+    commands.extend([[str(cli), "--install-extension", str(IDE_BRIDGE_VSIX), "--force"] for cli in ide_cli_candidates()])
+    if dry_run:
+        return {"status": "dry-run", "commands": commands}
+    results = []
+    for command in commands:
+        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        results.append({"command": command, "returncode": completed.returncode, "stderr": completed.stderr[-500:]})
+        if completed.returncode != 0:
+            return {"status": "failed", "results": results}
+    if len(commands) == 1:
+        return {"status": "failed", "reason": "no supported IDE CLI found", "results": results}
+    return {"status": "updated", "results": results, "restart_required": True}
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -233,6 +282,16 @@ def main(argv: list[str] | None = None) -> int:
         state["global"] = update_global(args.timeout, args.dry_run)
         if state["global"].get("errors"):
             exit_code = 1
+        bridge_changed = any(
+            "ai-collab-vscode-bridge" in path or "build-vscode-bridge" in path
+            for path in state["global"].get("changed", [])
+        )
+        if bridge_changed or not IDE_BRIDGE_VSIX.exists():
+            state["visible_bridge"] = refresh_visible_bridge(args.dry_run)
+            if state["visible_bridge"].get("status") == "failed":
+                exit_code = 1
+        else:
+            state["visible_bridge"] = {"status": "unchanged"}
 
     if not args.global_only:
         roots = [Path(p).expanduser().resolve() for p in args.project]

@@ -47,10 +47,12 @@ class TestObserver(unittest.TestCase):
                 "AI_COLLAB_OBSERVER_SEMANTIC_OCR",
                 "AI_COLLAB_OBSERVER_TESSERACT_BIN",
                 "AI_COLLAB_PROJECT_ALIASES",
+                "AI_COLLAB_IDE_BRIDGE_DIR",
             )
         }
         for key in self._env:
             os.environ.pop(key, None)
+        os.environ["AI_COLLAB_IDE_BRIDGE_DIR"] = str(self.root / "empty-bridges")
         (self.collab / "agents.json").write_text(
             json.dumps(
                 {
@@ -415,6 +417,131 @@ to: opencode
 
         self.assertEqual(summary["screenshot"]["semantic"]["state"], "error")
         self.assertTrue(any(alert["type"] == "visual-error" for alert in summary["alerts"]))
+
+    def test_visual_proof_requires_real_surfaces_and_maps_visible_port(self):
+        os.environ["AI_COLLAB_OBSERVER_TESSERACT_BIN"] = "/tmp/fake-tesseract"
+        tsv = "\n".join(
+            [
+                "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+                "1\t1\t0\t0\t0\t0\t0\t0\t1800\t1100\t-1\t",
+                "5\t1\t1\t1\t1\t1\t80\t30\t100\t20\t95\tOpenCode",
+                "5\t1\t1\t1\t1\t2\t1450\t30\t80\t20\t96\tCodex",
+            ]
+        )
+
+        def runner(command, **kwargs):
+            if command[:2] == ["osascript", "-e"]:
+                return Completed(stdout=f"Electron\t900\t{self.root.name} — Claude Code\t0,0,1800,1100\n")
+            if command[:2] == ["screencapture", "-x"]:
+                Path(command[-1]).write_bytes(b"png")
+                return Completed()
+            if command[0].endswith("sips"):
+                return Completed()
+            if command[0] == "/tmp/fake-tesseract":
+                return Completed(stdout=tsv)
+            if command[:2] == ["ps", "-p"]:
+                return Completed(stdout="ttys021\n")
+            if command[:2] == ["ps", "-axo"]:
+                return Completed(stdout=f"25233 00:01 opencode --port 60466 --dir {self.root}\n")
+            return self.fake_runner(command, **kwargs)
+
+        original_inventory = _mod.ide_bridge_inventory
+        _mod.ide_bridge_inventory = lambda root, runner: [
+            {
+                "owner": "ide-visible-bridge",
+                "pid": 901,
+                "port": 52678,
+                "ide": "Antigravity IDE",
+                "project_paths": [str(self.root)],
+                "inventory_status": "ok",
+                "terminals": [],
+                "host_ancestor_pids": [900],
+            }
+        ]
+        try:
+            summary = _mod.observe_project(
+                self.collab,
+                now=self.now,
+                runner=runner,
+                system="Darwin",
+                force_screenshot=True,
+                visual_required_agents=["codex", "opencode"],
+                screenshot_tag="test",
+            )
+        finally:
+            _mod.ide_bridge_inventory = original_inventory
+        roster = json.loads((self.collab / "live" / "visual-roster.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(summary["visual_roster"]["status"], "verified")
+        self.assertEqual(roster["screenshot"]["visible_agents"], ["codex", "opencode"])
+        self.assertTrue(Path(roster["evidence_path"]).exists())
+        codex = next(item for item in roster["agents"] if item["agent"] == "codex")
+        self.assertEqual(codex["host_surface"]["host_pid"], "900")
+        self.assertEqual(
+            codex["host_surface"]["evidence_standard"],
+            "registered-shared-project-host+position-bound-top-band-label",
+        )
+        self.assertTrue(codex["host_surface"]["registered_host_match"])
+        self.assertIsNone(codex["host_surface"]["agent_owned_port"])
+        opencode = next(item for item in roster["agents"] if item["agent"] == "opencode")
+        self.assertEqual(opencode["owned_ports"][0]["port"], 60466)
+        self.assertEqual(opencode["processes"][0]["tty"], "ttys021")
+
+    def test_native_chat_rejects_unregistered_electron_host(self):
+        live = self.collab / "live"
+        screenshots = live / "screenshots"
+        screenshots.mkdir(parents=True)
+        image = screenshots / "team.png"
+        image.write_bytes(b"png")
+        semantic_path = screenshots / "team.semantic.json"
+        semantic_path.write_text(
+            json.dumps(
+                {
+                    "project_match": True,
+                    "visible_agents": ["codex"],
+                    "agent_visual_hits": {"codex": [{"text": "Codex", "position": "right"}]},
+                    "ocr": {"status": "ok"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        screenshot = {
+            "status": "captured",
+            "path": str(image),
+            "captured_at": "2026-06-15T12:00:00Z",
+            "window": {"app": "Electron", "pid": "900", "title": "demo — opencode"},
+            "semantic": {"path": str(semantic_path)},
+        }
+        original_inventory = _mod.ide_bridge_inventory
+        _mod.ide_bridge_inventory = lambda root, runner: [
+            {
+                "owner": "ide-visible-bridge",
+                "pid": 901,
+                "port": 52678,
+                "ide": "Antigravity IDE",
+                "project_paths": [str(self.root)],
+                "inventory_status": "ok",
+                "terminals": [],
+                "host_ancestor_pids": [777],
+            }
+        ]
+        try:
+            roster = _mod.build_visual_roster(
+                root=self.root,
+                live_dir=live,
+                now=self.now,
+                agents=["codex"],
+                snapshots={"codex": {"processes": [], "latest_log": {}}},
+                screenshot=screenshot,
+                required_agents=["codex"],
+                runner=self.fake_runner,
+            )
+        finally:
+            _mod.ide_bridge_inventory = original_inventory
+
+        self.assertEqual(roster["status"], "failed")
+        self.assertEqual(roster["missing_or_unverified"], ["codex"])
+        self.assertFalse(roster["agents"][0]["host_surface"]["registered_host_match"])
 
     def test_screenshots_can_be_disabled_with_env(self):
         os.environ["AI_COLLAB_OBSERVER_SCREENSHOTS"] = "0"

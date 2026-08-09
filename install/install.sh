@@ -19,9 +19,10 @@
 #   13. Self-updater             → ~/.claude/ai-collab-update.py
 #   14. Reboot recovery          → ~/.claude/ai-collab-recover.py
 #   15. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
-#   16. OCR engine               → tesseract auto-install when possible
-#   17. Background daemon        → launchd (macOS) / cron (Linux)
-#   18. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#   16. Visible IDE bridge       → VS Code/Antigravity/Cursor/Windsurf extension
+#   17. OCR engine               → tesseract auto-install when possible
+#   18. Background daemon        → launchd (macOS) / cron (Linux)
+#   19. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -45,6 +46,7 @@ YES="${AI_COLLAB_YES:-}"          # set to 1 to skip confirmations
 SKIP_DAEMON="${AI_COLLAB_NO_DAEMON:-}"  # set to 1 to skip daemon
 SKIP_CODEX_BRIDGE="${AI_COLLAB_NO_CODEX_BRIDGE:-}"  # set to 1 to skip Codex bridge API
 INSTALL_OCR="${AI_COLLAB_INSTALL_OCR:-1}"  # set to 0 to skip OCR engine install
+SKIP_IDE_BRIDGE="${AI_COLLAB_NO_IDE_BRIDGE:-}"  # set to 1 to skip visible integrated-terminal bridge
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 bold()    { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -169,6 +171,49 @@ copy_or_download() {
   fi
 }
 
+install_visible_ide_bridge() {
+  if [[ -n "$SKIP_IDE_BRIDGE" ]]; then
+    yellow "Visible IDE bridge skipped (AI_COLLAB_NO_IDE_BRIDGE=1)"
+    return 0
+  fi
+  local source_dir="$CLAUDE_DIR/ai-collab-vscode-bridge"
+  local vsix="$CLAUDE_DIR/ai-collab-visible-bridge.vsix"
+  mkdir -p "$source_dir"
+  copy_or_download "install/build-vscode-bridge.py" "$CLAUDE_DIR/ai-collab-build-vscode-bridge.py"
+  copy_or_download "install/vscode-ai-collab-bridge/package.json" "$source_dir/package.json"
+  copy_or_download "install/vscode-ai-collab-bridge/extension.js" "$source_dir/extension.js"
+  chmod +x "$CLAUDE_DIR/ai-collab-build-vscode-bridge.py"
+  python3 "$CLAUDE_DIR/ai-collab-build-vscode-bridge.py" --source "$source_dir" --output "$vsix" >/dev/null
+
+  local installed=0 cli seen=""
+  local candidates=(
+    "$(command -v antigravity-ide 2>/dev/null || true)"
+    "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"
+    "$(command -v code 2>/dev/null || true)"
+    "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+    "$(command -v cursor 2>/dev/null || true)"
+    "/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
+    "$(command -v windsurf 2>/dev/null || true)"
+    "/Applications/Windsurf.app/Contents/Resources/app/bin/windsurf"
+  )
+  for cli in "${candidates[@]}"; do
+    [[ -n "$cli" && -x "$cli" ]] || continue
+    case ":$seen:" in *":$cli:"*) continue ;; esac
+    seen="${seen:+$seen:}$cli"
+    if "$cli" --install-extension "$vsix" --force >/dev/null 2>&1; then
+      green "Visible IDE bridge installed → $cli"
+      installed=1
+    else
+      yellow "Could not install visible IDE bridge through $cli"
+    fi
+  done
+  if [[ $installed -eq 0 ]]; then
+    yellow "No supported VS Code-compatible IDE CLI was found; Claude Code visible wakeups will fail closed."
+  else
+    info "Reload each open IDE window once so the visible bridge activates."
+  fi
+}
+
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo ""
 bold "AI Collab Skill — Installer"
@@ -212,6 +257,7 @@ copy_or_download "install/ai-collab-orchestrate.py"           "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-team.py"                  "$CLAUDE_DIR/ai-collab-team.py"
 copy_or_download "install/ai-collab-converse.py"              "$CLAUDE_DIR/ai-collab-converse.py"
 copy_or_download "install/ai-collab-observer.py"              "$CLAUDE_DIR/ai-collab-observer.py"
+copy_or_download "install/ai-collab-see.py"                   "$CLAUDE_DIR/ai-collab-see.py"
 copy_or_download "install/ai-collab-doctor.py"                "$CLAUDE_DIR/ai-collab-doctor.py"
 copy_or_download "install/ai-collab-update.py"                "$CLAUDE_DIR/ai-collab-update.py"
 copy_or_download "install/ai-collab-recover.py"               "$CLAUDE_DIR/ai-collab-recover.py"
@@ -224,6 +270,7 @@ chmod +x "$CLAUDE_DIR/ai-collab-orchestrate.py"
 chmod +x "$CLAUDE_DIR/ai-collab-team.py"
 chmod +x "$CLAUDE_DIR/ai-collab-converse.py"
 chmod +x "$CLAUDE_DIR/ai-collab-observer.py"
+chmod +x "$CLAUDE_DIR/ai-collab-see.py"
 chmod +x "$CLAUDE_DIR/ai-collab-doctor.py"
 chmod +x "$CLAUDE_DIR/ai-collab-update.py"
 chmod +x "$CLAUDE_DIR/ai-collab-recover.py"
@@ -243,6 +290,8 @@ green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"
 green "Self-updater         → $CLAUDE_DIR/ai-collab-update.py"
 green "Reboot recovery      → $CLAUDE_DIR/ai-collab-recover.py"
 green "Codex bridge API     → $CLAUDE_DIR/ai-collab-codex-bridge.py"
+
+install_visible_ide_bridge
 
 # ── 3. Install semantic vision OCR engine ───────────────────────────────────
 echo ""
@@ -547,6 +596,29 @@ for event, new_list in NEW_HOOKS.items():
 
 settings["hooks"] = existing_hooks
 
+# Allow only the collaboration/vision helpers needed for autonomous visible
+# replies. This avoids broad bypass-permissions mode while preventing a real
+# agent turn from stalling on the command that writes its shared-thread reply.
+permissions = settings.get("permissions")
+if not isinstance(permissions, dict):
+    permissions = {}
+allow = permissions.get("allow")
+if not isinstance(allow, list):
+    allow = []
+collab_rules = [
+    "Bash(python3 ~/.claude/ai-collab-converse.py *)",
+    "Bash(python3 ~/.claude/ai-collab-see.py *)",
+    "Bash(python3 ~/.claude/ai-collab-observer.py *)",
+    "Read(~/.claude/ai-collab-converse.py)",
+    "Read(~/.claude/ai-collab-see.py)",
+    "Read(~/.claude/ai-collab-observer.py)",
+]
+for rule in collab_rules:
+    if rule not in allow:
+        allow.append(rule)
+permissions["allow"] = allow
+settings["permissions"] = permissions
+
 # Atomic write
 tmp = settings_file + ".tmp"
 with open(tmp, "w") as f:
@@ -560,6 +632,7 @@ PYEOF
 green "SessionStart hook  → loads CONTEXT.md + notifications on every new session"
 green "UserPromptSubmit   → shows pending notifications before each message"
 green "Stop hook          → auto-generates CONTEXT.md after every response"
+green "Claude permissions → limited allow rules for AI Collab conversation/vision helpers"
 
 # ── 6. Initialize .ai-collab/ in current project (optional) ─────────────────
 echo ""

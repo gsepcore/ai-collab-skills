@@ -61,8 +61,18 @@ class TestOrchestrate(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        self._visible_wake = _mod.visible_wake
+        _mod.visible_wake = lambda root, path: {
+            "ok": True,
+            "result": {
+                "action": "thread-mentions",
+                "results": [{"target_slug": "opencode", "action": "dispatched"}],
+            },
+            "reason": "",
+        }
 
     def tearDown(self):
+        _mod.visible_wake = self._visible_wake
         self.tmp.cleanup()
 
     def run_cli(self, *args):
@@ -203,6 +213,21 @@ class TestOrchestrate(unittest.TestCase):
         self.assertIn("Assigned to @opencode", thread)
         tasks = json.loads((self.root / ".ai-collab/runs/run-2/tasks.json").read_text(encoding="utf-8"))
         self.assertEqual(tasks["tasks"][0]["status"], "assigned")
+        self.assertEqual(tasks["tasks"][0]["dispatch"]["status"], "submitted")
+
+    def test_assign_fails_closed_when_visible_agent_cannot_be_activated(self):
+        self.run_cli("init", "--run-id", "run-visible-fail", "--goal", "Coordinate", "--director", "codex", "--agents", "opencode")
+        self.run_cli(
+            "add-task", "--run-id", "run-visible-fail", "--actor", "codex", "--task-id", "task-fail",
+            "--title", "Review", "--owner", "opencode", "--description", "Review the implementation.",
+        )
+        _mod.visible_wake = lambda root, path: {"ok": False, "reason": "no visible OpenCode TUI"}
+        result = self.run_cli("assign", "--run-id", "run-visible-fail", "--actor", "codex", "--task-id", "task-fail")
+        self.assertEqual(result, 2)
+        tasks = json.loads((self.root / ".ai-collab/runs/run-visible-fail/tasks.json").read_text(encoding="utf-8"))
+        self.assertEqual(tasks["tasks"][0]["dispatch"]["status"], "failed")
+        status = (self.root / ".ai-collab/runs/run-visible-fail/status.md").read_text(encoding="utf-8")
+        self.assertIn("status: dispatch-failed", status)
 
     def test_non_director_cannot_assign(self):
         self.run_cli(

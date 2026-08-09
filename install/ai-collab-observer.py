@@ -12,6 +12,7 @@ environment variables so the live directory does not grow without limit.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import platform
@@ -20,7 +21,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +33,7 @@ from typing import Any, Callable
 SCHEMA_VERSION = "ai-collab.live.v1"
 HEALTH_SCHEMA_VERSION = "ai-collab.health.v1"
 VISION_SCHEMA_VERSION = "ai-collab.vision.v1"
+VISUAL_ROSTER_SCHEMA_VERSION = "ai-collab.visual-roster.v1"
 SKIP_MD = {"PROTOCOL.md", "CONTEXT.md", "TEAM.md"}
 LOG_RE = re.compile(r"^([a-z][a-z0-9_-]*)-\d{8}-\d{6}\.md$")
 MENTION_RE = re.compile(r"(?<![\w.-])@([a-z][a-z0-9_-]{1,40})\b")
@@ -39,6 +43,19 @@ DEFAULT_SCREENSHOT_INTERVAL_SECONDS = 300
 DEFAULT_MAX_EVENTS = 200
 DEFAULT_MAX_COMMAND_LENGTH = 500
 DEFAULT_MAX_SCREENSHOTS = 20
+DEFAULT_IDE_BRIDGE_DIR = Path.home() / ".ai-collab" / "ide-bridges"
+
+VISUAL_AGENT_ALIASES: dict[str, tuple[str, ...]] = {
+    "claude-code": ("claude", "claude code"),
+    "opencode": ("opencode",),
+    "codex": ("codex",),
+    "hermes": ("hermes",),
+    "kimi": ("kimi",),
+    "kilo": ("kilo",),
+    "cursor-native": ("cursor",),
+    "windsurf-native": ("windsurf",),
+    "copilot-chat": ("copilot",),
+}
 
 KNOWN_AGENT_PATTERNS: dict[str, tuple[str, ...]] = {
     "claude-code": (r"\bclaude\b",),
@@ -555,7 +572,7 @@ def classify_process(
     getter=get_json,
     system: str | None = None,
 ) -> str | None:
-    if "ai-collab-observer.py" in command:
+    if "ai-collab-" in command:
         return None
     for agent in agents:
         patterns = KNOWN_AGENT_PATTERNS.get(agent, (rf"\b{re.escape(agent)}\b",))
@@ -595,6 +612,287 @@ def process_snapshot(
             {"pid": pid, "elapsed": elapsed, "command": truncate(command)}
         )
     return by_agent
+
+
+def process_ports(command: str) -> list[int]:
+    ports: list[int] = []
+    for match in re.finditer(r"(?:--port(?:=|\s+)|127\.0\.0\.1:|localhost:)(\d{2,5})", command):
+        port = int(match.group(1))
+        if 0 < port < 65536 and port not in ports:
+            ports.append(port)
+    return ports
+
+
+def process_tty(pid: str, root: Path, runner: Runner = subprocess.run) -> str:
+    try:
+        completed = run_command(["ps", "-p", pid, "-o", "tty="], root, runner=runner, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def visual_processes(
+    root: Path,
+    processes: list[dict[str, str]],
+    runner: Runner = subprocess.run,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in processes:
+        command = str(item.get("command", ""))
+        pid = str(item.get("pid", ""))
+        rows.append(
+            {
+                **item,
+                "tty": process_tty(pid, root, runner=runner) if pid else "",
+                "ports": process_ports(command),
+                "project_match": True,
+            }
+        )
+    return rows
+
+
+def get_json_with_headers(url: str, headers: dict[str, str], timeout: int = 3) -> tuple[int, Any]:
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            return response.status, json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        return 0, str(exc)
+
+
+def process_ancestor_pids(pid: int, root: Path, runner: Runner = subprocess.run) -> list[int]:
+    ancestors: list[int] = []
+    current = pid
+    for _ in range(12):
+        try:
+            completed = run_command(["ps", "-p", str(current), "-o", "ppid="], root, runner=runner, timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            break
+        try:
+            parent = int(completed.stdout.strip()) if completed.returncode == 0 else 0
+        except ValueError:
+            break
+        if parent <= 1 or parent in ancestors:
+            break
+        ancestors.append(parent)
+        current = parent
+    return ancestors
+
+
+def ide_bridge_inventory(root: Path, runner: Runner = subprocess.run) -> list[dict[str, Any]]:
+    configured = os.environ.get("AI_COLLAB_IDE_BRIDGE_DIR", "").strip()
+    registry_dir = Path(configured).expanduser() if configured else DEFAULT_IDE_BRIDGE_DIR
+    bridges: list[dict[str, Any]] = []
+    try:
+        paths = sorted(registry_dir.glob("*.json"))
+    except OSError:
+        return bridges
+    for path in paths:
+        item = load_json(path, {})
+        if not isinstance(item, dict):
+            continue
+        project_paths = item.get("project_paths") or []
+        if not isinstance(project_paths, list) or not any(path_matches_root(value, root) for value in project_paths):
+            continue
+        try:
+            pid = int(item.get("pid") or 0)
+            port = int(item.get("port") or 0)
+        except (TypeError, ValueError):
+            continue
+        token = str(item.get("token") or "")
+        if not (pid > 0 and 0 < port < 65536 and token):
+            continue
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            continue
+        query = urllib.parse.urlencode({"project_path": str(root.resolve())})
+        status, response = get_json_with_headers(
+            f"http://127.0.0.1:{port}/terminals?{query}",
+            {"Authorization": f"Bearer {token}"},
+        )
+        terminals = response.get("terminals", []) if status == 200 and isinstance(response, dict) else []
+        bridges.append(
+            {
+                "owner": "ide-visible-bridge",
+                "pid": pid,
+                "port": port,
+                "ide": str(item.get("ide") or ""),
+                "project_paths": [str(Path(value).resolve()) for value in project_paths if isinstance(value, str)],
+                "inventory_status": "ok" if status == 200 else "unavailable",
+                "terminals": terminals if isinstance(terminals, list) else [],
+                "host_ancestor_pids": process_ancestor_pids(pid, root, runner=runner),
+            }
+        )
+    return bridges
+
+
+def build_visual_roster(
+    *,
+    root: Path,
+    live_dir: Path,
+    now: datetime,
+    agents: list[str],
+    snapshots: dict[str, dict[str, Any]],
+    screenshot: dict[str, Any] | None,
+    required_agents: list[str] | None = None,
+    runner: Runner = subprocess.run,
+) -> dict[str, Any]:
+    screenshot = screenshot or load_json(live_dir / "screenshots" / ".last.json", {})
+    semantic_ref = screenshot.get("semantic") if isinstance(screenshot, dict) else {}
+    semantic_path = Path(str(semantic_ref.get("path", ""))) if isinstance(semantic_ref, dict) and semantic_ref.get("path") else None
+    semantic = load_json(semantic_path, {}) if semantic_path else {}
+    visible_agents = semantic.get("visible_agents", []) if isinstance(semantic, dict) else []
+    hits = semantic.get("agent_visual_hits", {}) if isinstance(semantic, dict) else {}
+    bridges = ide_bridge_inventory(root, runner=runner)
+    window = screenshot.get("window", {}) if isinstance(screenshot, dict) and isinstance(screenshot.get("window"), dict) else {}
+    entries: list[dict[str, Any]] = []
+    for agent in agents:
+        snapshot = snapshots.get(agent, {})
+        processes = visual_processes(root, snapshot.get("processes", []), runner=runner)
+        owned_ports = [
+            {"port": port, "owner": agent, "kind": "agent-process"}
+            for process in processes
+            for port in process.get("ports", [])
+        ]
+        routes: list[dict[str, Any]] = []
+        for bridge in bridges:
+            for terminal in bridge.get("terminals", []):
+                if isinstance(terminal, dict) and terminal.get("agent") == agent:
+                    routes.append(
+                        {
+                            "owner": "ide-visible-bridge",
+                            "bridge_pid": bridge["pid"],
+                            "bridge_port": bridge["port"],
+                            **terminal,
+                        }
+                    )
+        dispatch_evidence = load_json(live_dir / f"{agent}.visible.json", {})
+        if (
+            isinstance(dispatch_evidence, dict)
+            and dispatch_evidence.get("agent") == agent
+            and path_matches_root(dispatch_evidence.get("project_path"), root)
+            and dispatch_evidence.get("status") == "submitted-visibly"
+        ):
+            route = {
+                "owner": str(dispatch_evidence.get("bridge_owner") or "visible-adapter"),
+                "bridge_pid": dispatch_evidence.get("bridge_pid") or "",
+                "bridge_port": dispatch_evidence.get("bridge_port") or "",
+                "terminal_name": dispatch_evidence.get("terminal_name") or "",
+                "shell_pid": dispatch_evidence.get("shell_pid") or "",
+                "agent_pid": dispatch_evidence.get("agent_pid") or "",
+                "tty": dispatch_evidence.get("tty") or "",
+                "project_path": dispatch_evidence.get("project_path") or "",
+                "updated": dispatch_evidence.get("updated") or "",
+                "source": str(live_dir / f"{agent}.visible.json"),
+            }
+            if route not in routes:
+                routes.append(route)
+        visible_agent_pids = {str(route.get("agent_pid")) for route in routes if route.get("agent_pid")}
+        visible_processes = [process for process in processes if str(process.get("pid")) in visible_agent_pids]
+        visible_owned_ports = [
+            {"port": port, "owner": agent, "kind": "visible-agent-process"}
+            for process in visible_processes
+            for port in process.get("ports", [])
+        ]
+        visually_detected = agent in visible_agents
+        process_required = agent in {"claude-code", "opencode", "hermes", "kimi", "kilo"}
+        if process_required:
+            process_verified = len(visible_processes) == 1 if routes else len(processes) == 1
+        else:
+            process_verified = True
+        host_surface = {}
+        if agent == "codex" and visually_detected and window.get("pid"):
+            identity_hits = hits.get(agent, []) if isinstance(hits, dict) else []
+            try:
+                window_pid = int(window.get("pid") or 0)
+            except (TypeError, ValueError):
+                window_pid = 0
+            registered_host_match = any(
+                window_pid in bridge.get("host_ancestor_pids", [])
+                for bridge in bridges
+            )
+            host_surface = {
+                "kind": "ide-native-chat",
+                "evidence_standard": "registered-shared-project-host+position-bound-top-band-label",
+                "shared_host_expected": True,
+                "registered_host_match": registered_host_match,
+                "host_app": window.get("app", ""),
+                "host_pid": window.get("pid", ""),
+                "window_title": window.get("title", ""),
+                "project_path": str(root.resolve()),
+                "agent_owned_port": None,
+                "identity_binding": {
+                    "agent": agent,
+                    "visual_hits": identity_hits,
+                    "rule": "Native IDE panels share the registered project IDE host; agent identity is bound by a top-band label and pane position, not a fabricated child PID or port.",
+                },
+            }
+            process_verified = registered_host_match
+        elif agent == "codex" and visually_detected:
+            process_verified = False
+        status = "verified" if visually_detected and process_verified else "unverified"
+        entries.append(
+            {
+                "agent": agent,
+                "status": status,
+                "visual_surface_detected": visually_detected,
+                "visual_hits": hits.get(agent, []) if isinstance(hits, dict) else [],
+                "project_process_detected": bool(processes),
+                "processes": processes,
+                "owned_ports": owned_ports,
+                "visible_processes": visible_processes,
+                "visible_owned_ports": visible_owned_ports,
+                "ide_routes": routes,
+                "host_surface": host_surface,
+                "latest_log": str((snapshot.get("latest_log") or {}).get("path", "")),
+                "live_state": str(live_dir / f"{agent}.json"),
+            }
+        )
+    required = required_agents or []
+    by_agent = {entry["agent"]: entry for entry in entries}
+    missing = [agent for agent in required if by_agent.get(agent, {}).get("status") != "verified"]
+    screenshot_ok = bool(
+        isinstance(screenshot, dict)
+        and screenshot.get("status") == "captured"
+        and isinstance(semantic, dict)
+        and semantic.get("project_match") is True
+        and semantic.get("ocr", {}).get("status") == "ok"
+    )
+    screenshot_path = Path(str(screenshot.get("path", ""))) if isinstance(screenshot, dict) and screenshot.get("path") else None
+    immutable_path = screenshot_path.with_suffix(".visual-roster.json") if screenshot_path else None
+    roster = {
+        "schema": VISUAL_ROSTER_SCHEMA_VERSION,
+        "project": root.name,
+        "project_path": str(root.resolve()),
+        "updated": isoformat_z(now),
+        "status": "verified" if screenshot_ok and not missing else "failed",
+        "required_agents": required,
+        "missing_or_unverified": missing,
+        "screenshot": {
+            "path": screenshot.get("path", "") if isinstance(screenshot, dict) else "",
+            "captured_at": screenshot.get("captured_at", "") if isinstance(screenshot, dict) else "",
+            "window": screenshot.get("window", {}) if isinstance(screenshot, dict) else {},
+            "semantic_path": str(semantic_path) if semantic_path else "",
+            "project_match": semantic.get("project_match", False) if isinstance(semantic, dict) else False,
+            "ocr_status": semantic.get("ocr", {}).get("status", "") if isinstance(semantic, dict) else "",
+            "visible_agents": visible_agents,
+        },
+        "ports": {
+            "rule": "A port belongs to the process that listens on it; an IDE bridge port routes to terminals and is not the agent's own port.",
+            "native_panel_rule": "An IDE-native chat may have no agent-owned PID/TTY/port. Verify the project host process plus position-bound top-band agent label and actual pane pixels.",
+            "ide_bridges": bridges,
+        },
+        "agents": entries,
+        "evidence_path": str(immutable_path) if immutable_path else "",
+    }
+    if immutable_path:
+        write_json(immutable_path, roster)
+    write_json(live_dir / "visual-roster.json", roster)
+    return roster
 
 
 def read_agent_report(live_dir: Path, agent: str) -> dict[str, Any]:
@@ -785,32 +1083,42 @@ def parse_window_rows(text: str) -> list[dict[str, str]]:
     windows: list[dict[str, str]] = []
     for line in text.splitlines():
         parts = line.split("\t")
-        if len(parts) != 3:
+        if len(parts) == 3:
+            app, title, rect = parts
+            pid = ""
+        elif len(parts) == 4:
+            app, pid, title, rect = parts
+        else:
             continue
-        app, title, rect = parts
         if re.match(r"^-?\d+,-?\d+,\d+,\d+$", rect):
-            windows.append({"app": app, "title": title, "rect": rect})
+            windows.append({"app": app, "pid": pid, "title": title, "rect": rect})
     return windows
 
 
 def project_window_rect(root: Path, runner: Runner) -> tuple[str | None, dict[str, str]]:
+    # Query likely IDE accessibility processes first. Enumerating every visible
+    # application's every window can exceed the timeout when Office/Chrome have
+    # many windows, incorrectly turning a visible IDE into "not visible".
     script = r'''
 tell application "System Events"
   set output to ""
-  repeat with proc in (processes whose visible is true)
-    try
-      set procName to name of proc
-      repeat with win in windows of proc
-        try
-          set winName to name of win
-          set {x, y} to position of win
-          set {w, h} to size of win
-          if w > 0 and h > 0 then
-            set output to output & procName & tab & winName & tab & x & "," & y & "," & w & "," & h & linefeed
-          end if
-        end try
-      end repeat
-    end try
+  repeat with wantedName in {"Electron", "Antigravity", "Code", "Visual Studio Code", "Cursor", "Windsurf"}
+    repeat with proc in (processes whose name is wantedName)
+      try
+        set procName to name of proc
+        set procPid to unix id of proc
+        repeat with win in windows of proc
+          try
+            set winName to name of win
+            set {x, y} to position of win
+            set {w, h} to size of win
+            if w > 0 and h > 0 then
+              set output to output & procName & tab & procPid & tab & winName & tab & x & "," & y & "," & w & "," & h & linefeed
+            end if
+          end try
+        end repeat
+      end try
+    end repeat
   end repeat
   return output
 end tell
@@ -829,11 +1137,129 @@ end tell
     return None, {}
 
 
+def activate_project_ide(root: Path, runner: Runner = subprocess.run) -> bool:
+    configured = os.environ.get("AI_COLLAB_IDE_BRIDGE_DIR", "").strip()
+    registry_dir = Path(configured).expanduser() if configured else DEFAULT_IDE_BRIDGE_DIR
+    for path in sorted(registry_dir.glob("*.json")) if registry_dir.exists() else []:
+        item = load_json(path, {})
+        if not isinstance(item, dict):
+            continue
+        projects = item.get("project_paths") or []
+        app = str(item.get("ide") or "")
+        if not isinstance(projects, list) or not any(path_matches_root(value, root) for value in projects):
+            continue
+        if not app or not re.fullmatch(r"[A-Za-z0-9 ._()-]+", app):
+            continue
+        escaped = app.replace('"', '\\"')
+        try:
+            completed = run_command(["osascript", "-e", f'tell application "{escaped}" to activate'], root, runner=runner, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode == 0:
+            time.sleep(1)
+            return True
+    return False
+
+
 def tesseract_bin() -> str:
     configured = os.environ.get("AI_COLLAB_OBSERVER_TESSERACT_BIN", "").strip()
     if configured:
         return configured
     return shutil.which("tesseract") or ""
+
+
+def prepare_ocr_image(image_path: Path, root: Path, runner: Runner) -> tuple[Path, str]:
+    """Downscale Retina screenshots so OCR is fast enough for every daemon tick."""
+    sips = shutil.which("sips")
+    if not sips:
+        return image_path, ""
+    fd, raw_path = tempfile.mkstemp(prefix="ai-collab-ocr-", suffix=".png", dir=str(image_path.parent))
+    os.close(fd)
+    prepared = Path(raw_path)
+    try:
+        completed = run_command(
+            [sips, "-Z", "2200", str(image_path), "--out", str(prepared)],
+            root,
+            runner=runner,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        prepared.unlink(missing_ok=True)
+        return image_path, ""
+    if completed.returncode != 0 or not prepared.exists():
+        prepared.unlink(missing_ok=True)
+        return image_path, ""
+    return prepared, str(prepared)
+
+
+def parse_tesseract_tsv(text: str) -> tuple[str, list[dict[str, Any]], int, int]:
+    words: list[dict[str, Any]] = []
+    lines = text.splitlines()
+    if not lines or "left" not in lines[0].lower() or "text" not in lines[0].lower():
+        return text.strip(), words, 0, 0
+    image_width = 0
+    image_height = 0
+    for line in lines[1:]:
+        parts = line.split("\t", 11)
+        if len(parts) != 12:
+            continue
+        if parts[0] == "1":
+            try:
+                image_width, image_height = int(parts[8]), int(parts[9])
+            except ValueError:
+                pass
+        token = parts[11].strip()
+        if not token:
+            continue
+        try:
+            confidence = float(parts[10])
+            left, top, width, height = (int(parts[index]) for index in (6, 7, 8, 9))
+        except ValueError:
+            continue
+        if confidence < 0:
+            continue
+        words.append(
+            {
+                "text": token,
+                "confidence": confidence,
+                "left": left,
+                "top": top,
+                "width": width,
+                "height": height,
+            }
+        )
+    return " ".join(item["text"] for item in words), words, image_width, image_height
+
+
+def visual_agent_hits(
+    words: list[dict[str, Any]],
+    text: str,
+    image_width: int,
+    image_height: int,
+) -> dict[str, list[dict[str, Any]]]:
+    hits: dict[str, list[dict[str, Any]]] = {}
+    top_limit = max(40, min(70, int(image_height * 0.08))) if image_height else 70
+    top_words = [word for word in words if int(word.get("top", top_limit + 1)) <= top_limit]
+    for agent, aliases in VISUAL_AGENT_ALIASES.items():
+        matched: list[dict[str, Any]] = []
+        for word in top_words:
+            clean = re.sub(r"[^a-z0-9-]+", "", str(word.get("text", "")).lower())
+            if any(re.sub(r"[^a-z0-9-]+", "", alias) in clean for alias in aliases):
+                center = int(word["left"]) + int(word["width"]) // 2
+                if image_width and center < image_width * 0.30:
+                    position = "left"
+                elif image_width and center > image_width * 0.60:
+                    position = "right"
+                else:
+                    position = "center"
+                matched.append({**word, "position": position, "source": "top-band-ocr"})
+        # Plain OCR runners used in tests and metadata-only title checks do not
+        # expose coordinates. Keep that distinction explicit.
+        if not words and any(alias in text.lower() for alias in aliases):
+            matched.append({"text": agent, "position": "unknown", "source": "plain-ocr"})
+        if matched:
+            hits[agent] = matched
+    return hits
 
 
 def infer_visual_state(text: str, screenshot_status: str) -> tuple[str, list[str]]:
@@ -880,7 +1306,15 @@ def write_visual_semantics(
     window = marker.get("window") if isinstance(marker.get("window"), dict) else {}
     image_path = Path(screenshot_path) if screenshot_path else None
     ocr_enabled = env_bool("AI_COLLAB_OBSERVER_SEMANTIC_OCR", True)
-    ocr: dict[str, Any] = {"status": "skipped", "engine": "", "text": "", "reason": ""}
+    ocr: dict[str, Any] = {
+        "status": "skipped",
+        "engine": "",
+        "text": "",
+        "words": [],
+        "image_width": 0,
+        "image_height": 0,
+        "reason": "",
+    }
 
     if screenshot_status != "captured":
         ocr["reason"] = f"screenshot {screenshot_status}"
@@ -896,15 +1330,42 @@ def write_visual_semantics(
             ocr["reason"] = "tesseract not found"
         else:
             ocr["engine"] = binary
+            prepared_path, temporary_path = prepare_ocr_image(image_path, root, runner)
             try:
-                completed = run_command([binary, str(image_path), "stdout", "--psm", "6"], root, runner=runner, timeout=20)
+                completed = run_command(
+                    [binary, str(prepared_path), "stdout", "--psm", "6", "tsv"],
+                    root,
+                    runner=runner,
+                    timeout=30,
+                )
                 if completed.returncode == 0:
-                    text = truncate(completed.stdout.strip(), 4000)
-                    ocr.update({"status": "ok", "text": text, "reason": ""})
+                    text, words, image_width, image_height = parse_tesseract_tsv(completed.stdout)
+                    ocr.update(
+                        {
+                            "status": "ok",
+                            "text": truncate(text, 4000),
+                            "words": words[:2000],
+                            "image_width": image_width,
+                            "image_height": image_height,
+                            "reason": "",
+                        }
+                    )
                 else:
                     ocr.update({"status": "failed", "reason": truncate(completed.stderr or completed.stdout or "OCR failed", 500)})
             except (OSError, subprocess.TimeoutExpired) as exc:
                 ocr.update({"status": "failed", "reason": truncate(str(exc), 500)})
+            finally:
+                if temporary_path:
+                    Path(temporary_path).unlink(missing_ok=True)
+
+    image_width = int(ocr.get("image_width") or 0)
+    image_height = int(ocr.get("image_height") or 0)
+    agent_hits = visual_agent_hits(
+        ocr.get("words", []) if isinstance(ocr.get("words"), list) else [],
+        str(ocr.get("text", "")),
+        image_width,
+        image_height,
+    )
 
     text_excerpt = truncate(str(ocr.get("text", "")), 500)
     combined_text = " ".join(
@@ -940,6 +1401,9 @@ def write_visual_semantics(
         "window": window,
         "active_agents": marker.get("active_agents", []),
         "project_match": project_match,
+        "image_size": {"width": image_width, "height": image_height},
+        "visible_agents": sorted(agent_hits),
+        "agent_visual_hits": agent_hits,
         "ocr": ocr,
         "semantic": {
             "status": semantic_status,
@@ -955,6 +1419,7 @@ def write_visual_semantics(
         "path": str(semantic_path),
         "state": state,
         "ocr_status": ocr.get("status", ""),
+        "visible_agents": sorted(agent_hits),
     }
 
 
@@ -1073,13 +1538,15 @@ def maybe_capture_screenshot(
     *,
     runner: Runner = subprocess.run,
     system: str | None = None,
+    force: bool = False,
+    tag: str = "",
 ) -> dict[str, Any] | None:
     if not env_bool("AI_COLLAB_OBSERVER_SCREENSHOTS", True):
         return None
     if env_bool("AI_COLLAB_OBSERVER_SCREENSHOT_ACTIVE_ONLY", False) and not active_agents:
         return None
     interval = env_int("AI_COLLAB_OBSERVER_SCREENSHOT_INTERVAL", DEFAULT_SCREENSHOT_INTERVAL_SECONDS, 1)
-    if not screenshot_due(live_dir, now, interval):
+    if not force and not screenshot_due(live_dir, now, interval):
         return None
     current_system = system or platform.system()
     if current_system != "Darwin":
@@ -1103,9 +1570,11 @@ def maybe_capture_screenshot(
     mode = os.environ.get("AI_COLLAB_OBSERVER_SCREENSHOT_MODE", "project").strip().lower()
     if mode not in {"project", "frontmost", "screen"}:
         mode = "project"
-    timestamp = now.strftime("%Y%m%d-%H%M%S")
-    path = screenshots_dir / f"{timestamp}-{mode}.png"
-    semantic_path = screenshots_dir / f"{timestamp}-{mode}.semantic.json"
+    timestamp = now.strftime("%Y%m%d-%H%M%S-%f") if force else now.strftime("%Y%m%d-%H%M%S")
+    safe_tag = re.sub(r"[^a-z0-9-]+", "-", tag.lower()).strip("-")
+    suffix = f"-{safe_tag}" if safe_tag else ""
+    path = screenshots_dir / f"{timestamp}-{mode}{suffix}.png"
+    semantic_path = screenshots_dir / f"{timestamp}-{mode}{suffix}.semantic.json"
     command = ["screencapture", "-x"]
     rect = None
     window: dict[str, str] = {}
@@ -1134,6 +1603,8 @@ def maybe_capture_screenshot(
 
     if mode == "project":
         rect, window = project_window_rect(root, runner)
+        if not rect and force and activate_project_ide(root, runner=runner):
+            rect, window = project_window_rect(root, runner)
         if not rect:
             marker = {
                 "captured_at": isoformat_z(now),
@@ -1345,6 +1816,9 @@ def observe_project(
     now: datetime | None = None,
     runner: Runner = subprocess.run,
     system: str | None = None,
+    force_screenshot: bool = False,
+    visual_required_agents: list[str] | None = None,
+    screenshot_tag: str = "",
 ) -> dict[str, Any]:
     now = now or utc_now()
     collab_dir = collab_dir.resolve()
@@ -1428,7 +1902,17 @@ def observe_project(
             )
         snapshots[agent] = snapshot
 
-    screenshot = maybe_capture_screenshot(root, live_dir, now, active_agents, runner=runner, system=system)
+    capture_agents = visual_required_agents or active_agents
+    screenshot = maybe_capture_screenshot(
+        root,
+        live_dir,
+        now,
+        capture_agents,
+        runner=runner,
+        system=system,
+        force=force_screenshot,
+        tag=screenshot_tag,
+    )
     if screenshot:
         for agent in active_agents:
             snapshots[agent]["screenshot"] = screenshot
@@ -1455,6 +1939,17 @@ def observe_project(
     for alert in alerts:
         append_jsonl(live_dir / "director-alerts.jsonl", {"timestamp": isoformat_z(now), **alert}, max_events=max_events)
 
+    visual_roster = build_visual_roster(
+        root=root,
+        live_dir=live_dir,
+        now=now,
+        agents=agents,
+        snapshots=snapshots,
+        screenshot=screenshot,
+        required_agents=visual_required_agents,
+        runner=runner,
+    )
+
     summary = {
         "schema": SCHEMA_VERSION,
         "project": root.name,
@@ -1476,6 +1971,11 @@ def observe_project(
         "git": git,
         "alerts": alerts,
         "screenshot": screenshot or {},
+        "visual_roster": {
+            "status": visual_roster["status"],
+            "path": str(live_dir / "visual-roster.json"),
+            "missing_or_unverified": visual_roster["missing_or_unverified"],
+        },
         "health": {
             "overall": health["overall"],
             "path": str(live_dir / "health.json"),
@@ -1487,18 +1987,32 @@ def observe_project(
 
 
 def main(argv: list[str] | None = None) -> int:
-    argv = argv or sys.argv[1:]
-    if not argv:
-        print("Usage: ai-collab-observer.py <project-root|.ai-collab-dir>", file=sys.stderr)
-        return 2
-    target = Path(argv[0]).resolve()
+    parser = argparse.ArgumentParser(description="Observe an AI Collab project and verify visible agent surfaces.")
+    parser.add_argument("target", help="Project root or .ai-collab directory")
+    parser.add_argument("--visual-proof", action="store_true", help="Force a fresh screenshot and fail unless required agents are visibly verified.")
+    parser.add_argument("--agents", default="", help="Comma-separated agents required in the visual proof.")
+    parser.add_argument("--tag", default="team", help="Screenshot evidence tag for --visual-proof.")
+    args = parser.parse_args(argv or sys.argv[1:])
+    target = Path(args.target).resolve()
     collab_dir = target if target.name == ".ai-collab" else target / ".ai-collab"
     if not collab_dir.exists():
         print(f"No .ai-collab directory found at {collab_dir}", file=sys.stderr)
         return 1
     if not env_bool("AI_COLLAB_OBSERVER", True):
         return 0
-    summary = observe_project(collab_dir)
+    required_agents = parse_csv(args.agents) if args.visual_proof else None
+    summary = observe_project(
+        collab_dir,
+        force_screenshot=args.visual_proof,
+        visual_required_agents=required_agents,
+        screenshot_tag=args.tag if args.visual_proof else "",
+    )
+    if args.visual_proof:
+        roster_path = collab_dir / "live" / "visual-roster.json"
+        roster = load_json(roster_path, {})
+        evidence_path = roster.get("evidence_path") if isinstance(roster, dict) else ""
+        print(json.dumps({"visual_roster": evidence_path or str(roster_path), **roster}, indent=2))
+        return 0 if isinstance(roster, dict) and roster.get("status") == "verified" else 4
     print(
         f"observed project={summary['project']} agents={len(summary['agents'])} "
         f"active={len(summary['active_agents'])} alerts={len(summary['alerts'])}"

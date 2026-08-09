@@ -33,7 +33,12 @@ class TestConverse(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_cli(self, *args):
-        return _mod.main(["--root", str(self.root), *args])
+        values = list(args)
+        if values and values[0] in {
+            "start", "reply", "question", "answer", "proposal", "decision", "blocker", "review", "handoff"
+        } and "--queue-only" not in values:
+            values.append("--queue-only")
+        return _mod.main(["--root", str(self.root), *values])
 
     def only_discussion(self):
         matches = list((self.collab / "discussions").glob("*.md"))
@@ -147,6 +152,51 @@ class TestConverse(unittest.TestCase):
 
         meta, _body = _mod.parse_frontmatter(self.only_discussion().read_text(encoding="utf-8"))
         self.assertEqual(meta["status"], "closed")
+
+    def test_visible_dispatch_failure_is_reported_and_not_treated_as_reply(self):
+        original = _mod.dispatch_visible
+        original_visual = _mod.visual_proof
+        _mod.dispatch_visible = lambda path, root: {"ok": False, "reason": "no visible bridge"}
+        _mod.visual_proof = lambda root, agents, stage: {
+            "ok": True,
+            "result": {
+                "visual_roster": str(root / ".ai-collab/live/visual-roster.json"),
+                "screenshot": {"path": str(root / ".ai-collab/live/screenshots/team.png")},
+            },
+        }
+        try:
+            result = _mod.main(
+                [
+                    "--root", str(self.root), "start", "--author", "codex", "--topic", "Kickoff",
+                    "--to", "claude-code,opencode", "--message", "Give your technical opinion.",
+                ]
+            )
+        finally:
+            _mod.dispatch_visible = original
+            _mod.visual_proof = original_visual
+        self.assertEqual(result, 2)
+        self.assertTrue(self.only_discussion().exists())
+
+    def test_reply_evidence_requires_agent_authored_message(self):
+        path = self.collab / "thread-kickoff.md"
+        _mod.append_message(
+            path,
+            root=self.root,
+            author="codex",
+            message="@claude-code please reply",
+            recipients=["claude-code"],
+            now=_mod.datetime(2026, 8, 9, 12, 0, 0, tzinfo=_mod.timezone.utc),
+        )
+        self.assertEqual(_mod.message_authors_after(path, "2026-08-09T12:00:00Z"), set())
+        _mod.append_message(
+            path,
+            root=self.root,
+            author="claude-code",
+            message="@codex My recommendation is to fail closed.",
+            recipients=["codex"],
+            now=_mod.datetime(2026, 8, 9, 12, 0, 1, tzinfo=_mod.timezone.utc),
+        )
+        self.assertEqual(_mod.message_authors_after(path, "2026-08-09T12:00:00Z"), {"claude-code"})
 
 
 if __name__ == "__main__":

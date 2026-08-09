@@ -126,12 +126,14 @@ Show the live semantic observer view for the project.
 
 Start or continue a natural agent-to-agent discussion for questions, proposals, reviews, blockers, decisions, and handoffs.
 
+This is a visible execution contract, not a narration feature. With recipients in `--to`, the helper first captures the real project window and verifies every required agent surface in `.ai-collab/live/visual-roster.json`; only then does it submit the message to each project-matched visible interface. Every recipient must inspect that image with its own vision capability and attest what it saw in the shared thread. A file write, port, process, log, or wake event alone is never enough. Any mismatch fails closed without a hidden CLI substitute.
+
 **Steps:**
 1. Find project root.
 2. Prefer the deterministic helper:
 
    ```bash
-   python3 ~/.claude/ai-collab-converse.py --root "$ROOT" start --author claude-code --topic "$TOPIC" --to "$AGENTS" --message "$MESSAGE"
+   python3 ~/.claude/ai-collab-converse.py --root "$ROOT" start --author claude-code --topic "$TOPIC" --to "$AGENTS" --message "$MESSAGE" --wait-seconds 180
    ```
 
    If the helper is not installed, fall back to appending the same heading format manually.
@@ -149,8 +151,9 @@ Start or continue a natural agent-to-agent discussion for questions, proposals, 
    python3 ~/.claude/ai-collab-converse.py --root "$ROOT" decision --thread "$THREAD" --author codex --message "$DECISION"
    ```
 
-5. Remind agents to answer direct mentions before unrelated work. A message that mentions `@opencode`, `@codex`, or another registered slug can wake that agent through the daemon.
-6. Use `/collab observe` to see open conversations and latest replies.
+5. Require every invited agent to inspect the fresh screenshot and append a substantive, agent-authored reply with its opinion, risks, `visual_evidence: <path>`, and `visible_peers: <slugs>`. `--wait-seconds` exits nonzero when a real reply or visual attestation is missing.
+6. Require the automatic post-turn screenshot. Treat adapter success only as "submitted visibly," visual roster success as "visually verified," and say "responded" only after the thread contains that agent's own compliant message.
+7. Use `/collab observe` to inspect `visual-roster.json`, agent/process/TTY/port ownership, open conversations, and latest replies.
 
 ---
 
@@ -447,6 +450,7 @@ Use this when the user gives a large implementation goal and wants multiple agen
 
 ```bash
 python3 ~/.claude/ai-collab-orchestrate.py init --goal "$GOAL" --director "$DIRECTOR" --agents "$AGENTS" --title "$TITLE"
+python3 ~/.claude/ai-collab-orchestrate.py convene --run-id "$RUN_ID" --actor "$DIRECTOR" --participants "$AGENTS" --message "$GOAL Ask each agent for its technical opinion, risks, and recommended approach." --wait-seconds 180
 python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK" --title "$TITLE" --owner "$AGENT" --allowed-files "$FILES" --description "$DESC" --validation "$VALIDATION"
 python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK" --title "$TITLE" --role frontend --allowed-files "$FILES" --description "$DESC" --validation "$VALIDATION"
 python3 ~/.claude/ai-collab-orchestrate.py assign --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK"
@@ -458,18 +462,25 @@ python3 ~/.claude/ai-collab-orchestrate.py finalize --run-id "$RUN_ID" --actor "
 **Execution workflow:**
 1. Read `.ai-collab/CONTEXT.md`, `TEAM.md`, `roles.json`, active inboxes, and recent logs.
 2. Create the run with the selected director and participating agents. If none were explicitly selected, use the senior director and assigned role owners from `roles.json`.
-3. Write a concrete `PLAN.md`: tasks, dependencies, required roles, owners, allowed files, and validation.
-4. Add and assign tasks with one owner each. Prefer `--role` for default routing; use `--owner` for an explicit override. Never assign a task without file boundaries for code edits.
-5. Agents ask and answer questions in `thread-{task_id}.md` using normal language and `@slug` mentions. Treat these threads as the conversation with each other.
-6. Director monitors logs, inbox status, and task threads. If blocked, ask a clarifying question in the thread or reassign with an explicit reason.
-7. Before finalizing, run the validation commands appropriate to the repo. Record exact commands and outcomes.
-8. Finalize only when all tasks are `done` or explicitly `failed`, validation evidence exists, and `final-summary.md` is written.
+3. Convene the visible team. The helper must force a fresh pre-turn screenshot, build an immutable per-capture visual roster plus `.ai-collab/live/visual-roster.json`, and refuse dispatch unless every requested agent is visible in the correct project surface. Each agent must inspect the actual PNG with native vision or `ai-collab-see.py`, which directly processes the pixels for models without image input.
+4. Wait for a real thread reply from every participant. Every reply must include `visual_evidence:` and `visible_peers:`; after replies, require a second fresh visual proof showing the project interfaces. Show the user the actual agent-authored recommendations. Never paraphrase a missing or visually unverified reply as if that agent provided it.
+5. Write a concrete `PLAN.md`: tasks, dependencies, required roles, owners, allowed files, and validation.
+6. Add and assign tasks with one owner each. Prefer `--role` for default routing; use `--owner` for an explicit override. Assignment performs immediate visible dispatch and exits nonzero when the target interface rejects it.
+7. Agents ask and answer questions in `thread-{task_id}.md` using normal language and `@slug` mentions. Treat these threads as the conversation with each other.
+8. Director monitors logs, inbox status, and task threads. If blocked, ask a clarifying question in the thread or reassign with an explicit reason.
+9. Before finalizing, run the validation commands appropriate to the repo. Record exact commands and outcomes.
+10. Finalize only when all tasks are `done` or explicitly `failed`, validation evidence exists, and `final-summary.md` is written.
 
 **Safety rules:**
 - Do not overwrite another agent's active inbox (`unread`, `claimed`, `running`, `blocked`, `review`) unless the user explicitly approves force.
 - Do not edit files outside a task's allowed file list without asking in the thread and receiving director approval.
 - Do not mark a task `done` unless the owning agent reported completion or the director verified the work.
 - Do not release the director lock until final validation has been recorded.
+- Never say an agent is working because a task file was written or a prompt was submitted. `started` requires the agent's own claim/live update; `responded` requires its authored thread message; `completed` requires its done state and handoff.
+- Never silently fall back to headless execution when the user requested visible multi-agent work.
+- Ports and logs are corroborating evidence, never substitutes for sight. The visual roster must map agent ↔ project ↔ visible surface ↔ PID/TTY ↔ agent-owned port, and label IDE-bridge ports as routing infrastructure rather than pretending they belong to an agent.
+- Evidence depends on surface type: terminals require one exact project process/PID/TTY and any agent-owned port; native IDE chats intentionally share the outer IDE host. Require that host PID to be an ancestor of the exact project bridge, then bind the agent with `registered-shared-project-host+position-bound-top-band-label` plus actual pane pixels. Never invent a child process or port.
+- A visible workflow fails closed if the screenshot is missing/stale, OCR cannot identify a required surface, process/project identity is ambiguous, an agent cannot inspect the image, or pre/post visual evidence disagrees.
 
 ---
 

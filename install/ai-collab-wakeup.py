@@ -41,7 +41,8 @@ DEFAULT_LOG_FILE = Path("/tmp/ai-collab-wakeup.log")
 DEFAULT_ADAPTER = "visible"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
 DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude", "claude-code", "hermes", "kimi", "kilo")
-DEFAULT_VISIBLE_TARGETS = ("codex", "opencode", "kilo", "hermes")
+DEFAULT_VISIBLE_TARGETS = ("codex", "opencode", "claude", "claude-code", "kilo", "hermes")
+DEFAULT_IDE_BRIDGE_DIR = Path.home() / ".ai-collab" / "ide-bridges"
 OPENCODE_SYNTHETIC_ENV = "AI_COLLAB_OPENCODE_SYNTHETIC"
 MAX_EVENTS = 200
 MENTION_RE = re.compile(r"(?<![\w.-])@([a-z][a-z0-9_-]{1,40})\b")
@@ -842,6 +843,130 @@ def get_json(url: str, *, timeout: int) -> tuple[int, Any]:
         return exc.code, text
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         return 0, str(exc)
+
+
+def ide_bridge_candidates(
+    project_path: str,
+    *,
+    registry_dir: Path = DEFAULT_IDE_BRIDGE_DIR,
+) -> list[dict[str, Any]]:
+    """Return live IDE bridges whose workspace exactly matches project_path."""
+    result: list[dict[str, Any]] = []
+    try:
+        entries = sorted(registry_dir.glob("*.json"))
+    except OSError:
+        return result
+    for path in entries:
+        item = load_json(path, {})
+        if not isinstance(item, dict):
+            continue
+        try:
+            port = int(item.get("port") or 0)
+            pid = int(item.get("pid") or 0)
+        except (TypeError, ValueError):
+            continue
+        token = str(item.get("token") or "")
+        projects = item.get("project_paths") or []
+        if not (0 < port < 65536 and pid > 0 and token and isinstance(projects, list)):
+            continue
+        if not any(same_path(project_path, str(candidate)) for candidate in projects):
+            continue
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            continue
+        result.append({**item, "registry_path": str(path), "port": port, "pid": pid, "token": token})
+    return result
+
+
+def run_ide_terminal_visible_adapter(
+    input_data: dict[str, str],
+    *,
+    timeout: int,
+    poster=None,
+    registry_dir: Path = DEFAULT_IDE_BRIDGE_DIR,
+) -> dict[str, Any]:
+    """Submit a prompt to the exact visible integrated terminal for this project."""
+    poster = poster or post_json
+    guardrail = visible_guardrail(input_data, "ide-terminal-visible")
+    if guardrail:
+        return guardrail
+    target = input_data["target_slug"]
+    if target not in {"claude", "claude-code", "opencode", "hermes"}:
+        return {
+            "status": "failed",
+            "message": f"IDE terminal bridge does not support target {target}",
+            "adapter_name": "ide-terminal-visible",
+        }
+    candidates = ide_bridge_candidates(input_data["project_path"], registry_dir=registry_dir)
+    if not candidates:
+        return {
+            "status": "failed",
+            "message": (
+                "no live AI Collab IDE bridge matched this project; install/enable "
+                "gsepcore.ai-collab-visible-bridge and keep the project window open"
+            ),
+            "adapter_name": "ide-terminal-visible",
+        }
+    if len(candidates) > 1:
+        details = ", ".join(f"pid={item['pid']} port={item['port']}" for item in candidates)
+        return {
+            "status": "failed",
+            "message": f"multiple IDE bridges matched this project; refusing ambiguous visible delivery: {details}",
+            "adapter_name": "ide-terminal-visible",
+        }
+    bridge = candidates[0]
+    status, response = poster(
+        f"http://127.0.0.1:{bridge['port']}/terminal/send",
+        {
+            "project_path": input_data["project_path"],
+            "target_slug": target,
+            "prompt": input_data["synthetic_prompt"],
+            "task_id": input_data.get("task_id", ""),
+            "source_path": input_data.get("source_path", ""),
+        },
+        timeout=min(timeout, 15),
+        headers={"Authorization": f"Bearer {bridge['token']}"},
+    )
+    if 200 <= status < 300:
+        try:
+            detail = json.loads(response) if isinstance(response, str) else response
+        except json.JSONDecodeError:
+            detail = {}
+        detail = detail if isinstance(detail, dict) else {}
+        evidence = {
+            "schema": "ai-collab.visible-surface.v1",
+            "agent": target,
+            "project_path": str(Path(input_data["project_path"]).resolve()),
+            "updated": isoformat_z(utc_now()),
+            "status": "submitted-visibly",
+            "adapter": "ide-terminal-visible",
+            "ide": str(bridge.get("ide") or ""),
+            "bridge_owner": "ide-visible-bridge",
+            "bridge_pid": bridge["pid"],
+            "bridge_port": bridge["port"],
+            "terminal_name": str(detail.get("terminal_name") or ""),
+            "shell_pid": detail.get("shell_pid") or "",
+            "agent_pid": detail.get("agent_pid") or "",
+            "tty": str(detail.get("tty") or ""),
+            "task_id": input_data.get("task_id", ""),
+            "source_path": input_data.get("source_path", ""),
+        }
+        evidence_path = Path(input_data["project_path"]) / ".ai-collab" / "live" / f"{target}.visible.json"
+        atomic_write(evidence_path, json.dumps(evidence, indent=2) + "\n")
+        return {
+            "status": "success",
+            "message": f"prompt submitted to {target}'s visible integrated terminal",
+            "adapter_name": "ide-terminal-visible",
+            "visual_evidence": str(evidence_path),
+            **{key: value for key, value in evidence.items() if key not in {"status", "adapter"}},
+        }
+    detail = response.strip().replace("\n", " ") if isinstance(response, str) else str(response)
+    return {
+        "status": "failed",
+        "message": f"IDE bridge rejected visible delivery ({status}): {detail[:400]}",
+        "adapter_name": "ide-terminal-visible",
+    }
 
 
 def auth_headers_from_env(prefix: str) -> dict[str, str]:
@@ -1701,7 +1826,16 @@ def run_visible_adapter(
     runner=subprocess.run,
 ) -> dict[str, str]:
     target = input_data["target_slug"]
+    if target in {"claude", "claude-code"}:
+        return run_ide_terminal_visible_adapter(input_data, timeout=timeout)
     if target == "opencode":
+        # When a project-local IDE bridge exists it is stronger evidence than
+        # port discovery: the bridge resolves the exact integrated terminal,
+        # focuses it, submits there, and returns the agent PID/TTY. A bridge
+        # rejection is intentionally terminal; silently switching adapters
+        # would destroy the visual guarantee.
+        if ide_bridge_candidates(input_data["project_path"]):
+            return run_ide_terminal_visible_adapter(input_data, timeout=timeout)
         return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
     if target == "kilo":
         return run_kilo_visible_adapter(input_data, timeout=timeout, runner=runner)
@@ -1800,6 +1934,8 @@ def run_wakeup_adapter(
         return run_visible_adapter(input_data, timeout=timeout, runner=runner)
     if mode == "opencode-visible":
         return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
+    if mode in {"claude-visible", "ide-terminal-visible"}:
+        return run_ide_terminal_visible_adapter(input_data, timeout=timeout)
     if mode == "opencode-auto":
         return run_opencode_auto_adapter(input_data, timeout=timeout, runner=runner)
     if mode == "antigravity-chat":
@@ -1997,7 +2133,9 @@ def process_thread(
             "timestamp": timestamp,
             "synthetic_prompt": (
                 f"You were mentioned in {thread_path} by @{author_slug}. "
-                "Read the latest thread message, respond or act if needed, and update your log."
+                "This is a real visible team conversation. Read the entire thread, add your own "
+                "opinion or recommendation to that same thread, explicitly mention the director "
+                "and relevant participants, then update your log. Do not merely acknowledge the wakeup."
             ),
         }
         adapter_result = dispatch_wake_event(
@@ -2176,10 +2314,12 @@ def process_inbox(
     meta["attempts"] = str(next_attempts)
     meta["last_attempt"] = timestamp
     if adapter_result["status"] == "success":
-        meta["status"] = "claimed"
-        meta["claimed_by"] = adapter_result["adapter_name"]
-        meta["claimed_at"] = timestamp
-        action = "claimed"
+        # A bridge accepting a prompt proves delivery to an interface, not that
+        # the target agent read or accepted the task. Only the target agent may
+        # write claimed_by/claimed_at after its real turn begins.
+        meta["visible_dispatched_at"] = timestamp
+        meta["visible_adapter"] = adapter_result["adapter_name"]
+        action = "dispatched"
     elif next_attempts >= max_attempts:
         meta["status"] = "failed"
         meta["done_at"] = timestamp

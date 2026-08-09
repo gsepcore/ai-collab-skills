@@ -1,0 +1,25 @@
+{
+  "name": "ai-collab-visible-bridge",
+  "displayName": "AI Collab Visible Bridge",
+  "description": "Delivers AI Collab messages to the exact visible agent terminal for the current workspace.",
+  "version": "0.1.0",
+  "publisher": "gsepcore",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiCollab.visibleBridgeStatus",
+        "title": "AI Collab: Show Visible Bridge Status"
+      }
+    ]
+  }
+}

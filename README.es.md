@@ -299,7 +299,8 @@ python3 ~/.claude/ai-collab-converse.py --root "$PWD" start \
   --topic "Límite del API de billing" \
   --to opencode \
   --type question \
-  --message "Compara el adapter approach con cambiar el API compartido directamente."
+  --message "Compara el adapter approach con cambiar el API compartido directamente." \
+  --wait-seconds 180
 
 python3 ~/.claude/ai-collab-converse.py --root "$PWD" proposal \
   --thread discussion-20260616-120000-limite-del-api-de-billing \
@@ -313,7 +314,7 @@ python3 ~/.claude/ai-collab-converse.py --root "$PWD" decision \
   --message "Decisión: usar el adapter. No cambiar el API público en esta tarea."
 ```
 
-Las conversaciones ligadas a una tarea usan `--kind task --task-id TAREA` y escriben el archivo compatible `.ai-collab/thread-{task_id}.md`. Las conversaciones generales viven en `.ai-collab/discussions/`. En ambos casos, una mención directa `@slug` despierta al agente mencionado cuando el daemon adapter está activo, y `/collab observe` muestra las conversaciones abiertas en el resumen live del proyecto.
+Las conversaciones ligadas a una tarea usan `--kind task --task-id TAREA` y escriben `.ai-collab/thread-{task_id}.md`. Antes y después de cada turno visible, el helper captura la ventana real y escribe el roster actual más un `.visual-roster.json` inmutable junto a la captura. Cada destinatario debe inspeccionar el PNG: con visión nativa o con `ai-collab-see.py`, que procesa directamente los píxeles y devuelve el SHA-256 para modelos sin entrada de imagen. Después responde con `visual_evidence:` y `visible_peers:`. El roster relaciona superficie, proceso host/del agente, PID/TTY, puertos propios, routing del bridge y logs. Cualquier falta o ambigüedad falla cerrado; puertos y logs solos no son visión.
 
 ### `/collab team configure`
 
@@ -356,6 +357,7 @@ Helper:
 
 ```bash
 python3 ~/.claude/ai-collab-orchestrate.py init --goal "Implementar X" --title implementar-x
+python3 ~/.claude/ai-collab-orchestrate.py convene --run-id RUN --actor codex --participants claude-code,opencode --message "Discutan el objetivo y aporten opinión técnica, riesgos y plan recomendado." --wait-seconds 180
 python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id RUN --actor codex --task-id tarea-ui --title "UI" --role frontend --allowed-files "src/ui/**" --description "Implementa la UI y reporta decisiones."
 python3 ~/.claude/ai-collab-orchestrate.py assign --run-id RUN --actor codex --task-id tarea-ui
 python3 ~/.claude/ai-collab-orchestrate.py thread --run-id RUN --task-id tarea-ui --author opencode --message "@codex necesito una decisión sobre el alcance."
@@ -585,7 +587,7 @@ Todas opcionales. Defínelas en tu archivo rc de shell (`~/.zshrc`, `~/.bashrc`,
 | `AI_COLLAB_PROJECT_ALIASES` | _(vacío)_ | Aliases opcionales del proyecto, separados por coma/punto y coma/nueva línea, que deben contar como workspace actual al matchear ventanas/procesos. Útil cuando el título del IDE no coincide con el repo. |
 | `AI_COLLAB_WAKEUP_ADAPTER` | `visible` | Modo de wakeup. `visible` intenta usar paneles visibles cuando existe integración. Opciones: `opencode-visible`, `kilo-visible`, `hermes-uri`, `antigravity-chat`, `codex-auto`, `codex-filesystem`, `acp`, `codex-acp`, `kimi-acp`, `kilo-acp`, `hermes-acp`, `cli`, `notify-only`. |
 | `AI_COLLAB_WAKEUP_CLI_TARGETS` | `codex,opencode,claude,claude-code,hermes,kimi,kilo` | Allowlist opcional de agentes que pueden ejecutarse por CLI/headless. |
-| `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode,kilo,hermes` | Allowlist opcional de agentes para wakeups visibles. Si no se define, usa `AI_COLLAB_WAKEUP_CLI_TARGETS` cuando exista. |
+| `AI_COLLAB_WAKEUP_VISIBLE_TARGETS` | `codex,opencode,claude,claude-code,kilo,hermes` | Allowlist opcional de agentes para wakeups visibles. Si no se define, usa `AI_COLLAB_WAKEUP_CLI_TARGETS` cuando exista. |
 | `AI_COLLAB_WAKEUP_DRY_RUN` | _(off)_ | Define `1` para registrar qué se despertaría sin ejecutar comandos. |
 | `AI_COLLAB_OPENCODE_PORTS` | _(auto-detectado)_ | Puertos TUI de OpenCode para `opencode-visible`. Normalmente se detectan desde procesos `opencode --port`. |
 | `AI_COLLAB_OPENCODE_SYNTHETIC` | _(off)_ | Define `1` para volver al wakeup oculto de OpenCode (`synthetic: true`). Por defecto está apagado para que la tarea aparezca en la UI visible. |
@@ -615,7 +617,7 @@ El daemon también escribe "ojos semánticos" del proyecto cada 15 segundos:
     20260615-120000-project.semantic.json
 ```
 
-`{agente}.json` es la vista combinada del observer: estado del inbox, tarea actual, secciones del último log, fase/comando reportado por `{agente}.agent.json`, eventos recientes de comandos/tests/ediciones desde `{agente}.agent.events.jsonl`, conversaciones abiertas donde participa o fue mencionado, pistas de procesos filtradas por proyecto, archivos dirty en git y alertas. `{agente}.events.jsonl` conserva el historial del observer para cambios de estado, procesos, archivos dirty y screenshots.
+`{agente}.json` es la vista combinada del observer. `visual-roster.json` aplica un estándar según la superficie: terminal/TUI exige proceso exacto, PID/TTY y puerto propio; un chat nativo exige que el PID de la ventana sea ancestro del bridge exacto del proyecto, además de etiqueta superior ligada a posición y píxeles reales. Una ventana Electron ajena falla; nunca se inventa un PID o puerto individual para un panel embebido.
 
 `summary.json` incluye conversaciones abiertas en `.ai-collab/thread-*.md` y `.ai-collab/discussions/*.md`, además de un fingerprint del proyecto (`project_identity`) construido desde la ruta absoluta del repo, nombre del repo, repo remoto git y aliases opcionales en `AI_COLLAB_PROJECT_ALIASES`. Las pistas de proceso solo se aceptan si el comando, endpoint local o cwd del proceso coincide con ese fingerprint. Eso mantiene aislados varios Antigravity/proyectos abiertos a la vez.
 
@@ -647,11 +649,13 @@ En macOS, la primera captura puede pedir permiso de Screen Recording. Si el perm
 
 ### Wakeup visible y ACP
 
-- `opencode` usa los endpoints TUI visibles (`clear-prompt`, `append-prompt`, `submit-prompt`) para que la tarea aparezca en pantalla.
+- `claude` / `claude-code` usa la extensión `gsepcore.ai-collab-visible-bridge`: localiza el terminal integrado exacto mediante el proceso y cwd, lo muestra, envía el mensaje y devuelve terminal/PID/TTY como evidencia.
+- `opencode` usa el mismo bridge cuando está dentro del IDE, lo que identifica el terminal visible exacto; sin bridge puede usar sus endpoints TUI visibles. Si existe bridge pero rechaza la identidad, no se cambia silenciosamente a otro canal.
 - `kilo` usa el mismo patrón visible cuando el servidor local acepta auth; si responde 401, configura `AI_COLLAB_KILO_BASIC_AUTH` o `AI_COLLAB_KILO_BEARER_TOKEN`.
 - `hermes` puede abrir/prellenar el chat con URI visible (`hermes-uri`), y también puede usar ACP si existe el binario `hermes`.
 - `kimi` soporta ACP (`kimi acp`) y CLI; todavía no hay endpoint visible verificado para inyectar en el panel ya abierto.
-- `claude` / `claude-code` funciona por CLI; despertar exactamente el panel visible depende de Remote Control/IDE y no se trata como garantizado.
+
+Enviar visiblemente un prompt nunca marca el inbox como `claimed`. Solo el agente destinatario puede reclamarlo durante su turno real. El director solo puede decir que un agente respondió cuando existe un mensaje nuevo escrito por ese agente en el thread.
 
 ### Desinstalar el daemon
 

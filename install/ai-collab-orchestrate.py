@@ -23,7 +23,7 @@ from typing import Any
 
 TERMINAL_TASK_STATES = {"done", "failed"}
 ACTIVE_INBOX_STATES = {"unread", "claimed", "running", "blocked", "review"}
-DIRECTOR_ONLY_COMMANDS = {"add-task", "assign", "set-task", "finalize"}
+DIRECTOR_ONLY_COMMANDS = {"add-task", "assign", "convene", "set-task", "finalize"}
 TASK_STATES = {"planned", "assigned", "claimed", "running", "blocked", "review", "done", "failed"}
 
 
@@ -54,6 +54,54 @@ def project_root() -> Path:
     except OSError:
         pass
     return Path(os.getcwd()).resolve()
+
+
+def installed_helper(name: str) -> Path | None:
+    env_name = f"AI_COLLAB_{name.upper().replace('-', '_')}_SCRIPT"
+    configured = os.environ.get(env_name, "").strip()
+    candidates = [
+        Path(configured).expanduser() if configured else None,
+        Path(__file__).resolve().with_name(f"ai-collab-{name}.py"),
+        Path.home() / ".claude" / f"ai-collab-{name}.py",
+    ]
+    for candidate in candidates:
+        if candidate and candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def visible_wake(root: Path, path: Path) -> dict[str, Any]:
+    script = installed_helper("wakeup")
+    if not script:
+        return {"ok": False, "reason": "ai-collab-wakeup.py is not installed"}
+    env = os.environ.copy()
+    env["AI_COLLAB_WAKEUP_ADAPTER"] = "visible"
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(script), root.name, str(path)],
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=max(15, int(os.environ.get("AI_COLLAB_ORCHESTRATE_DISPATCH_TIMEOUT", "45"))),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"ok": False, "reason": str(exc)}
+    lines = (completed.stdout or "").strip().splitlines()
+    try:
+        result = json.loads(lines[-1]) if lines else {}
+    except json.JSONDecodeError:
+        return {"ok": False, "reason": (completed.stdout or completed.stderr).strip()[:500]}
+    rows = result.get("results") if isinstance(result, dict) else None
+    if isinstance(rows, list):
+        ok = bool(rows) and all(
+            isinstance(row, dict) and row.get("action") in {"dispatched", "deduped"}
+            for row in rows
+        )
+    else:
+        ok = result.get("action") in {"dispatched", "adapter-updated"}
+    return {"ok": ok, "result": result, "reason": "" if ok else "visible interface did not accept the task"}
 
 
 def atomic_write(path: Path, content: str) -> None:
@@ -453,10 +501,82 @@ Use `.ai-collab/thread-{task['id']}.md` for questions, review requests, and hand
 - Validation: {task.get('validation') or 'director will validate'}
 """
     atomic_write(inbox_path(root, owner), body)
-    append_thread(root, args.run_id, task["id"], args.actor, f"Assigned to @{owner}.\n\n{message}")
-    write_status(root, args.run_id, "running")
+    path = append_thread(
+        root,
+        args.run_id,
+        task["id"],
+        args.actor,
+        (
+            f"Assigned to @{owner}. Open this task in your visible interface, claim the inbox yourself, "
+            "give your initial technical opinion in this thread, then execute it.\n\n"
+            f"{message}"
+        ),
+    )
+    dispatch = visible_wake(root, path)
+    task["dispatch"] = {
+        "requested": "visible",
+        "status": "submitted" if dispatch.get("ok") else "failed",
+        "at": isoformat_z(utc_now()),
+        "evidence": dispatch.get("result", {}),
+        "reason": dispatch.get("reason", ""),
+    }
+    save_tasks(root, args.run_id, data)
+    write_status(root, args.run_id, "assigned" if dispatch.get("ok") else "dispatch-failed")
     print(f"[AI-COLLAB] Task assigned: {task['id']} -> inbox-{owner}.md")
+    print("[AI-COLLAB] Visible dispatch: " + json.dumps(dispatch, sort_keys=True))
+    if not dispatch.get("ok"):
+        print(
+            "[AI-COLLAB] ERROR: task is queued, but the agent was not activated visibly. "
+            "Do not claim that work started.",
+            file=sys.stderr,
+        )
+        return 2
     return 0
+
+
+def cmd_convene(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve() if args.root else project_root()
+    assert_director(root, args.run_id, args.actor, args.force)
+    director = load_director(root, args.run_id)
+    participants = parse_csv(args.participants) or [
+        str(agent) for agent in director.get("agents", []) if str(agent) != args.actor
+    ]
+    if not participants:
+        raise SystemExit("No participant agents are configured for this run")
+    helper = installed_helper("converse")
+    if not helper:
+        raise SystemExit("ai-collab-converse.py is not installed")
+    command = [
+        sys.executable,
+        str(helper),
+        "--root",
+        str(root),
+        "start",
+        "--author",
+        args.actor,
+        "--topic",
+        args.topic or f"Run {args.run_id} technical kickoff",
+        "--to",
+        ",".join(participants),
+        "--tags",
+        f"run,{args.run_id},visible-conference",
+        "--message",
+        args.message,
+        "--wait-seconds",
+        str(args.wait_seconds),
+    ]
+    completed = subprocess.run(command, cwd=str(root), text=True, capture_output=True, check=False)
+    if completed.stdout:
+        print(completed.stdout.rstrip())
+    if completed.stderr:
+        print(completed.stderr.rstrip(), file=sys.stderr)
+    if completed.returncode != 0:
+        print(
+            "[AI-COLLAB] ERROR: the visible team conference was not verified; "
+            "do not summarize opinions for agents that did not reply.",
+            file=sys.stderr,
+        )
+    return completed.returncode
 
 
 def cmd_thread(args: argparse.Namespace) -> int:
@@ -575,6 +695,16 @@ def build_parser() -> argparse.ArgumentParser:
     assign.add_argument("--message", default="")
     assign.add_argument("--force", action="store_true")
     assign.set_defaults(func=cmd_assign)
+
+    convene = sub.add_parser("convene", help="Start a visible project discussion and require real agent replies.")
+    convene.add_argument("--run-id", required=True)
+    convene.add_argument("--actor", required=True)
+    convene.add_argument("--participants", default="", help="Comma-separated agents. Defaults to the run roster.")
+    convene.add_argument("--topic", default="")
+    convene.add_argument("--message", required=True)
+    convene.add_argument("--wait-seconds", type=int, default=600)
+    convene.add_argument("--force", action="store_true")
+    convene.set_defaults(func=cmd_convene)
 
     thread = sub.add_parser("thread", help="Append an agent-to-agent thread message.")
     thread.add_argument("--run-id", required=True)

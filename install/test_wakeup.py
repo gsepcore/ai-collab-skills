@@ -31,6 +31,7 @@ append_thread_message = _mod.append_thread_message
 run_wakeup_adapter = _mod.run_wakeup_adapter
 run_codex_acp_adapter = _mod.run_codex_acp_adapter
 run_acp_adapter = _mod.run_acp_adapter
+run_ide_terminal_visible_adapter = _mod.run_ide_terminal_visible_adapter
 
 
 SAMPLE_INBOX = """\
@@ -113,7 +114,7 @@ class TestProcessInbox(unittest.TestCase):
         self.assertEqual(meta["attempts"], "0")
         self.assertEqual(meta["last_attempt"], "")
 
-    def test_successful_adapter_claims_inbox(self):
+    def test_successful_adapter_records_visible_dispatch_without_faking_agent_claim(self):
         self.write_inbox()
         result = process_inbox(
             self.inbox,
@@ -125,12 +126,14 @@ class TestProcessInbox(unittest.TestCase):
             adapter_mode="mock-success",
         )
 
-        self.assertEqual(result["action"], "claimed")
+        self.assertEqual(result["action"], "dispatched")
         self.assertEqual(result["adapter_result"]["status"], "success")
         meta = self.read_meta()
-        self.assertEqual(meta["status"], "claimed")
-        self.assertEqual(meta["claimed_by"], "mock-success")
-        self.assertEqual(meta["claimed_at"], "2026-05-12T12:00:00Z")
+        self.assertEqual(meta["status"], "unread")
+        self.assertEqual(meta["claimed_by"], "")
+        self.assertEqual(meta["claimed_at"], "")
+        self.assertEqual(meta["visible_adapter"], "mock-success")
+        self.assertEqual(meta["visible_dispatched_at"], "2026-05-12T12:00:00Z")
 
     def test_done_produces_no_event(self):
         self.write_inbox(SAMPLE_INBOX.replace("status: unread", "status: done"))
@@ -307,6 +310,79 @@ class TestAdapters(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "failed")
+
+    def test_claude_visible_uses_exact_project_ide_bridge(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "project"
+            root.mkdir()
+            registry = Path(d) / "bridges"
+            registry.mkdir()
+            (registry / "123.json").write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "port": 43123,
+                        "token": "secret-token",
+                        "project_paths": [str(root)],
+                        "ide": "Antigravity IDE",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            calls = []
+
+            def poster(url, payload, *, timeout, headers=None):
+                calls.append((url, payload, timeout, headers))
+                return 200, json.dumps({"status": "success"})
+
+            result = run_ide_terminal_visible_adapter(
+                {
+                    "project_path": str(root),
+                    "target_slug": "claude-code",
+                    "inbox_path": str(root / ".ai-collab/inbox-claude-code.md"),
+                    "source_path": str(root / ".ai-collab/thread-kickoff.md"),
+                    "task_id": "kickoff",
+                    "synthetic_prompt": "Read and answer the visible team thread.",
+                },
+                timeout=20,
+                poster=poster,
+                registry_dir=registry,
+            )
+
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["adapter_name"], "ide-terminal-visible")
+            self.assertEqual(calls[0][0], "http://127.0.0.1:43123/terminal/send")
+            self.assertEqual(calls[0][1]["target_slug"], "claude-code")
+            self.assertEqual(calls[0][3], {"Authorization": "Bearer secret-token"})
+
+    def test_claude_visible_refuses_bridge_for_other_project(self):
+        with tempfile.TemporaryDirectory() as d:
+            registry = Path(d) / "bridges"
+            registry.mkdir()
+            (registry / "123.json").write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "port": 43123,
+                        "token": "secret-token",
+                        "project_paths": [str(Path(d) / "other")],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = run_ide_terminal_visible_adapter(
+                {
+                    "project_path": str(Path(d) / "project"),
+                    "target_slug": "claude-code",
+                    "inbox_path": "",
+                    "task_id": "kickoff",
+                    "synthetic_prompt": "hello",
+                },
+                timeout=20,
+                registry_dir=registry,
+            )
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("matched this project", result["message"])
 
     def test_executable_for_checks_launchd_fallback_paths(self):
         old_path = _mod.shutil.which

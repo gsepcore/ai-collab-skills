@@ -29,8 +29,13 @@ REQUIRED_CLAUDE_FILES = (
     ".claude/ai-collab-team.py",
     ".claude/ai-collab-converse.py",
     ".claude/ai-collab-observer.py",
+    ".claude/ai-collab-see.py",
     ".claude/ai-collab-doctor.py",
     ".claude/ai-collab-recover.py",
+    ".claude/ai-collab-build-vscode-bridge.py",
+    ".claude/ai-collab-vscode-bridge/package.json",
+    ".claude/ai-collab-vscode-bridge/extension.js",
+    ".claude/ai-collab-visible-bridge.vsix",
 )
 
 REQUIRED_SKILL_FILES = (
@@ -232,6 +237,32 @@ def check_ocr_engine() -> list[CheckResult]:
     ]
 
 
+def check_visible_ide_bridge(home: Path) -> list[CheckResult]:
+    registry = home / ".ai-collab" / "ide-bridges"
+    live: list[str] = []
+    for path in registry.glob("*.json") if registry.exists() else []:
+        data, error = load_json(path)
+        if error or not isinstance(data, dict):
+            continue
+        try:
+            pid = int(data.get("pid") or 0)
+            port = int(data.get("port") or 0)
+            os.kill(pid, 0)
+        except (OSError, TypeError, ValueError):
+            continue
+        projects = data.get("project_paths") or []
+        live.append(f"pid={pid} port={port} projects={','.join(str(item) for item in projects)}")
+    if live:
+        return [ok("visible-ide-bridge", "; ".join(live))]
+    return [
+        warn(
+            "visible-ide-bridge",
+            "no active IDE bridge registry found. Install the extension and reload each open "
+            "Antigravity/VS Code/Cursor/Windsurf window before expecting visible Claude Code terminal delivery.",
+        )
+    ]
+
+
 def run_checks(home: Path | None = None, include_launchd: bool = True) -> list[CheckResult]:
     root = home or Path.home()
     results: list[CheckResult] = []
@@ -242,6 +273,7 @@ def run_checks(home: Path | None = None, include_launchd: bool = True) -> list[C
         results.extend(check_launchd())
         results.extend(check_cli_projects_allowlist(root))
     results.extend(check_ocr_engine())
+    results.extend(check_visible_ide_bridge(root))
     results.extend(check_codex_visible_support())
     return results
 
