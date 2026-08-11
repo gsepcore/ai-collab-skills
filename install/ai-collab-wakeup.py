@@ -1201,6 +1201,36 @@ def prepare_ide_native_chat_surface(
     return {"status": "failed", "target_slug": target, "message": f"native chat focus failed ({status}): {str(response)[:400]}", "adapter_name": "ide-native-chat-prepare"}
 
 
+def prepare_antigravity_chat_surface(project_path: str, target: str) -> dict[str, Any]:
+    """Verify Codex/Antigravity is reachable without submitting a prompt.
+
+    Unlike the terminal and native-chat adapters, antigravity-chat dispatches
+    directly through the antigravity CLI (see build_antigravity_chat_command)
+    and does not go through an IDE bridge, so there is no terminal/pane to
+    focus ahead of time. Preparation is limited to confirming the CLI exists.
+    """
+    if target not in {"codex", "antigravity"}:
+        return {
+            "status": "failed",
+            "target_slug": target,
+            "message": "antigravity-chat preparation only supports target codex/antigravity",
+            "adapter_name": "antigravity-chat-prepare",
+        }
+    if not antigravity_executable():
+        return {
+            "status": "failed",
+            "target_slug": target,
+            "message": "no antigravity executable found",
+            "adapter_name": "antigravity-chat-prepare",
+        }
+    return {
+        "status": "skipped",
+        "target_slug": target,
+        "message": "antigravity-chat dispatches directly via CLI; no focus-only preparation step is required",
+        "adapter_name": "antigravity-chat-prepare",
+    }
+
+
 def auth_headers_from_env(prefix: str) -> dict[str, str]:
     bearer = os.environ.get(f"AI_COLLAB_{prefix}_BEARER_TOKEN")
     if bearer:
@@ -2644,6 +2674,8 @@ def main(argv: list[str]) -> int:
         results = [
             prepare_ide_native_chat_surface(str(project_root), target)
             if target in {"claude-code-ide", "cursor-native", "windsurf-native", "copilot-chat"}
+            else prepare_antigravity_chat_surface(str(project_root), target)
+            if target in {"codex", "antigravity"}
             else prepare_ide_terminal_visible_surface(str(project_root), target)
             for target in targets
         ]

@@ -4,7 +4,9 @@ Tests for ai-collab-wakeup.py
 Run with: python3 -m pytest install/test_wakeup.py -v
        or: python3 install/test_wakeup.py
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -33,6 +35,7 @@ run_codex_acp_adapter = _mod.run_codex_acp_adapter
 run_acp_adapter = _mod.run_acp_adapter
 run_ide_terminal_visible_adapter = _mod.run_ide_terminal_visible_adapter
 prepare_ide_terminal_visible_surface = _mod.prepare_ide_terminal_visible_surface
+prepare_antigravity_chat_surface = _mod.prepare_antigravity_chat_surface
 run_ide_native_chat_adapter = _mod.run_ide_native_chat_adapter
 
 
@@ -1799,6 +1802,55 @@ for line in sys.stdin:
             )
 
         self.assertEqual(result["status"], "legacy-focus-on-submit")
+
+    def test_antigravity_chat_prepare_does_not_require_ide_bridge(self):
+        # codex/antigravity dispatch directly through the antigravity CLI
+        # (build_antigravity_chat_command), not through an IDE bridge like the
+        # terminal/native-chat adapters, so preparation must not depend on one.
+        os.environ["AI_COLLAB_ANTIGRAVITY_BIN"] = "/usr/bin/antigravity"
+
+        result = prepare_antigravity_chat_surface("/tmp/project", "codex")
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["adapter_name"], "antigravity-chat-prepare")
+
+    def test_antigravity_chat_prepare_fails_without_executable(self):
+        old_lookup = _mod.antigravity_executable
+        _mod.antigravity_executable = lambda: None
+        try:
+            result = prepare_antigravity_chat_surface("/tmp/project", "codex")
+        finally:
+            _mod.antigravity_executable = old_lookup
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("no antigravity executable found", result["message"])
+
+    def test_prepare_visible_cli_routes_codex_to_antigravity_not_terminal(self):
+        # Regression for the bug reported by the user: `--prepare-visible`
+        # only branched on native-chat targets and fell through to
+        # prepare_ide_terminal_visible_surface for everything else, including
+        # codex. That adapter looks for a project-matched IDE-bridge terminal
+        # for codex, which does not exist (codex is reached through
+        # antigravity-chat), so it always failed with a 409-style rejection
+        # and hard-blocked the entire visible escalation (dispatch_and_
+        # optionally_wait in ai-collab-converse.py returns before ever
+        # calling the correct antigravity-chat adapter). codex/antigravity
+        # must route to prepare_antigravity_chat_surface instead.
+        os.environ["AI_COLLAB_ANTIGRAVITY_BIN"] = "/usr/bin/antigravity"
+        with tempfile.TemporaryDirectory() as d:
+            project_root = Path(d) / "project"
+            project_root.mkdir()
+
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                exit_code = _mod.main(["ai-collab-wakeup.py", "--prepare-visible", str(project_root), "codex"])
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(buffer.getvalue().strip())
+        self.assertTrue(payload["ok"])
+        (result,) = payload["results"]
+        self.assertEqual(result["adapter_name"], "antigravity-chat-prepare")
+        self.assertNotEqual(result["adapter_name"], "ide-terminal-visible-prepare")
 
     def test_visible_adapter_blocks_project_not_in_allowlist(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/some/other/project"
