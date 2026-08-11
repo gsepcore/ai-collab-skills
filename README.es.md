@@ -59,13 +59,20 @@ tu-proyecto/
 
 ## Arquitectura: director, workers autónomos, aislamiento por proyecto
 
-Tres principios definen cómo funciona la skill. Léelos antes de instalar — explican el diseño y qué esperar.
+Los siguientes principios definen el comportamiento en ejecución.
+
+### 0. La colaboración queda siempre activa después del setup
+
+Cuando existe `.ai-collab/agents.json`, el usuario no tiene que recordar comandos `/collab` ni decirle al agente qué función debe utilizar. Las reglas instaladas de cada agente exigen un preflight determinista por turno. Este lee el roster, los roles, el inbox directo, las menciones actuales sin respuesta y la identidad de ejecución, y devuelve acciones obligatorias.
+
+Las peticiones normales se enrutan solas: trabajo de equipo o de varios roles inicia la orquestación; un debate o review abre una discusión compartida; el trabajo de otro rol se envía a su owner; las preguntas directas continúan el thread existente; una tarea pequeña de un solo owner se ejecuta directamente manteniendo el estado compartido. Los slash commands quedan como overrides explícitos y herramientas de recuperación/diagnóstico.
 
 ### 1. Claude Code es el director por defecto
 
 Normalmente interactúas con **Claude Code** como la IA orquestadora. Claude es la única asistente que:
 
 - Tiene hooks live `UserPromptSubmit` / `Stop` / `SessionStart` que surface notificaciones y regeneran `CONTEXT.md` automáticamente.
+- Recibe automáticamente el paquete de acciones always-on mediante `UserPromptSubmit`; los demás agentes reciben el mismo contrato mediante sus reglas de proyecto generadas.
 - Posee los slash commands `/collab` — `/collab assign`, `/collab read`, `/collab monitor`, etc.
 - Escribe asignaciones de tareas en `.ai-collab/inbox-{ai}.md` para que los workers las recojan.
 

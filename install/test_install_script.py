@@ -40,7 +40,16 @@ class TestInstallScript(unittest.TestCase):
         self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-team.py"', text)
         self.assertIn('copy_or_download "install/ai-collab-session.py"', text)
         self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-session.py"', text)
+        self.assertIn('copy_or_download "install/ai-collab-turn.py"', text)
+        self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-turn.py"', text)
         self.assertIn("Team role onboarding", text)
+
+    def test_user_prompt_hook_injects_always_on_turn_routing(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+
+        self.assertIn("ai-collab-turn.py preflight", text)
+        self.assertIn("--hook-stdin", text)
+        self.assertIn("injects always-on routing", text)
 
     def test_self_updater_is_installed_and_configured(self):
         text = INSTALL_SH.read_text(encoding="utf-8")

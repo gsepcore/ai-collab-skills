@@ -264,6 +264,7 @@ copy_or_download "install/ai-collab-project-setup.py"         "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-orchestrate.py"           "$CLAUDE_DIR/ai-collab-orchestrate.py"
 copy_or_download "install/ai-collab-team.py"                  "$CLAUDE_DIR/ai-collab-team.py"
 copy_or_download "install/ai-collab-session.py"               "$CLAUDE_DIR/ai-collab-session.py"
+copy_or_download "install/ai-collab-turn.py"                  "$CLAUDE_DIR/ai-collab-turn.py"
 copy_or_download "install/ai-collab-converse.py"              "$CLAUDE_DIR/ai-collab-converse.py"
 copy_or_download "install/ai-collab-observer.py"              "$CLAUDE_DIR/ai-collab-observer.py"
 copy_or_download "install/ai-collab-see.py"                   "$CLAUDE_DIR/ai-collab-see.py"
@@ -279,6 +280,7 @@ chmod +x "$CLAUDE_DIR/ai-collab-project-setup.py"
 chmod +x "$CLAUDE_DIR/ai-collab-orchestrate.py"
 chmod +x "$CLAUDE_DIR/ai-collab-team.py"
 chmod +x "$CLAUDE_DIR/ai-collab-session.py"
+chmod +x "$CLAUDE_DIR/ai-collab-turn.py"
 chmod +x "$CLAUDE_DIR/ai-collab-converse.py"
 chmod +x "$CLAUDE_DIR/ai-collab-observer.py"
 chmod +x "$CLAUDE_DIR/ai-collab-see.py"
@@ -297,6 +299,7 @@ green "Project onboarding   → $CLAUDE_DIR/ai-collab-project-setup.py"
 green "Run orchestrator     → $CLAUDE_DIR/ai-collab-orchestrate.py"
 green "Team role onboarding → $CLAUDE_DIR/ai-collab-team.py"
 green "Session identity     → $CLAUDE_DIR/ai-collab-session.py"
+green "Always-on turn router → $CLAUDE_DIR/ai-collab-turn.py"
 green "Conversation helper  → $CLAUDE_DIR/ai-collab-converse.py"
 green "Live observer        → $CLAUDE_DIR/ai-collab-observer.py"
 green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"
@@ -553,6 +556,7 @@ NEW_HOOKS = {
         "if [ -f \"$CAP\" ]; then "
           "echo \"[AI-COLLAB CAPABILITY MATRIX — READ BEFORE DELIVERY]\"; "
           "cat \"$CAP\"; "
+          "python3 \"$HOME/.claude/ai-collab-turn.py\" preflight --root \"$ROOT\" --agent claude-code --surface-kind terminal 2>/dev/null || true; "
         "fi; "
         "if [ -f \"$NOTIF\" ]; then "
           "CONTENT=$(cat \"$NOTIF\"); "
@@ -577,7 +581,7 @@ NEW_HOOKS = {
     "hooks": [{
       "type": "command",
       "timeout": 5,
-      "command": "python3 ~/.claude/ai-collab-check-notifications.py 2>/dev/null || true"
+      "command": "bash -c 'ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd); python3 ~/.claude/ai-collab-turn.py preflight --root \"$ROOT\" --agent claude-code --surface-kind terminal --hook-stdin 2>/dev/null || true; python3 ~/.claude/ai-collab-check-notifications.py 2>/dev/null || true'"
     }]
   }]
 }
@@ -653,7 +657,7 @@ print(f"  Hooks written to {settings_file}")
 PYEOF
 
 green "SessionStart hook  → loads CONTEXT.md + capability matrix + notifications"
-green "UserPromptSubmit   → shows pending notifications before each message"
+green "UserPromptSubmit   → injects always-on routing + pending notifications"
 green "Stop hook          → auto-generates CONTEXT.md after every response"
 green "Claude permissions → limited allow rules for AI Collab conversation/vision helpers"
 

@@ -83,6 +83,7 @@ class TestUpdate(unittest.TestCase):
         self.assertIn("install/ai-collab-recover.py", rels)
         self.assertIn("install/ai-collab-team.py", rels)
         self.assertIn("install/ai-collab-session.py", rels)
+        self.assertIn("install/ai-collab-turn.py", rels)
         self.assertIn("install/ai-collab-setup.py", rels)
         self.assertTrue(any(".codex/skills/collab/SKILL.md" in path for path in destinations))
 

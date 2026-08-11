@@ -18,16 +18,19 @@ python3 ~/.claude/ai-collab-setup.py --root "$(git rev-parse --show-toplevel 2>/
 It first refreshes both installed skill copies and all global runtime components, then safely migrates the current project. It writes `.ai-collab/TEAM.md`, identity-aware `.ai-collab/agents.json`, `.ai-collab/capabilities.json`, mandatory `.ai-collab/roles.json`, `.ai-collab/inbox-all.md`, the correct rules files, and `.ai-collab/setup-report.json` while preserving roles, inboxes, runs, threads, discussions, and user-authored content. Role onboarding is part of setup; a non-interactive run without existing roles or `--assign role=agent` values remains incomplete.
 
 **Core rules that make this work:**
-1. Every AI saves a log after EVERY response — automatically, no prompting needed.
-2. Every new AI reads `CONTEXT.md` first — the single-file project brief from all logs.
-3. Every AI performs a full preflight before EVERY response, analysis, or tool action: context/protocol, team roster, `.ai-collab/capabilities.json`, `.ai-collab/roles.json` when present, direct inbox, `inbox-all.md`, relevant threads/discussions, recent logs from other agents, and active `Do Not Touch` sections.
-4. Every AI treats `thread-{task_id}.md` as the task conversation channel, and `.ai-collab/discussions/*.md` as natural design/review conversations — `@slug` mentions can wake the mentioned agent when the daemon and adapter are running.
-5. Directed implementation runs have one active director in `.ai-collab/runs/{run_id}/director.json`; all other agents respect that director for the run.
-6. Every AI keeps live observability current in `.ai-collab/live/{agent}.agent.json` before and after commands, tests, file edits, blockers, and handoffs.
-7. Development-team roles guide default routing. Explicit task ownership overrides them, and a vacant role must be resolved with the user/director before delegation.
-8. Always write the durable inbox/thread. Non-Codex agents are internal-first: wait the configured grace period, then visibly escalate only non-responsive agents. Codex is the exception and must be submitted to its exact visible chat immediately. Visible chat is the mandatory fallback for every registered agent.
-9. Prompt submission is not a response. Use distinct states for queued, internal response, escalating visibly, submitted visibly, responded, and failed.
-10. Keep one continuous task/discussion thread through progress questions, blockers, reviews, and handoff. If the director is stale/sleeping, workers use the director's declared visible route in `capabilities.json` and fail closed when that route is degraded.
+1. `.ai-collab/agents.json` activates collaboration for ordinary requests. Never require the user to say `collab` or name a feature.
+2. At the start of every turn, every AI runs `python3 ~/.claude/ai-collab-turn.py preflight --root <root> --agent <slug> --prompt "<request summary>"` and executes its `required_actions` before unrelated work.
+3. The turn packet automatically maps intent to orchestration, discussion, role-owner routing, threaded conversation, or direct execution with shared state. Slash commands are overrides/recovery tools, not a prerequisite.
+4. If the turn helper is unavailable or inactive, perform the full manual fallback: context/protocol, team roster, capabilities, roles, direct inbox, `inbox-all.md`, current threads/discussions, recent peer logs, and active `Do Not Touch` sections.
+5. Every AI saves a log after EVERY response — automatically, no prompting needed.
+6. Every new AI reads `CONTEXT.md` first — the single-file project brief from all logs.
+7. Every AI treats `thread-{task_id}.md` as the task conversation channel, and `.ai-collab/discussions/*.md` as natural design/review conversations — `@slug` mentions can wake the mentioned agent when the daemon and adapter are running.
+8. Directed implementation runs have one active director in `.ai-collab/runs/{run_id}/director.json`; all other agents respect that director for the run.
+9. Every AI keeps live observability current in `.ai-collab/live/{agent}.agent.json` before and after commands, tests, file edits, blockers, and handoffs.
+10. Development-team roles guide default routing. Explicit task ownership overrides them, and a vacant role must be resolved with the user/director before delegation.
+11. Always write the durable inbox/thread. Non-Codex agents are internal-first: wait the configured grace period, then visibly escalate only non-responsive agents. Codex is the exception and must be submitted to its exact visible chat immediately. Visible chat is the mandatory fallback for every registered agent.
+12. Prompt submission is not a response. Use distinct states for queued, internal response, escalating visibly, submitted visibly, responded, and failed.
+13. Keep one continuous task/discussion thread through progress questions, blockers, reviews, and handoff. If the director is stale/sleeping, workers use the director's declared visible route in `capabilities.json` and fail closed when that route is degraded.
 
 ---
 

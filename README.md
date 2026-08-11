@@ -61,13 +61,20 @@ your-project/
 
 ## Architecture: director, autonomous workers, project isolation
 
-Three principles make this skill work the way it does. Read these before installing — they explain the design and what to expect.
+The following principles define the runtime behavior.
+
+### 0. Collaboration is always on after project setup
+
+Once `.ai-collab/agents.json` exists, users do not need to remember `/collab` commands or tell an agent which feature to use. Every agent's installed project rules require one deterministic turn preflight. It reads the roster, roles, direct inbox, current unanswered mentions, and runtime identity, then emits mandatory actions.
+
+Ordinary requests are routed automatically: multi-role/team execution starts orchestration; debate or review opens a shared discussion; work owned by another role is routed to that owner; direct questions continue the existing thread; small single-owner work runs directly while still updating shared state. Slash commands remain explicit overrides and recovery/debugging tools.
 
 ### 1. Claude Code is the default director
 
 You usually interact with **Claude Code** as the orchestrating AI. Claude is the only assistant that:
 
 - Has live `UserPromptSubmit` / `Stop` / `SessionStart` hooks that surface notifications and regenerate `CONTEXT.md` automatically.
+- Receives the always-on turn action packet automatically through `UserPromptSubmit`; other agents receive the same contract through their generated project rules.
 - Owns the `/collab` slash commands — `/collab assign`, `/collab read`, `/collab monitor`, etc.
 - Writes task assignments to `.ai-collab/inbox-{ai}.md` for the worker AIs to pick up.
 

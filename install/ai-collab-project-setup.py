@@ -319,8 +319,16 @@ Identity:
 - container: `{container or "unknown"}`
 - model: `{model or "unknown"}`
 
-Mandatory preflight before EVERY response, analysis, or tool action:
-0. Register this exact runtime before doing work: `python3 ~/.claude/ai-collab-session.py register --root <project-root> --agent {agent} --agent-id {agent_id} --container {container or "unknown"}`. Reuse the returned `session_id` only for this running session and include it in live reports, claims, messages, and logs.
+Always-on activation contract:
+- The presence of `.ai-collab/agents.json` means collaboration is already enabled for every normal request in this project. Never wait for the user to say `collab`, name a feature, or repeat an agent-routing instruction.
+- At the beginning of every user or agent turn, run this once before unrelated work: `python3 ~/.claude/ai-collab-turn.py preflight --root <project-root> --agent {agent} --prompt "<short faithful summary of the current request>"`. Treat its `required_actions` as mandatory. Reuse the returned runtime `session_id` only for this running session.
+- Infer the collaboration behavior from intent: team execution or multiple role owners -> orchestrate; debate/review/opinions -> convene a discussion; another role owner -> route to that owner; vacant role -> ask the user/director to assign it; direct mention/question -> converse in the existing thread; small single-owner work -> execute directly with shared live/log state.
+- Unread inboxes and unanswered current-thread mentions take priority over unrelated work. Do not make the user ask you to check them.
+- Complete live updates, handoffs, and session logs automatically. Never tell the user to invoke a Collab feature that you can invoke yourself.
+- If the helper is missing or reports inactive, fall back to the context checks below and report the installation/setup defect; do not silently behave as if Collab were absent.
+
+Context fallback only when the always-on helper is missing or returns `active: false`:
+0. If the always-on turn helper did not return an active session, register this exact runtime before doing work: `python3 ~/.claude/ai-collab-session.py register --root <project-root> --agent {agent} --agent-id {agent_id} --container {container or "unknown"}`. Reuse the returned `session_id` only for this running session and include it in live reports, claims, messages, and logs.
 1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise read `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` to know the registered agents, their containers, models, and rule files.
 3. Read `.ai-collab/capabilities.json`. Know your internal channels, visible adapter, wake policy, vision method, and every peer's supported routes before sending work. Never treat an unavailable route as successful.
@@ -538,6 +546,20 @@ def write_capabilities_json(root: Path, manifest: dict[str, Any], container: str
             "internal_wake_default": True,
             "codex_visible_wake_immediate": True,
             "visible_fallback_for_every_agent": True,
+        },
+        "automation_policy": {
+            "mode": "always-on",
+            "user_invocation_required": False,
+            "turn_preflight": "python3 ~/.claude/ai-collab-turn.py preflight",
+            "intent_routing": {
+                "team-or-multiple-role-owners": "orchestrate",
+                "debate-review-opinions": "convene-discussion",
+                "different-role-owner": "route-to-role-owner",
+                "vacant-role": "resolve-with-user-or-director",
+                "direct-mention-or-question": "converse",
+                "single-owner-task": "execute-with-shared-state",
+            },
+            "automatic_completion_handoff": True,
         },
         "agents": rows,
     }

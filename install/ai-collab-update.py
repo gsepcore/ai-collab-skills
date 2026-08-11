@@ -54,6 +54,7 @@ GLOBAL_FILES: list[tuple[str, Path, bool]] = [
     ("install/ai-collab-orchestrate.py", CLAUDE_DIR / "ai-collab-orchestrate.py", True),
     ("install/ai-collab-team.py", CLAUDE_DIR / "ai-collab-team.py", True),
     ("install/ai-collab-session.py", CLAUDE_DIR / "ai-collab-session.py", True),
+    ("install/ai-collab-turn.py", CLAUDE_DIR / "ai-collab-turn.py", True),
     ("install/ai-collab-converse.py", CLAUDE_DIR / "ai-collab-converse.py", True),
     ("install/ai-collab-observer.py", CLAUDE_DIR / "ai-collab-observer.py", True),
     ("install/ai-collab-see.py", CLAUDE_DIR / "ai-collab-see.py", True),

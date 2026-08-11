@@ -1,6 +1,6 @@
 ---
 name: collab
-description: Enable real-time collaboration and directed implementation runs between multiple AI coding agents (Claude Code, OpenCode, Codex, Aider, Hermes, Cursor native chat, Windsurf native chat, Copilot Chat, etc.) working on the same project simultaneously, regardless of IDE/container or LLM model. Use this skill when the user wants agents to share context, receive tasks, avoid conflicting changes, configure a persistent development team with roles such as senior director, frontend, backend, database, DevOps, QA, security, deployment, or UI/UX design, or route an orchestrated implementation by those roles. Triggers on /collab, /collab team, /collab orchestrate, "assign roles to my agents", "set up my AI development team", "reparte las tareas", "asigna roles", "equipo de desarrolladores", "multi-AI", "collab", "comparte contexto", "haz un plan con varios agentes", or "Codex como director".
+description: Enable always-on collaboration and directed implementation between multiple AI coding agents (Claude Code, OpenCode, Codex, Aider, Hermes, Cursor, Windsurf, Copilot Chat, etc.) in one project. Use whenever a project contains `.ai-collab/agents.json` or the user asks for implementation, review, debate, delegation, agent opinions, role-based work, shared context, conflict avoidance, team setup, or multi-agent execution. In an onboarded project, activate automatically for ordinary requests without requiring the user to say "collab" or name a feature. Also triggers on /collab, /collab team, /collab orchestrate, "assign roles", "reparte las tareas", "equipo", "agentes", "comparte contexto", or "Codex como director".
 ---
 
 # AI Collab Skill
@@ -10,6 +10,24 @@ Shared filesystem protocol so every AI coding agent working on the same project 
 ---
 
 ## How it works
+
+### Always-on default
+
+Treat `.ai-collab/agents.json` as the activation switch. In an onboarded project, do not wait for `/collab` or ask the user which feature to use. At the start of each turn, run:
+
+```bash
+python3 ~/.claude/ai-collab-turn.py preflight --root "$ROOT" --agent "$AGENT" --prompt "$SHORT_REQUEST_SUMMARY"
+```
+
+Execute its `required_actions`. Infer the correct behavior automatically:
+
+- Team execution or multiple configured role owners: orchestrate.
+- Debate, review, or requests for opinions: convene a shared discussion.
+- Work owned by another configured role: route it to that owner.
+- Direct agent mention, question, blocker, or handoff: continue the shared thread.
+- Small single-owner work: execute directly while maintaining shared live/log state.
+
+Never require the user to remember a Collab command. Slash commands remain explicit overrides and recovery/debugging surfaces.
 
 Each AI writes a Markdown log to `{project-root}/.ai-collab/`. Any AI with filesystem access to the project can read those logs. Claude manages its own log via this skill. Other agents (OpenCode, Codex, Aider, Cursor native chat, etc.) write via agent-specific rules installed by `~/.claude/ai-collab-project-setup.py`.
 
