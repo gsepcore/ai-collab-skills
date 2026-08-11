@@ -118,6 +118,26 @@ class TestUnifiedSetup(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["missing_agent_capabilities"], ["opencode"])
 
+    def test_noninteractive_setup_cannot_skip_role_onboarding(self):
+        (self.collab / "agents.json").write_text(
+            json.dumps({
+                "schema": "ai-collab.agents.v2", "project_id": "prj_test",
+                "agents": [{"agent": "codex", "agent_id": "agt_codex"}],
+            }),
+            encoding="utf-8",
+        )
+        args = argparse.Namespace(
+            assign=[], non_interactive=True,
+            installer_source=str(Path(__file__).resolve().parent.parent),
+        )
+
+        result = _mod.run_role_onboarding(self.root, args)
+
+        self.assertEqual(result["status"], "required")
+        pending = json.loads((self.collab / "role-onboarding.json").read_text(encoding="utf-8"))
+        self.assertEqual(pending["status"], "required")
+        self.assertEqual(pending["agents"][0]["agent_id"], "agt_codex")
+
     def test_global_reinstall_suppresses_recursive_project_setup(self):
         installer = self.root / "install.sh"
         installer.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
@@ -200,7 +220,12 @@ class TestUnifiedSetup(unittest.TestCase):
         self.assertTrue((home / ".codex" / "skills" / "collab" / "SKILL.md").is_file())
         self.assertTrue((home / ".claude" / "ai-collab-setup.py").is_file())
         for path, content in protected.items():
-            self.assertEqual(path.read_text(encoding="utf-8"), content)
+            if path.name != "roles.json":
+                self.assertEqual(path.read_text(encoding="utf-8"), content)
+        migrated_roles = json.loads((self.collab / "roles.json").read_text(encoding="utf-8"))
+        self.assertEqual(migrated_roles["schema"], "ai-collab.roles.v2")
+        self.assertEqual(migrated_roles["assignments"]["ui-ux-design"]["primary"], "design-bot")
+        self.assertTrue(migrated_roles["assignments"]["ui-ux-design"]["primary_agent_id"].startswith("agt_"))
 
 
 if __name__ == "__main__":

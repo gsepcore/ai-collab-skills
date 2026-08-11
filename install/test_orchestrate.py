@@ -218,6 +218,27 @@ class TestOrchestrate(unittest.TestCase):
         self.assertEqual(tasks["tasks"][0]["status"], "assigned")
         self.assertEqual(tasks["tasks"][0]["dispatch"]["status"], "submitted-visibly")
 
+    def test_assign_to_codex_skips_internal_wait_and_writes_visible_chat(self):
+        waits = []
+        _mod.wait_for_inbox_response = lambda path, timeout: waits.append(timeout) or ""
+        self.run_cli(
+            "init", "--run-id", "run-codex-visible", "--goal", "Ask Codex",
+            "--director", "claude-code", "--agents", "codex",
+        )
+        self.run_cli(
+            "add-task", "--run-id", "run-codex-visible", "--actor", "claude-code",
+            "--task-id", "task-codex", "--title", "Review", "--owner", "codex",
+            "--description", "Review the implementation.",
+        )
+
+        result = self.run_cli(
+            "assign", "--run-id", "run-codex-visible", "--actor", "claude-code",
+            "--task-id", "task-codex", "--internal-wait-seconds", "30",
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(waits, [0])
+
     def test_assign_skips_visible_escalation_after_internal_claim(self):
         self.run_cli(
             "init",

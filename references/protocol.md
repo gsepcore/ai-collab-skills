@@ -7,6 +7,7 @@ Add these snippets to your project once. Each AI agent will then automatically p
 - `agent` is the runtime doing work: `claude-code`, `opencode`, `codex`, `aider`, `hermes`, `cursor-native`, `windsurf-native`, `copilot-chat`, or a custom slug.
 - `container` is where the agent is visible: `antigravity`, `cursor`, `vscode`, `windsurf`, `terminal`, etc.
 - `model` is the LLM behind the agent: `openai/gpt-5.5`, `minimax/m2.7`, `anthropic/claude-opus-4.7`, etc.
+- `project_id` and `agent_id` are stable persisted codes. Every running instance registers a unique `session_id` and exact `surface_id`; routing never relies on a display name alone.
 
 Prefer the unified install-or-migrate helper instead of manually copying snippets:
 
@@ -14,7 +15,7 @@ Prefer the unified install-or-migrate helper instead of manually copying snippet
 python3 ~/.claude/ai-collab-setup.py --root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ```
 
-It first refreshes both installed skill copies and all global runtime components, then safely migrates the current project. It writes `.ai-collab/TEAM.md`, `.ai-collab/agents.json`, `.ai-collab/capabilities.json`, `.ai-collab/inbox-all.md`, the correct rules files, and `.ai-collab/setup-report.json` while preserving roles, inboxes, runs, threads, discussions, and user-authored content. Then run `python3 ~/.claude/ai-collab-team.py configure` to assign persistent development-team roles when none exist.
+It first refreshes both installed skill copies and all global runtime components, then safely migrates the current project. It writes `.ai-collab/TEAM.md`, identity-aware `.ai-collab/agents.json`, `.ai-collab/capabilities.json`, mandatory `.ai-collab/roles.json`, `.ai-collab/inbox-all.md`, the correct rules files, and `.ai-collab/setup-report.json` while preserving roles, inboxes, runs, threads, discussions, and user-authored content. Role onboarding is part of setup; a non-interactive run without existing roles or `--assign role=agent` values remains incomplete.
 
 **Core rules that make this work:**
 1. Every AI saves a log after EVERY response — automatically, no prompting needed.
@@ -24,7 +25,7 @@ It first refreshes both installed skill copies and all global runtime components
 5. Directed implementation runs have one active director in `.ai-collab/runs/{run_id}/director.json`; all other agents respect that director for the run.
 6. Every AI keeps live observability current in `.ai-collab/live/{agent}.agent.json` before and after commands, tests, file edits, blockers, and handoffs.
 7. Development-team roles guide default routing. Explicit task ownership overrides them, and a vacant role must be resolved with the user/director before delegation.
-8. Delivery is internal-first. Write the inbox/thread, wait the configured short grace period, announce any non-response before visible escalation, and wake only the missing agents in their exact visible project chats.
+8. Always write the durable inbox/thread. Non-Codex agents are internal-first: wait the configured grace period, then visibly escalate only non-responsive agents. Codex is the exception and must be submitted to its exact visible chat immediately. Visible chat is the mandatory fallback for every registered agent.
 9. Prompt submission is not a response. Use distinct states for queued, internal response, escalating visibly, submitted visibly, responded, and failed.
 10. Keep one continuous task/discussion thread through progress questions, blockers, reviews, and handoff. If the director is stale/sleeping, workers use the director's declared visible route in `capabilities.json` and fail closed when that route is degraded.
 
@@ -44,6 +45,8 @@ Every log should include these frontmatter fields when the agent supports them:
 
 ```yaml
 agent: opencode
+agent_id: agt_0123456789abcdef
+session_id: ses_20260811T120000Z_a1b2c3d4e5f6
 container: antigravity
 model: minimax/m2.7
 ```
@@ -135,7 +138,7 @@ python3 ~/.claude/ai-collab-converse.py decision --thread discussion-20260616-12
 
 Messages include a parseable `type:` field (`question`, `answer`, `proposal`, `decision`, `blocker`, `review`, `handoff`, or `message`) so agents can skim intent quickly.
 
-The conversation helper writes internally first. If the recipient does not answer within its `capabilities.json` grace period, it records a user-visible escalation notice, focuses the exact target surface without sending when supported, runs mandatory visual proof, and dispatches only the missing direct mentions. A still-running legacy bridge may focus on the first exact-terminal submission; in that case immediate post-submit proof and an evidence follow-up are mandatory. The daemon provides retries/recovery. When the latest message mentions `@codex`, `@opencode`, `@claude`, or another registered slug, a wake event targets that agent without changing inbox claim state. Only the target agent's own visually attested response or claim advances evidence.
+The conversation helper always writes the durable internal record. Codex is dispatched to its exact visible chat immediately. Other recipients get their `capabilities.json` grace period; a missing claim/response triggers the exact visible-chat fallback. Routing resolves the registered project, agent, runtime session, and surface codes before submission. The daemon provides retries/recovery. Only the target agent's own visually attested response or claim advances evidence.
 
 ---
 

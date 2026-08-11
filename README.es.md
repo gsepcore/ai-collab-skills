@@ -75,6 +75,8 @@ Los workers *pueden* técnicamente leer logs de los demás y editar cualquier ar
 
 Para planes grandes de implementación, el usuario puede iniciar un **run dirigido** y elegir el director de ese run (`claude-code`, `codex`, `opencode` u otro agente registrado). El director seleccionado recibe un lock en `.ai-collab/runs/{run_id}/director.json`; los demás agentes actúan como workers para ese run hasta que el lock se libera. Así Codex puede dirigir un run mientras Claude Code dirige otro sin pisarse.
 
+La identidad no depende del nombre visible: cada proyecto conserva un `project_id`, cada agente un `agent_id` estable y cada ejecución genera un `session_id` único con su `surface_id`. Los roles guardan también `primary_agent_id`, por lo que dos paneles llamados Claude o Codex no se confunden entre sí.
+
 ### 1.5 El director conoce al equipo desde el inicio de la sesión
 
 Para que Claude delegue bien, necesita saber quién más está en el proyecto. El hook `Stop` regenera `.ai-collab/CONTEXT.md` después de cada respuesta de Claude, y `CONTEXT.md` incluye una **sección `## Team`** construida desde tres fuentes:
@@ -175,6 +177,8 @@ python3 ~/.claude/ai-collab-update.py --project "$(git rev-parse --show-toplevel
 
 El daemon también ejecuta recovery cada pocos minutos y después de reboot/login. Recovery no borra memoria del proyecto: refresca `.ai-collab/CONTEXT.md` cuando falta o está viejo, escribe `.ai-collab/live/recovery.json`, y limpia entradas de dedupe de wakeup para inboxes no terminados para que una tarea pendiente antes del apagado pueda intentarse otra vez.
 
+Si instalas desde un clone local, el instalador fija `AI_COLLAB_UPDATE_LOCAL_SOURCE` a ese clone. Así el daemon sigue la versión de desarrollo local y no la reemplaza por el `main` público.
+
 ### Después de instalar — configura tu proyecto
 
 Abre Claude Code dentro de tu proyecto y ejecuta:
@@ -185,7 +189,7 @@ Abre Claude Code dentro de tu proyecto y ejecuta:
 
 Esto actualiza primero toda la instalación global —incluidas las copias de la skill para Claude y Codex— y luego crea o migra el proyecto. Conserva el historial y los roles, refresca `PROTOCOL.md`, `TEAM.md`, `agents.json`, `capabilities.json` y los bloques de reglas, valida daemon y puentes visuales y guarda el resultado exacto en `.ai-collab/setup-report.json`.
 
-Después inicia el pequeño onboarding de equipo: detecta los agentes registrados y pregunta quién será responsable de dirección senior, frontend, backend, bases de datos, DevOps, QA, seguridad, revisión de arquitectura, revisión funcional, despliegues y diseño UI/UX. Las elecciones se guardan en `.ai-collab/roles.json`; un agente puede ocupar varios puestos y un puesto puede quedar vacante.
+El onboarding de equipo es una fase obligatoria del setup: detecta las identidades registradas y pregunta quién será responsable de cada disciplina. Las elecciones se guardan en `.ai-collab/roles.json` junto con el `agent_id`; un agente puede ocupar varios puestos y un puesto puede quedar vacante. Un setup no interactivo sin roles existentes ni valores `--assign role=agente` queda incompleto en vez de saltarse el onboarding.
 
 ### Configurar otros agentes
 
@@ -293,7 +297,7 @@ La tercera forma (`/collab assign all ...`) escribe en `inbox-all.md` para que c
 
 Abre una conversación natural entre agentes sin crear primero una tarea formal. Úsalo cuando los agentes necesiten preguntarse cosas, comparar soluciones, pedir revisión, corregirse, registrar una decisión o dejar un handoff.
 
-La conversación es interna primero y continua: se escribe el thread compartido antes de cualquier wake visible; los agentes que responden siguen por el canal interno y solo se escala a los que permanecen en silencio después del aviso explícito. El mismo thread conserva avances, dudas, recomendaciones, revisiones y cierre. Cuando el director está dormido o stale, los workers usan la ruta declarada en `.ai-collab/capabilities.json`; si la entrada visual de un Codex nativo no está disponible, se reporta como degradada y jamás se simula.
+Cada conversación conserva un thread interno durable. Los agentes salvo Codex se despiertan primero por inbox interno; si no reclaman o responden, se escala a su chat visible exacto. Codex es la excepción y recibe escritura visible inmediata. El chat visible es el fallback obligatorio de cualquier agente registrado, y una entrega nunca se presenta como respuesta.
 
 ```bash
 python3 ~/.claude/ai-collab-converse.py --root "$PWD" start \
@@ -373,10 +377,11 @@ Comando único para instalar o actualizar AI Collab y crear o migrar un proyecto
 - Crea o migra `.ai-collab/` y actualiza `PROTOCOL.md` conservando un backup
 - Conserva roles, inboxes, runs, threads, discusiones, agentes personalizados y contenido escrito por el usuario
 - Regenera los bloques administrados y la matriz completa de capacidades sin duplicados
+- Genera códigos estables de agente, registra cada sesión de ejecución y ejecuta el onboarding obligatorio de roles
 - Ejecuta el diagnóstico estricto y guarda `.ai-collab/setup-report.json`
 - **Siembra `inbox-all.md` con una tarea de onboarding** — el primer worker que abra este proyecto se auto-orienta automáticamente (preservado intacto si el archivo ya existe)
 - Escribe el primer log de Claude
-- Pide a los agentes activos que confirmen las capacidades nuevas usando primero la mensajería interna y después el chat visible si no responden
+- Pide confirmación a los agentes activos: Codex recibe escritura visible inmediata y los demás usan inbox interno con fallback visible
 
 ```
 /collab setup
@@ -656,10 +661,12 @@ En macOS, la primera captura puede pedir permiso de Screen Recording. Si el perm
 ### Wakeup visible y ACP
 
 - `claude` / `claude-code` usa la extensión `gsepcore.ai-collab-visible-bridge`: localiza el terminal integrado exacto mediante el proceso y cwd, lo muestra, envía el mensaje y devuelve terminal/PID/TTY como evidencia.
+- `claude-code-ide` apunta al panel nativo de Claude Code. El bridge enfoca la superficie registrada, inyecta `project_id + agent_id + session_id + surface_id` y después envía el wake; sus reglas privadas no se mezclan con el `CLAUDE.md` del Claude de terminal.
+- Cualquier agente de terminal registrado puede resolverse por su sesión y PID/TTY; reconocer solo el nombre del proceso queda como compatibilidad para sesiones antiguas.
 - `opencode` usa el mismo bridge cuando está dentro del IDE, lo que identifica el terminal visible exacto; sin bridge puede usar sus endpoints TUI visibles. Si existe bridge pero rechaza la identidad, no se cambia silenciosamente a otro canal.
 - `kilo` usa el mismo patrón visible cuando el servidor local acepta auth; si responde 401, configura `AI_COLLAB_KILO_BASIC_AUTH` o `AI_COLLAB_KILO_BEARER_TOKEN`.
 - `hermes` puede abrir/prellenar el chat con URI visible (`hermes-uri`), y también puede usar ACP si existe el binario `hermes`.
-- `kimi` soporta ACP (`kimi acp`) y CLI; todavía no hay endpoint visible verificado para inyectar en el panel ya abierto.
+- `kimi` y otros agentes de terminal registrados usan el bridge exacto del IDE; ACP/CLI queda como modo no visible elegido explícitamente.
 
 Enviar visiblemente un prompt nunca marca el inbox como `claimed`. Solo el agente destinatario puede reclamarlo durante su turno real. El director solo puede decir que un agente respondió cuando existe un mensaje nuevo escrito por ese agente en el thread.
 

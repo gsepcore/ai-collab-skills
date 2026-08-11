@@ -33,6 +33,7 @@ run_codex_acp_adapter = _mod.run_codex_acp_adapter
 run_acp_adapter = _mod.run_acp_adapter
 run_ide_terminal_visible_adapter = _mod.run_ide_terminal_visible_adapter
 prepare_ide_terminal_visible_surface = _mod.prepare_ide_terminal_visible_surface
+run_ide_native_chat_adapter = _mod.run_ide_native_chat_adapter
 
 
 SAMPLE_INBOX = """\
@@ -137,13 +138,15 @@ class TestProcessInbox(unittest.TestCase):
         self.assertEqual(meta["visible_dispatched_at"], "2026-05-12T12:00:00Z")
 
     def test_capability_grace_waits_before_visible_inbox_dispatch(self):
+        self.inbox = self.inbox.parent / "inbox-opencode.md"
         (self.inbox.parent / "capabilities.json").write_text(
             json.dumps(
                 {
                     "agents": [
                         {
-                            "agent": "codex",
+                            "agent": "opencode",
                             "visible": {"adapter": "mock-success", "native_chat_only": False},
+                            "delivery": {"primary": "internal-inbox", "fallback": "visible-chat"},
                             "wake_policy": {"internal_grace_seconds": 15, "sleep_threshold_seconds": 60},
                         }
                     ]
@@ -151,7 +154,7 @@ class TestProcessInbox(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        self.write_inbox()
+        self.write_inbox(SAMPLE_INBOX.replace("to: codex", "to: opencode"))
 
         waiting = process_inbox(
             self.inbox,
@@ -175,6 +178,37 @@ class TestProcessInbox(unittest.TestCase):
         self.assertEqual(waiting["action"], "internal-grace")
         self.assertEqual(waiting["grace_seconds"], 15)
         self.assertEqual(dispatched["action"], "dispatched")
+
+    def test_codex_bypasses_internal_grace_and_uses_visible_chat_immediately(self):
+        (self.inbox.parent / "capabilities.json").write_text(
+            json.dumps(
+                {
+                    "agents": [
+                        {
+                            "agent": "codex",
+                            "visible": {"adapter": "mock-success", "native_chat_only": True},
+                            "delivery": {"primary": "visible-chat", "fallback": "visible-chat"},
+                            "wake_policy": {"internal_grace_seconds": 30, "sleep_threshold_seconds": 60},
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_inbox()
+
+        result = process_inbox(
+            self.inbox,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+
+        self.assertEqual(result["action"], "dispatched")
+        self.assertEqual(result["adapter_result"]["status"], "success")
 
     def test_done_produces_no_event(self):
         self.write_inbox(SAMPLE_INBOX.replace("status: unread", "status: done"))
@@ -395,6 +429,46 @@ class TestAdapters(unittest.TestCase):
             self.assertEqual(calls[0][0], "http://127.0.0.1:43123/terminal/send")
             self.assertEqual(calls[0][1]["target_slug"], "claude-code")
             self.assertEqual(calls[0][3], {"Authorization": "Bearer secret-token"})
+
+    def test_native_claude_visible_uses_registered_session_identity(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "project"
+            (root / ".ai-collab" / "live").mkdir(parents=True)
+            registry = Path(d) / "bridges"
+            registry.mkdir()
+            (registry / "123.json").write_text(
+                json.dumps({
+                    "pid": os.getpid(), "port": 43124, "token": "secret-token",
+                    "project_paths": [str(root)], "ide": "Antigravity IDE",
+                }),
+                encoding="utf-8",
+            )
+            calls = []
+
+            def poster(url, payload, *, timeout, headers=None):
+                calls.append((url, payload, timeout, headers))
+                return 200, json.dumps({
+                    "status": "success", "agent_id": "agt_claude_ide", "session_id": "ses_native_1",
+                    "surface_id": "vscode-native:claude-code-ide:abc",
+                })
+
+            result = run_ide_native_chat_adapter(
+                {
+                    "project_path": str(root), "target_slug": "claude-code-ide",
+                    "inbox_path": str(root / ".ai-collab/inbox-claude-code-ide.md"),
+                    "source_path": str(root / ".ai-collab/thread-wake.md"), "task_id": "wake",
+                    "synthetic_prompt": "Read and answer your internal inbox.",
+                },
+                timeout=20, poster=poster, registry_dir=registry,
+            )
+
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["session_id"], "ses_native_1")
+            self.assertEqual(result["agent_id"], "agt_claude_ide")
+            self.assertEqual(calls[0][0], "http://127.0.0.1:43124/native/send")
+            self.assertEqual(calls[0][1]["target_slug"], "claude-code-ide")
+            evidence = json.loads((root / ".ai-collab/live/claude-code-ide.visible.json").read_text(encoding="utf-8"))
+            self.assertEqual(evidence["session_id"], "ses_native_1")
 
     def test_claude_visible_refuses_bridge_for_other_project(self):
         with tempfile.TemporaryDirectory() as d:

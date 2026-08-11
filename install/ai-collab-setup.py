@@ -121,10 +121,33 @@ def protected_snapshot(root: Path) -> dict[str, bytes]:
 
 
 def protected_changes(before: dict[str, bytes], after: dict[str, bytes]) -> list[str]:
+    def compatible_role_migration(path: str, old: bytes, new: bytes) -> bool:
+        if path != ".ai-collab/roles.json":
+            return False
+        try:
+            old_data = json.loads(old)
+            new_data = json.loads(new)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return False
+        old_assignments = old_data.get("assignments", {}) if isinstance(old_data, dict) else {}
+        new_assignments = new_data.get("assignments", {}) if isinstance(new_data, dict) else {}
+        if not isinstance(old_assignments, dict) or not isinstance(new_assignments, dict):
+            return False
+        return all(
+            role in new_assignments
+            and isinstance(old_item, dict)
+            and isinstance(new_assignments[role], dict)
+            and old_item.get("primary") == new_assignments[role].get("primary")
+            for role, old_item in old_assignments.items()
+        )
     return sorted(
         path
         for path, content in before.items()
-        if path not in after or (after[path] != content and not after[path].startswith(content))
+        if path not in after or (
+            after[path] != content
+            and not after[path].startswith(content)
+            and not compatible_role_migration(path, content, after[path])
+        )
     )
 
 
@@ -213,6 +236,7 @@ def verify_project(root: Path, expected_agents: list[str]) -> dict[str, Any]:
         ".ai-collab/agents.json",
         ".ai-collab/capabilities.json",
         ".ai-collab/inbox-all.md",
+        ".ai-collab/roles.json",
     ]
     missing = [path for path in required if not (root / path).is_file()]
     agents_manifest = read_json(root / ".ai-collab" / "agents.json")
@@ -228,12 +252,51 @@ def verify_project(root: Path, expected_agents: list[str]) -> dict[str, Any]:
         if isinstance(row, dict) and row.get("agent")
     }
     absent_agents = sorted(agent for agent in expected_agents if agent not in registered or agent not in capable)
+    missing_identity = sorted(
+        str(row.get("agent")) for row in agents_manifest.get("agents", [])
+        if isinstance(row, dict) and row.get("agent") and not row.get("agent_id")
+    )
     return {
-        "status": "ok" if not missing and not absent_agents else "failed",
+        "status": "ok" if not missing and not absent_agents and not missing_identity else "failed",
         "missing_files": missing,
         "missing_agent_capabilities": absent_agents,
         "registered_agents": sorted(registered),
+        "missing_agent_ids": missing_identity,
     }
+
+
+def run_role_onboarding(root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    helper = CLAUDE_DIR / "ai-collab-team.py"
+    if not helper.is_file() and args.installer_source:
+        source = Path(args.installer_source).expanduser().resolve()
+        source_root = source if source.is_dir() else source.parent.parent
+        candidate = source_root / "install" / "ai-collab-team.py"
+        if candidate.is_file():
+            helper = candidate
+    if not helper.is_file():
+        return {"status": "failed", "reason": "team onboarding helper is not installed"}
+    assignments = list(getattr(args, "assign", None) or [])
+    roles_exist = (root / ".ai-collab" / "roles.json").is_file()
+    if assignments:
+        command = [sys.executable, str(helper), "--root", str(root), "configure", "--non-interactive", "--replace"]
+        for assignment in assignments:
+            command.extend(["--assign", assignment])
+    elif roles_exist:
+        command = [sys.executable, str(helper), "--root", str(root), "configure", "--non-interactive"]
+    elif not getattr(args, "non_interactive", False) and sys.stdin.isatty():
+        command = [sys.executable, str(helper), "--root", str(root), "configure"]
+    else:
+        manifest = read_json(root / ".ai-collab" / "agents.json")
+        pending = {
+            "schema": "ai-collab.role-onboarding.v1",
+            "status": "required",
+            "agents": [row for row in manifest.get("agents", []) if isinstance(row, dict)],
+            "message": "Role onboarding is mandatory. Rerun /collab setup interactively or pass --assign role=agent for every role.",
+        }
+        atomic_write_json(root / ".ai-collab" / "role-onboarding.json", pending)
+        return pending
+    returncode = run_visible(command, cwd=root)
+    return {"status": "configured" if returncode == 0 else "failed", "returncode": returncode, "command": command}
 
 
 def run_unified_setup(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
@@ -297,6 +360,10 @@ def run_unified_setup(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         report["project_migration"] = {"status": "failed", "reason": "project setup helper is not installed"}
         exit_code = 1
 
+    report["role_onboarding"] = run_role_onboarding(root, args)
+    if report["role_onboarding"].get("status") not in {"configured"}:
+        exit_code = 2 if report["role_onboarding"].get("status") == "required" else 1
+
     expected_agents = agents or manifest_defaults(root)[0]
     report["project_verification"] = verify_project(root, expected_agents)
     if report["project_verification"]["status"] != "ok":
@@ -348,6 +415,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--agents", default=None, help="Comma-separated agents. Existing manifest is preserved by default.")
     parser.add_argument("--container", default=None, help="IDE/container. Existing manifest is preserved by default.")
     parser.add_argument("--models", default=None, help="Comma-separated agent=model pairs.")
+    parser.add_argument("--assign", action="append", default=[], help="Role assignment role=agent; repeat to complete onboarding non-interactively.")
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt during project migration.")
     parser.add_argument("--installer-source", default=None, help="Local repository or install.sh path; default downloads current main.")
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("AI_COLLAB_SETUP_TIMEOUT", "30")))

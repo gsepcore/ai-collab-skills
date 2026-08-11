@@ -2,8 +2,8 @@
 """
 Durable inbox wakeup detection for ai-collab.
 
-Turns unread inbox files into durable wake events, then dispatches a wakeup
-adapter. CLI execution is opt-in; the default adapter is notify-only.
+Turns unread inbox files into durable wake events, then dispatches the exact
+visible fallback when the internal-first wake policy requires it.
 """
 from __future__ import annotations
 
@@ -42,7 +42,10 @@ DEFAULT_NOTIFICATIONS_FILE = Path.home() / ".ai-collab-notifications.json"
 DEFAULT_ADAPTER = "visible"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
 DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude", "claude-code", "hermes", "kimi", "kilo")
-DEFAULT_VISIBLE_TARGETS = ("codex", "opencode", "claude", "claude-code", "kilo", "hermes")
+DEFAULT_VISIBLE_TARGETS = (
+    "codex", "opencode", "claude", "claude-code", "claude-code-ide", "aider", "kilo", "hermes", "kimi",
+    "cursor-native", "windsurf-native", "copilot-chat", "generic",
+)
 DEFAULT_IDE_BRIDGE_DIR = Path.home() / ".ai-collab" / "ide-bridges"
 OPENCODE_SYNTHETIC_ENV = "AI_COLLAB_OPENCODE_SYNTHETIC"
 MAX_EVENTS = 200
@@ -273,6 +276,9 @@ def internal_grace_seconds(project_root: Path, target_slug: str, now: datetime) 
     if not capability:
         return 0
     policy = capability.get("wake_policy") if isinstance(capability, dict) else {}
+    delivery = capability.get("delivery") if isinstance(capability, dict) else {}
+    if target_slug == "codex" or (isinstance(delivery, dict) and delivery.get("primary") == "visible-chat"):
+        return 0
     visible = capability.get("visible") if isinstance(capability, dict) else {}
     try:
         grace = max(
@@ -988,12 +994,6 @@ def run_ide_terminal_visible_adapter(
     if guardrail:
         return guardrail
     target = input_data["target_slug"]
-    if target not in {"claude", "claude-code", "opencode", "hermes"}:
-        return {
-            "status": "failed",
-            "message": f"IDE terminal bridge does not support target {target}",
-            "adapter_name": "ide-terminal-visible",
-        }
     candidates = ide_bridge_candidates(input_data["project_path"], registry_dir=registry_dir)
     if not candidates:
         return {
@@ -1045,6 +1045,10 @@ def run_ide_terminal_visible_adapter(
             "shell_pid": detail.get("shell_pid") or "",
             "agent_pid": detail.get("agent_pid") or "",
             "tty": str(detail.get("tty") or ""),
+            "agent_id": str(detail.get("agent_id") or ""),
+            "session_id": str(detail.get("session_id") or ""),
+            "surface_id": str(detail.get("surface_id") or ""),
+            "identity": str(detail.get("identity") or ""),
             "task_id": input_data.get("task_id", ""),
             "source_path": input_data.get("source_path", ""),
         }
@@ -1075,13 +1079,6 @@ def prepare_ide_terminal_visible_surface(
 ) -> dict[str, Any]:
     """Focus an exact project terminal without submitting a prompt."""
     poster = poster or post_json
-    if target not in {"claude", "claude-code", "opencode", "hermes"}:
-        return {
-            "status": "skipped",
-            "target_slug": target,
-            "message": "target is not backed by an integrated terminal",
-            "adapter_name": "ide-terminal-visible-prepare",
-        }
     candidates = ide_bridge_candidates(project_path, registry_dir=registry_dir)
     if len(candidates) != 1:
         return {
@@ -1114,6 +1111,9 @@ def prepare_ide_terminal_visible_surface(
             "terminal_name": str(detail.get("terminal_name") or ""),
             "agent_pid": detail.get("agent_pid") or "",
             "tty": str(detail.get("tty") or ""),
+            "agent_id": str(detail.get("agent_id") or ""),
+            "session_id": str(detail.get("session_id") or ""),
+            "surface_id": str(detail.get("surface_id") or ""),
         }
     if status == 404:
         return {
@@ -1132,6 +1132,73 @@ def prepare_ide_terminal_visible_surface(
         "message": f"IDE bridge rejected focus-only preparation ({status}): {detail[:400]}",
         "adapter_name": "ide-terminal-visible-prepare",
     }
+
+
+def run_ide_native_chat_adapter(
+    input_data: dict[str, str], *, timeout: int, poster=None, registry_dir: Path = DEFAULT_IDE_BRIDGE_DIR
+) -> dict[str, Any]:
+    """Submit to an exact IDE-native chat and bind the returned runtime session identity."""
+    poster = poster or post_json
+    guardrail = visible_guardrail(input_data, "ide-native-chat")
+    if guardrail:
+        return guardrail
+    target = input_data["target_slug"]
+    candidates = ide_bridge_candidates(input_data["project_path"], registry_dir=registry_dir)
+    if len(candidates) != 1:
+        return {"status": "failed", "message": "native chat requires exactly one project-matched IDE bridge", "adapter_name": "ide-native-chat"}
+    bridge = candidates[0]
+    status, response = poster(
+        f"http://127.0.0.1:{bridge['port']}/native/send",
+        {"project_path": input_data["project_path"], "target_slug": target, "prompt": input_data["synthetic_prompt"]},
+        timeout=min(timeout, 15), headers={"Authorization": f"Bearer {bridge['token']}"},
+    )
+    try:
+        detail = json.loads(response) if isinstance(response, str) else response
+    except json.JSONDecodeError:
+        detail = {}
+    detail = detail if isinstance(detail, dict) else {}
+    if not 200 <= status < 300:
+        return {"status": "failed", "message": f"IDE native bridge rejected delivery ({status}): {str(response)[:400]}", "adapter_name": "ide-native-chat"}
+    evidence = {
+        "schema": "ai-collab.visible-surface.v2", "agent": target,
+        "agent_id": detail.get("agent_id", ""), "session_id": detail.get("session_id", ""),
+        "surface_id": detail.get("surface_id", ""), "project_path": str(Path(input_data["project_path"]).resolve()),
+        "updated": isoformat_z(utc_now()), "status": "submitted-visibly", "adapter": "ide-native-chat",
+        "bridge_owner": "ide-visible-bridge", "bridge_pid": bridge["pid"], "bridge_port": bridge["port"],
+        "task_id": input_data.get("task_id", ""), "source_path": input_data.get("source_path", ""),
+    }
+    evidence_path = Path(input_data["project_path"]) / ".ai-collab" / "live" / f"{target}.visible.json"
+    atomic_write(evidence_path, json.dumps(evidence, indent=2) + "\n")
+    return {
+        **evidence,
+        "status": "success",
+        "delivery_state": evidence["status"],
+        "message": f"prompt submitted to {target}'s exact native chat",
+        "adapter_name": "ide-native-chat",
+    }
+
+
+def prepare_ide_native_chat_surface(
+    project_path: str, target: str, *, timeout: int = 15, poster=None, registry_dir: Path = DEFAULT_IDE_BRIDGE_DIR
+) -> dict[str, Any]:
+    poster = poster or post_json
+    candidates = ide_bridge_candidates(project_path, registry_dir=registry_dir)
+    if len(candidates) != 1:
+        return {"status": "failed", "target_slug": target, "message": "native chat requires exactly one project-matched IDE bridge", "adapter_name": "ide-native-chat-prepare"}
+    bridge = candidates[0]
+    status, response = poster(
+        f"http://127.0.0.1:{bridge['port']}/native/show",
+        {"project_path": project_path, "target_slug": target}, timeout=min(timeout, 15),
+        headers={"Authorization": f"Bearer {bridge['token']}"},
+    )
+    try:
+        detail = json.loads(response) if isinstance(response, str) else response
+    except json.JSONDecodeError:
+        detail = {}
+    detail = detail if isinstance(detail, dict) else {}
+    if 200 <= status < 300:
+        return {"status": "success", "target_slug": target, "message": "exact native chat focused", "adapter_name": "ide-native-chat-prepare", **detail}
+    return {"status": "failed", "target_slug": target, "message": f"native chat focus failed ({status}): {str(response)[:400]}", "adapter_name": "ide-native-chat-prepare"}
 
 
 def auth_headers_from_env(prefix: str) -> dict[str, str]:
@@ -1997,6 +2064,8 @@ def run_visible_adapter(
     runner=subprocess.run,
 ) -> dict[str, str]:
     target = input_data["target_slug"]
+    if target in {"claude-code-ide", "cursor-native", "windsurf-native", "copilot-chat"}:
+        return run_ide_native_chat_adapter(input_data, timeout=timeout)
     if target in {"claude", "claude-code"}:
         return run_ide_terminal_visible_adapter(input_data, timeout=timeout)
     if target == "opencode":
@@ -2009,11 +2078,15 @@ def run_visible_adapter(
             return run_ide_terminal_visible_adapter(input_data, timeout=timeout)
         return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
     if target == "kilo":
+        if ide_bridge_candidates(input_data["project_path"]):
+            return run_ide_terminal_visible_adapter(input_data, timeout=timeout)
         return run_kilo_visible_adapter(input_data, timeout=timeout, runner=runner)
     if target == "hermes":
         return run_hermes_uri_adapter(input_data, timeout=timeout, runner=runner)
     if target in {"codex", "antigravity"}:
         return run_antigravity_chat_adapter(input_data, timeout=timeout, runner=runner)
+    if ide_bridge_candidates(input_data["project_path"]):
+        return run_ide_terminal_visible_adapter(input_data, timeout=timeout)
     return {
         "status": "failed",
         "message": f"visible adapter has no implementation for target {target}",
@@ -2111,6 +2184,8 @@ def run_wakeup_adapter(
         return run_opencode_auto_adapter(input_data, timeout=timeout, runner=runner)
     if mode == "antigravity-chat":
         return run_antigravity_chat_adapter(input_data, timeout=timeout, runner=runner)
+    if mode == "ide-native-chat":
+        return run_ide_native_chat_adapter(input_data, timeout=timeout)
     if mode == "codex-filesystem":
         return run_codex_filesystem_adapter(input_data)
     if mode == "codex-auto":
@@ -2566,7 +2641,12 @@ def main(argv: list[str]) -> int:
     if len(argv) >= 4 and argv[1] == "--prepare-visible":
         project_root = Path(argv[2]).expanduser().resolve()
         targets = [value.strip().lower() for value in argv[3].split(",") if value.strip()]
-        results = [prepare_ide_terminal_visible_surface(str(project_root), target) for target in targets]
+        results = [
+            prepare_ide_native_chat_surface(str(project_root), target)
+            if target in {"claude-code-ide", "cursor-native", "windsurf-native", "copilot-chat"}
+            else prepare_ide_terminal_visible_surface(str(project_root), target)
+            for target in targets
+        ]
         ok = all(
             result.get("status") in {"success", "skipped", "legacy-focus-on-submit"}
             for result in results

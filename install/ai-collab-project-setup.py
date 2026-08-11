@@ -12,6 +12,7 @@ the one-line installer. It is intentionally agent-first:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -33,6 +34,12 @@ AGENT_CATALOG: dict[str, dict[str, Any]] = {
         "role": "director",
         "rules": ["CLAUDE.md"],
         "detect": [["claude"]],
+    },
+    "claude-code-ide": {
+        "display": "Claude Code native IDE chat",
+        "role": "worker",
+        "rules": [".ai-collab/rules/claude-code-ide.md"],
+        "detect": [],
     },
     "opencode": {
         "display": "OpenCode",
@@ -100,6 +107,8 @@ ALIASES = {
     "claude": "claude-code",
     "claude_code": "claude-code",
     "claude-code": "claude-code",
+    "claude-ide": "claude-code-ide",
+    "claude_code_ide": "claude-code-ide",
     "cursor": "cursor-native",
     "windsurf": "windsurf-native",
     "copilot": "copilot-chat",
@@ -116,11 +125,28 @@ DEFAULT_SLEEP_THRESHOLD_SECONDS = max(1, int(os.environ.get("AI_COLLAB_DIRECTOR_
 
 
 def visible_adapter_for(agent: str) -> str:
-    if agent in {"claude-code", "opencode", "hermes", "kimi", "kilo"}:
+    if agent in {"claude-code", "opencode", "aider", "hermes", "kimi", "kilo", "generic"}:
         return "ide-terminal-visible"
+    if agent in {"claude-code-ide", "cursor-native", "windsurf-native", "copilot-chat"}:
+        return "ide-native-chat"
     if agent == "codex":
         return "antigravity-chat"
     return "visible-adapter-required"
+
+
+def stable_code(prefix: str, *parts: str) -> str:
+    digest = hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{digest}"
+
+
+def project_identity(root: Path, existing: dict[str, Any]) -> str:
+    value = str(existing.get("project_id") or "").strip()
+    return value or stable_code("prj", str(root.resolve()))
+
+
+def agent_identity(root: Path, agent: str, previous: dict[str, Any]) -> str:
+    value = str(previous.get("agent_id") or "").strip()
+    return value or stable_code("agt", str(root.resolve()), agent)
 
 
 def utc_now() -> datetime:
@@ -272,7 +298,7 @@ def agent_rules_targets(agent: str) -> list[str]:
     return list(config["rules"])
 
 
-def build_snippet(agent: str, container: str, model: str, project: str) -> str:
+def build_snippet(agent: str, container: str, model: str, project: str, project_id: str, agent_id: str) -> str:
     display = AGENT_CATALOG.get(agent, AGENT_CATALOG["generic"])["display"]
     role = AGENT_CATALOG.get(agent, AGENT_CATALOG["generic"])["role"]
     inbox = f".ai-collab/inbox-{agent}.md"
@@ -286,11 +312,15 @@ You are `{agent}` ({display}) in project `{project}`.
 
 Identity:
 - agent_slug: `{agent}`
+- project_id: `{project_id}`
+- agent_id: `{agent_id}`
+- session_id: generated uniquely at runtime; never reuse another session's code
 - role: `{role}`
 - container: `{container or "unknown"}`
 - model: `{model or "unknown"}`
 
 Mandatory preflight before EVERY response, analysis, or tool action:
+0. Register this exact runtime before doing work: `python3 ~/.claude/ai-collab-session.py register --root <project-root> --agent {agent} --agent-id {agent_id} --container {container or "unknown"}`. Reuse the returned `session_id` only for this running session and include it in live reports, claims, messages, and logs.
 1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise read `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` to know the registered agents, their containers, models, and rule files.
 3. Read `.ai-collab/capabilities.json`. Know your internal channels, visible adapter, wake policy, vision method, and every peer's supported routes before sending work. Never treat an unavailable route as successful.
@@ -319,7 +349,7 @@ Inbox claim contract:
 Natural conversation contract:
 - Use `python3 ~/.claude/ai-collab-converse.py` when you need another agent's judgement instead of hiding the question in a private log.
 - Ask concrete questions with `question --to other-agent`, propose implementation options with `proposal`, record accepted choices with `decision`, and mark blockers with `blocker`.
-- Mention agents explicitly with `@slug`. The helper writes the inbox/thread first and waits the short grace period from `.ai-collab/capabilities.json`. If the agent does not answer internally, it must notify the user/director before submitting the same message to that agent's exact project-matched visible chat.
+- Mention agents explicitly with `@slug`. The helper always writes a durable inbox/thread record. Codex is submitted immediately to its exact visible chat. Every other agent gets the short internal grace period from `.ai-collab/capabilities.json`, followed by mandatory exact visible-chat fallback if it does not claim/respond.
 - Keep delivery states distinct: `queued-internally`, `internal-response`, `escalating-visible`, `submitted-visibly`, `responded`, `failed`. A timeout or prompt submission is never a response.
 - When you finish work, need a decision, discover a blocker, or have material progress, append it to the shared thread/log immediately. If the director is sleeping or stale according to its live state, use the helper to wake the director through the visible route declared in `capabilities.json`; for Codex native chat, visible-chat delivery is the only wake evidence that counts.
 - Continue the exchange until the implementation is complete: questions, answers, progress reports, review requests, blockers, decisions, and handoffs belong in the same task thread so the user can follow a fluid conversation.
@@ -338,9 +368,11 @@ Required log frontmatter:
 ---
 ai: {display} ({model or "unknown model"})
 agent: {agent}
+agent_id: {agent_id}
 container: {container or "unknown"}
 model: {model or "unknown"}
-session: {{YYYYMMDD-HHMMSS}}
+session: {{runtime session_id}}
+session_id: {{runtime session_id}}
 project: {project}
 updated: {{ISO timestamp}}
 ---
@@ -393,6 +425,20 @@ def append_snippet(path: Path, agent: str, snippet: str) -> str:
     return "created" if not existing else "appended"
 
 
+def remove_snippet(path: Path, agent: str) -> str:
+    if not path.exists():
+        return "missing"
+    start = START_MARKER.format(agent=agent)
+    end = END_MARKER.format(agent=agent)
+    existing = path.read_text(encoding="utf-8")
+    if start not in existing:
+        return "absent"
+    pattern = re.compile(r"\n*" + re.escape(start) + r".*?" + re.escape(end) + r"\n*", flags=re.DOTALL)
+    updated = pattern.sub("\n", existing, count=1).strip()
+    atomic_write(path, updated + ("\n" if updated else ""))
+    return "removed"
+
+
 def read_existing_manifest(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"agents": []}
@@ -405,18 +451,20 @@ def read_existing_manifest(path: Path) -> dict[str, Any]:
     return {"agents": []}
 
 
-def write_agents_json(root: Path, agents: list[str], container: str, models: dict[str, str], rules: dict[str, list[str]], now: datetime) -> None:
+def write_agents_json(root: Path, agents: list[str], container: str, models: dict[str, str], rules: dict[str, list[str]], now: datetime) -> dict[str, Any]:
     path = root / ".ai-collab" / "agents.json"
     existing = read_existing_manifest(path)
     by_agent: dict[str, dict[str, Any]] = {}
     for item in existing.get("agents", []):
         if isinstance(item, dict) and item.get("agent"):
             by_agent[str(item["agent"])] = item
+    project_id = project_identity(root, existing)
     for agent in agents:
         config = AGENT_CATALOG.get(agent, AGENT_CATALOG["generic"])
         previous = by_agent.get(agent, {})
         by_agent[agent] = {
             "agent": agent,
+            "agent_id": agent_identity(root, agent, previous),
             "display": config["display"],
             "role": config["role"],
             "container": container or previous.get("container", "unknown"),
@@ -424,23 +472,29 @@ def write_agents_json(root: Path, agents: list[str], container: str, models: dic
             "rules": rules.get(agent) or previous.get("rules", agent_rules_targets(agent)),
         }
     manifest = {
-        "schema": "ai-collab.agents.v1",
+        "schema": "ai-collab.agents.v2",
         "project": root.name,
+        "project_id": project_id,
         "updated": isoformat_z(now),
         "agents": [by_agent[key] for key in sorted(by_agent.keys())],
     }
     atomic_write(path, json.dumps(manifest, indent=2, sort_keys=False) + "\n")
+    return manifest
 
 
-def write_capabilities_json(root: Path, agents: list[str], container: str, models: dict[str, str], now: datetime) -> str:
+def write_capabilities_json(root: Path, manifest: dict[str, Any], container: str, models: dict[str, str], now: datetime) -> str:
     path = root / ".ai-collab" / "capabilities.json"
     rows: list[dict[str, Any]] = []
-    for agent in sorted(dict.fromkeys(agents)):
-        native_codex = agent == "codex"
+    manifest_rows = {str(row.get("agent")): row for row in manifest.get("agents", []) if isinstance(row, dict)}
+    for agent in sorted(manifest_rows):
+        row = manifest_rows[agent]
+        native_chat = agent == "codex" or agent.endswith("-ide") or agent in {"cursor-native", "windsurf-native", "copilot-chat"}
+        primary_delivery = "visible-chat" if agent == "codex" else "internal-inbox"
         rows.append(
             {
                 "agent": agent,
-                "container": container or "unknown",
+                "agent_id": row.get("agent_id"),
+                "container": row.get("container") or container or "unknown",
                 "model": models.get(agent, "unknown"),
                 "internal_channels": ["direct-inbox", "task-thread", "discussion", "session-log"],
                 "visible": {
@@ -448,16 +502,22 @@ def write_capabilities_json(root: Path, agents: list[str], container: str, model
                     "project_match_required": True,
                     "required_when_internal_timeout": True,
                     "required_when_sleeping": True,
-                    "native_chat_only": native_codex,
+                    "native_chat_only": native_chat,
                     "availability": "verify-at-runtime",
                     "delivery_is_not_response": True,
+                },
+                "delivery": {
+                    "primary": primary_delivery,
+                    "durable_internal_record": True,
+                    "fallback": "visible-chat",
+                    "target_identity": ["project_id", "agent_id", "session_id", "surface_id"],
                 },
                 "vision": {
                     "required_for_visible_turns": True,
                     "method": "native-or-direct-pixel-ocr",
                 },
                 "wake_policy": {
-                    "internal_first": True,
+                    "internal_first": agent != "codex",
                     "internal_grace_seconds": DEFAULT_INTERNAL_GRACE_SECONDS,
                     "sleep_threshold_seconds": DEFAULT_SLEEP_THRESHOLD_SECONDS,
                     "notify_before_visible_escalation": True,
@@ -466,14 +526,18 @@ def write_capabilities_json(root: Path, agents: list[str], container: str, model
             }
         )
     payload = {
-        "schema": "ai-collab.capabilities.v1",
+        "schema": "ai-collab.capabilities.v2",
         "project": root.name,
+        "project_id": manifest.get("project_id"),
         "updated": isoformat_z(now),
         "conversation_policy": {
             "delivery_order": ["internal", "wait-for-response", "notify-user", "visible-chat"],
             "continue_until_terminal_handoff": True,
             "visible_submission_is_not_response": True,
             "director_sleeping_requires_visible_wake": True,
+            "internal_wake_default": True,
+            "codex_visible_wake_immediate": True,
+            "visible_fallback_for_every_agent": True,
         },
         "agents": rows,
     }
@@ -628,18 +692,28 @@ def setup_project(
         "rules": {},
     }
     rule_paths: dict[str, list[str]] = {}
+    existing_manifest = read_existing_manifest(collab / "agents.json")
+    project_id = project_identity(root, existing_manifest)
+    previous_rows = {str(row.get("agent")): row for row in existing_manifest.get("agents", []) if isinstance(row, dict)}
+    agent_ids = {agent: agent_identity(root, agent, previous_rows.get(agent, {})) for agent in normalized_agents}
     for agent in normalized_agents:
-        snippet = build_snippet(agent, container, models.get(agent, ""), root.name)
+        snippet = build_snippet(agent, container, models.get(agent, ""), root.name, project_id, agent_ids[agent])
         statuses: list[str] = []
         paths: list[str] = []
-        for rel in agent_rules_targets(agent):
+        current_rules = agent_rules_targets(agent)
+        previous_rules = previous_rows.get(agent, {}).get("rules", [])
+        if isinstance(previous_rules, list):
+            for rel in previous_rules:
+                if isinstance(rel, str) and rel not in current_rules:
+                    statuses.append(f"{rel}:{remove_snippet(root / rel, agent)}")
+        for rel in current_rules:
             status = append_snippet(root / rel, agent, snippet)
             statuses.append(f"{rel}:{status}")
             paths.append(rel)
         result["rules"][agent] = statuses
         rule_paths[agent] = paths
-    write_agents_json(root, normalized_agents, container, models, rule_paths, now)
-    result["capabilities"] = write_capabilities_json(root, normalized_agents, container, models, now)
+    manifest = write_agents_json(root, normalized_agents, container, models, rule_paths, now)
+    result["capabilities"] = write_capabilities_json(root, manifest, container, models, now)
     write_team_md(root, normalized_agents, container, models, rule_paths, now)
     result["inbox_all"] = write_inbox_all(root, normalized_agents, container, models, now)
     return result

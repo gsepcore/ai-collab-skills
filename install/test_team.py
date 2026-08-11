@@ -25,7 +25,11 @@ class TestTeamRoles(unittest.TestCase):
         collab = self.root / ".ai-collab"
         collab.mkdir()
         (collab / "agents.json").write_text(
-            json.dumps({"agents": [{"agent": "codex"}, {"agent": "claude-code"}, {"agent": "opencode"}]}),
+            json.dumps({"agents": [
+                {"agent": "codex", "agent_id": "agt_codex"},
+                {"agent": "claude-code", "agent_id": "agt_claude"},
+                {"agent": "opencode", "agent_id": "agt_opencode"},
+            ]}),
             encoding="utf-8",
         )
         (collab / "TEAM.md").write_text(
@@ -61,7 +65,9 @@ class TestTeamRoles(unittest.TestCase):
         self.assertEqual(profile["assignments"]["backend"]["primary"], "claude-code")
         self.assertIsNone(profile["assignments"]["ui-ux-design"]["primary"])
         saved = json.loads((self.root / ".ai-collab/roles.json").read_text(encoding="utf-8"))
-        self.assertEqual(saved["schema"], "ai-collab.roles.v1")
+        self.assertEqual(saved["schema"], "ai-collab.roles.v2")
+        self.assertEqual(saved["assignments"]["senior-director"]["primary_agent_id"], "agt_codex")
+        self.assertEqual(saved["assignments"]["backend"]["primary_agent_id"], "agt_claude")
         team = (self.root / ".ai-collab/TEAM.md").read_text(encoding="utf-8")
         self.assertIn("## Development Team Roles", team)
         self.assertIn("Senior director (`senior-director`) | codex", team)

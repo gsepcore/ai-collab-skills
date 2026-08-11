@@ -116,6 +116,16 @@ def registered_agents(root: Path) -> list[str]:
     return result
 
 
+def registered_identities(root: Path) -> dict[str, str]:
+    identities: dict[str, str] = {}
+    manifest = read_json(root / ".ai-collab" / "agents.json", {})
+    if isinstance(manifest, dict):
+        for item in manifest.get("agents", []):
+            if isinstance(item, dict) and item.get("agent") and item.get("agent_id"):
+                identities[str(item["agent"])] = str(item["agent_id"])
+    return identities
+
+
 def load_profile(root: Path) -> dict[str, Any]:
     data = read_json(root / ".ai-collab" / "roles.json", {})
     if isinstance(data, dict) and isinstance(data.get("assignments"), dict):
@@ -191,6 +201,7 @@ def configure_team(
 ) -> dict[str, Any]:
     root = root.resolve()
     roster = registered_agents(root)
+    identities = registered_identities(root)
     if not roster:
         raise SystemExit("No registered agents. Run /collab setup before configuring team roles.")
     unknown = sorted({agent for agent in requested.values() if agent and agent not in roster})
@@ -208,19 +219,23 @@ def configure_team(
     for role in roles:
         previous = existing_assignments.get(role, {}) if isinstance(existing_assignments, dict) else {}
         primary = requested[role] if role in requested else (previous.get("primary") if isinstance(previous, dict) else None)
-        label, responsibility = role_metadata(role)
+        default_label, default_responsibility = role_metadata(role)
+        label = previous.get("label") if isinstance(previous, dict) and previous.get("label") else default_label
+        responsibility = previous.get("responsibility") if isinstance(previous, dict) and previous.get("responsibility") else default_responsibility
         assignments[role] = {
             "primary": primary,
+            "primary_agent_id": identities.get(primary or "") if primary else None,
             "label": label,
             "responsibility": responsibility,
         }
 
     timestamp = isoformat_z(now or utc_now())
     profile = {
-        "schema": "ai-collab.roles.v1",
+        "schema": "ai-collab.roles.v2",
         "project": root.name,
         "updated": timestamp,
         "agents": roster,
+        "agent_ids": identities,
         "assignments": assignments,
     }
     atomic_write(root / ".ai-collab" / "roles.json", json.dumps(profile, indent=2, sort_keys=False) + "\n")
@@ -267,7 +282,8 @@ def cmd_configure(args: argparse.Namespace) -> int:
     if not args.non_interactive and sys.stdin.isatty():
         requested.update(interactive_assignments(root))
     elif not requested:
-        raise SystemExit("Non-interactive configuration requires at least one --assign role=agent value.")
+        if not load_profile(root).get("assignments"):
+            raise SystemExit("Non-interactive configuration requires at least one --assign role=agent value.")
     profile = configure_team(root, requested, replace=args.replace)
     print("[AI-COLLAB] Development-team roles saved")
     print_profile(profile)

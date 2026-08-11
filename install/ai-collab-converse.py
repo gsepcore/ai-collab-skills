@@ -152,6 +152,9 @@ def agent_is_active(root: Path, agent: str, threshold_seconds: int) -> bool:
 
 def internal_grace_seconds(root: Path, agent: str, requested: int) -> int:
     capability = capability_for(root, agent)
+    delivery = capability.get("delivery") if isinstance(capability, dict) else {}
+    if agent == "codex" or (isinstance(delivery, dict) and delivery.get("primary") == "visible-chat"):
+        return 0
     policy = capability.get("wake_policy") if isinstance(capability, dict) else {}
     try:
         configured = int((policy or {}).get("internal_grace_seconds", 15))

@@ -47,6 +47,7 @@ DEFAULT_IDE_BRIDGE_DIR = Path.home() / ".ai-collab" / "ide-bridges"
 
 VISUAL_AGENT_ALIASES: dict[str, tuple[str, ...]] = {
     "claude-code": ("claude", "claude code"),
+    "claude-code-ide": ("claude", "claude code"),
     "opencode": ("opencode",),
     "codex": ("codex",),
     "hermes": ("hermes",),
@@ -574,7 +575,13 @@ def classify_process(
 ) -> str | None:
     if "ai-collab-" in command:
         return None
+    native_claude = "anthropic.claude-code" in command and "native-binary/claude" in command
+    if native_claude and "claude-code-ide" in agents:
+        if process_matches_project("claude-code-ide", pid, command, root, runner=runner, getter=getter, system=system):
+            return "claude-code-ide"
     for agent in agents:
+        if agent == "claude-code-ide" or (agent == "claude-code" and native_claude):
+            continue
         patterns = KNOWN_AGENT_PATTERNS.get(agent, (rf"\b{re.escape(agent)}\b",))
         if any(re.search(pattern, command, flags=re.IGNORECASE) for pattern in patterns):
             if not process_matches_project(agent, pid, command, root, runner=runner, getter=getter, system=system):
@@ -799,15 +806,24 @@ def build_visual_roster(
             for process in visible_processes
             for port in process.get("ports", [])
         ]
-        visually_detected = agent in visible_agents
+        agent_hits = hits.get(agent, []) if isinstance(hits, dict) else []
+        if agent == "claude-code-ide" and isinstance(hits, dict):
+            source_hits = agent_hits or hits.get("claude-code", [])
+            agent_hits = [item for item in source_hits if item.get("position") in {"center", "right"}]
+        if agent == "claude-code" and "claude-code-ide" in agents and agent_hits:
+            terminal_hits = [item for item in agent_hits if item.get("position") == "left"]
+            if terminal_hits:
+                agent_hits = terminal_hits
+        visually_detected = bool(agent_hits)
         process_required = agent in {"claude-code", "opencode", "hermes", "kimi", "kilo"}
         if process_required:
             process_verified = len(visible_processes) == 1 if routes else len(processes) == 1
         else:
             process_verified = True
         host_surface = {}
-        if agent == "codex" and visually_detected and window.get("pid"):
-            identity_hits = hits.get(agent, []) if isinstance(hits, dict) else []
+        native_chat = agent == "codex" or agent.endswith("-ide") or agent in {"cursor-native", "windsurf-native", "copilot-chat"}
+        if native_chat and visually_detected and window.get("pid"):
+            identity_hits = agent_hits
             try:
                 window_pid = int(window.get("pid") or 0)
             except (TypeError, ValueError):
@@ -833,7 +849,7 @@ def build_visual_roster(
                 },
             }
             process_verified = registered_host_match
-        elif agent == "codex" and visually_detected:
+        elif native_chat and visually_detected:
             process_verified = False
         status = "verified" if visually_detected and process_verified else "unverified"
         entries.append(
@@ -841,7 +857,7 @@ def build_visual_roster(
                 "agent": agent,
                 "status": status,
                 "visual_surface_detected": visually_detected,
-                "visual_hits": hits.get(agent, []) if isinstance(hits, dict) else [],
+                "visual_hits": agent_hits,
                 "project_process_detected": bool(processes),
                 "processes": processes,
                 "owned_ports": owned_ports,
@@ -1953,6 +1969,16 @@ def observe_project(
         required_agents=visual_required_agents,
         runner=runner,
     )
+    if visual_roster.get("required_agents") and visual_roster.get("status") != "verified":
+        health["overall"] = "degraded"
+        health.setdefault("recommendations", []).append(
+            "Required agent sessions are missing or unverified; do not report setup or visible delivery as healthy."
+        )
+        health["visual_roster"] = {
+            "status": visual_roster.get("status"),
+            "missing_or_unverified": visual_roster.get("missing_or_unverified", []),
+        }
+        write_json(live_dir / "health.json", health)
 
     summary = {
         "schema": SCHEMA_VERSION,

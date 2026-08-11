@@ -15,7 +15,9 @@ Each AI writes a Markdown log to `{project-root}/.ai-collab/`. Any AI with files
 
 Agents can also hold natural conversations: task-specific threads live at `.ai-collab/thread-{task_id}.md`, and broader design/review discussions live at `.ai-collab/discussions/*.md`. `@slug` mentions in either place are scanned by the daemon and can wake the mentioned agent.
 
-Every onboarded project also has `.ai-collab/capabilities.json`. Each agent must read it during preflight so it knows the available internal channels, its exact visible adapter, whether that route is verified or degraded, its visual-evidence duties, and how to contact a sleeping director. Delivery is internal-first: write the inbox/thread, allow the configured short grace period for a real response, notify the user/director before escalation, then target only the non-responsive agents in their visible chats.
+Every onboarded project also has `.ai-collab/capabilities.json`. Each agent must read it during preflight so it knows the available internal channels, its exact visible adapter, whether that route is verified or degraded, its visual-evidence duties, and how to contact a sleeping director. Every delivery first creates a durable inbox/thread record. All agents except Codex get an internal wake grace period; Codex is submitted to its exact visible chat immediately. If any other agent does not claim/respond internally, the mandatory fallback submits to that agent's exact visible chat. Never substitute a hidden worker or confuse prompt delivery with a response.
+
+Identity is code-based, not name-based. Setup persists one `project_id` and one stable `agent_id` per registered agent. Every running terminal or native-chat session must register a fresh `session_id` and its `surface_id` in `.ai-collab/live/sessions/`. Roles bind both the readable agent slug and `primary_agent_id`; visible routing resolves `project_id + agent_id + session_id + surface_id`. Labels, OCR text, process names, and pane positions are corroborating evidence only.
 
 The installed daemon also writes semantic live snapshots to `{project-root}/.ai-collab/live/`. These are the project-scoped "eyes" layer: current inbox/task state, latest log summary, self-reported commands/edits from each agent, process hints tied to the current project, git dirty files, director alerts, `health.json`, automatic project-window screenshots, and `.semantic.json` screenshot sidecars unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`. The installer attempts to install the local OCR engine (`tesseract`) by default; if unavailable, vision remains functional in metadata-only mode and `health.json` reports the degradation.
 
@@ -128,7 +130,7 @@ Show the live semantic observer view for the project.
 
 Start or continue a natural agent-to-agent discussion for questions, proposals, reviews, blockers, decisions, and handoffs.
 
-This is an internal-first execution contract, not a narration feature. With recipients in `--to`, the helper writes the shared thread first and waits the configured short grace period. Agents that answer internally are never disturbed in their visible chat. For each non-responsive agent, the helper prints and records a notice, focuses the exact surface without submitting when the bridge supports it, captures the real project window, verifies every required surface in `.ai-collab/live/visual-roster.json`, appends the visual fallback context, and only then submits the prompt. If an already-running legacy bridge lacks focus-only support, the exact-terminal submission focuses the pane, immediate visual proof is mandatory, and an evidence-bearing follow-up completes the handoff. Every recipient must inspect that image and attest what it saw in the shared thread. A file write, port, process, log, prompt submission, or wake event alone is never a response. Any mismatch fails closed without a hidden CLI substitute.
+This is an internal-first execution contract, not a narration feature. With recipients in `--to`, the helper always writes the shared thread first. Non-Codex recipients receive the configured internal grace period and are not disturbed visibly if they answer. Codex skips that wait and is submitted immediately to its exact visible chat. Every other non-responsive agent is escalated to its exact registered visible surface. The helper records the escalation, verifies the real project window/surface, and submits the prompt; no hidden CLI substitute is allowed. A file write, port, process, log, prompt submission, or wake event alone is never a response.
 
 **Steps:**
 1. Find project root.
@@ -180,6 +182,8 @@ Use one idempotent command for first-time installation, global updates, existing
    - preserve the existing `agents.json` roster, models, container, custom agents, roles, inboxes, runs, task threads, discussions, and user-authored rule content
    - refresh `PROTOCOL.md` with a timestamped backup and replace only managed AI Collab marker blocks
    - regenerate `TEAM.md`, `agents.json`, `capabilities.json`, and relevant runtime rule blocks
+   - persist stable project/agent identity codes and install the runtime session registrar
+   - run mandatory development-team role onboarding and bind each owner to its `agent_id`
    - run strict global doctor checks and project capability checks
    - write `.ai-collab/setup-report.json` with before/after fingerprints, preservation results, migration status, and reload guidance
 4. Ask/record project values only when they are not already present:
@@ -206,8 +210,8 @@ Use one idempotent command for first-time installation, global updates, existing
 7. For an already-running project, start one setup-refresh discussion with every registered agent. Ask each agent to read its refreshed rule block plus `.ai-collab/capabilities.json` and append its own acknowledgement. Apply the internal-first grace period and visible fallback; do not claim an agent refreshed until its agent-authored acknowledgement exists.
 8. Run `/collab write` immediately to log the current context.
 9. Start `/collab monitor` automatically for this project in the current Claude Code session. Do not ask the user to run it manually. If a monitor for this project is already active, keep it and report "monitor already active." If the current runtime cannot launch a persistent Monitor/Task, say that clearly and rely on the installed daemon + prompt hooks as the fallback.
-10. If `.ai-collab/roles.json` does not exist, run `/collab team configure`. Show every registered agent and ask the user to choose one primary owner for each standard development role. Allow one agent to own multiple roles and allow explicit vacancies.
-11. Summarize the global install, registered agents, containers, models, development-team roles, preservation audit, exact rules files, doctor result, agent acknowledgements, and whether one IDE window reload is recommended.
+10. Role onboarding is part of setup, not an optional follow-up. Interactive setup must present every registered identity and role. Non-interactive setup without existing roles must exit incomplete and write `.ai-collab/role-onboarding.json`; rerun with repeated `--assign role=agent` values. Never report setup successful without `.ai-collab/roles.json` schema v2.
+11. Summarize the global install, identity codes, registered sessions/surfaces, containers, models, development-team roles, preservation audit, exact rules files, doctor result, agent acknowledgements, and whether one IDE window reload is recommended.
 
 **Re-run behavior:** Treat every invocation as install-or-migrate. Re-running it updates the global installation and current project to the same release, adds newly detected agents, refreshes managed blocks without duplication, and fails honestly if an existing inbox, run, role file, task thread, or discussion changed during migration. Never remove user-authored content or collaboration history.
 
@@ -294,7 +298,7 @@ Create or update a persistent development-team profile after agents are register
 2. Run `python3 ~/.claude/ai-collab-team.py --root "$ROOT" configure` in an interactive terminal.
 3. Present every registered agent for each standard role: senior director, frontend, backend, database, DevOps, QA, security review, architecture review, functional review, deployment, and UI/UX design.
 4. Let one agent own multiple roles. Accept `unassigned` for vacancies and never route work to a vacancy without asking the user.
-5. Persist the result in `.ai-collab/roles.json` and the generated Development Team Roles section of `TEAM.md`.
+5. Persist the result in `.ai-collab/roles.json` schema v2 with both `primary` and `primary_agent_id`, plus the generated Development Team Roles section of `TEAM.md`.
 6. Treat roles as default routing, not an unbreakable permission boundary. An explicit user/director owner overrides the profile.
 
 For deterministic non-interactive configuration, repeat `--assign`:
@@ -339,7 +343,7 @@ ai: [Tool name and model, e.g. "Claude Code (claude-sonnet-4-6)"]
 agent: [agent runtime slug, e.g. claude-code, opencode, codex]
 container: [IDE/terminal, e.g. antigravity, cursor, vscode, terminal]
 model: [LLM id, e.g. openai/gpt-5.5, minimax/m2.7]
-session: [YYYYMMDD-HHMMSS]
+session: [unique runtime code returned by ai-collab-session.py, e.g. ses_20260811T120000Z_a1b2c3d4e5f6]
 project: [project root directory name]
 updated: [ISO 8601 timestamp]
 ---
@@ -530,7 +534,7 @@ done_at:
 {detailed task description with files, constraints, and exit criteria}
 ```
 
-5. Wait the `capabilities.json` internal grace period for the target to claim/respond. If it does not, tell the user/director which agent did not respond and that visible fallback is starting, then submit to that agent's exact visible project chat. Never report prompt submission as a response.
+5. Always leave the durable inbox record. If the target is Codex, immediately submit the same wake message to its exact visible chat. Otherwise wait the `capabilities.json` internal grace period; if the agent does not claim/respond, announce escalation and submit to that agent's exact registered visible chat. Never report prompt submission as a response.
 6. Confirm one precise state: `queued internally`, `internal response`, `submitted visibly`, `responded`, or `failed`, with the matching inbox/thread/adapter evidence.
 
 **Schema fields (all required):**

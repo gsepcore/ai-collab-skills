@@ -79,6 +79,8 @@ For large implementation plans, the user can start a **directed run** and choose
 
 AI Collab can also persist a real development-team profile in `.ai-collab/roles.json`. The onboarding asks which registered agent owns senior direction, frontend, backend, database, DevOps, QA, security review, architecture review, functional review, deployment, and UI/UX design. One agent may own several roles, and vacancies remain explicitly unassigned until the user fills them.
 
+Recognition is based on persistent codes: one `project_id`, one stable `agent_id` per agent, and a fresh `session_id` plus `surface_id` for every running session. Role assignments persist `primary_agent_id`, so two Claude/Codex panes are not treated as the same session merely because their labels look alike.
+
 ### 1.5 Director knows the team from session start
 
 For Claude to delegate well, it needs to know who else is on the project. The `Stop` hook regenerates `.ai-collab/CONTEXT.md` after every Claude response, and `CONTEXT.md` includes a **`## Team` section** built from three sources:
@@ -218,6 +220,8 @@ AI Collab is designed to be fully operational out of the box: the installer sets
 
 New installs always pull from the current `main` branch. Existing installs become self-updating after they run the current installer once: the daemon periodically refreshes `~/.claude` scripts/skill files and re-applies managed `AI-COLLAB-START` / `AI-COLLAB-END` snippets in projects that already have `.ai-collab/`. Generated `PROTOCOL.md` files are refreshed with a timestamped backup. Disable this with `AI_COLLAB_AUTO_UPDATE=0`, or force it immediately with:
 
+When the installer is run from a local clone, it pins `AI_COLLAB_UPDATE_LOCAL_SOURCE` to that clone so the daemon follows the checked-out development version instead of overwriting it with public `main`.
+
 ```bash
 python3 ~/.claude/ai-collab-update.py --project "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ```
@@ -354,7 +358,7 @@ The third form (`/collab assign all ...`) writes to `inbox-all.md` so every work
 
 ### `/collab team configure`
 
-Run a small development-team onboarding after `/collab setup`. It detects the registered agents, asks who owns each discipline, saves `.ai-collab/roles.json`, and renders the choices in `TEAM.md`.
+Development-team onboarding is a mandatory phase of `/collab setup`. It detects the registered identities, asks who owns each discipline, saves identity-bound `.ai-collab/roles.json`, and renders the choices in `TEAM.md`. A non-interactive setup without existing roles or explicit `--assign role=agent` values stops as incomplete instead of silently skipping onboarding.
 
 ```bash
 python3 ~/.claude/ai-collab-team.py --root "$PWD" configure
@@ -367,7 +371,7 @@ Roles guide default routing. Explicit user/director ownership can override them.
 
 Start a natural agent discussion without creating a formal inbox task first. Use it when agents need to ask each other questions, compare implementation options, request review, correct a misunderstanding, record a decision, or hand off context.
 
-The conversation is internal-first and continuous: the shared thread is written before any visible wake, responsive agents stay on the internal channel, and only silent agents are escalated after an explicit notice. The same thread carries progress checks, doubts, recommendations, review, and completion. When the director is sleeping/stale, workers use the director's route declared in `.ai-collab/capabilities.json`; an unavailable native Codex inbound route is reported as degraded, never simulated.
+Every conversation has a durable internal thread. Non-Codex agents are internal-first: responsive agents stay internal and silent agents escalate to their exact registered chat. Codex is the exception and receives immediate visible-chat submission. Visible chat is the mandatory fallback for every registered agent; delivery is never reported as a response.
 
 ```bash
 python3 ~/.claude/ai-collab-converse.py --root "$PWD" start \
@@ -467,11 +471,12 @@ The single install-or-migrate command for both new and already-running projects.
 - Creates or migrates `.ai-collab/` and refreshes `PROTOCOL.md` with a backup
 - Preserves roles, inboxes, runs, task threads, discussions, custom agents, and user-authored rule content
 - Regenerates managed rule blocks and the complete capability matrix without duplicates
+- Generates stable agent codes, installs per-runtime session registration, and runs mandatory role onboarding
 - Runs strict install/project verification and writes `.ai-collab/setup-report.json`
 - **Seeds `inbox-all.md` with a welcome onboarding task** — first worker AI to open this project self-orients automatically (preserved unchanged if file already exists)
 - Writes Claude's first log entry
 - Starts Claude's live `/collab monitor` automatically for this project when the Claude Code runtime supports persistent Monitor/Task execution
-- Asks already-running agents to acknowledge the refreshed capabilities through the normal internal-first/visible-fallback conversation path
+- Asks already-running agents to acknowledge the refreshed capabilities; Codex is contacted visibly immediately and other agents use internal-first/visible fallback
 
 ```
 /collab setup
@@ -717,12 +722,14 @@ On macOS, the first capture may trigger the normal Screen Recording permission p
 Behavior:
 
 - `@claude-code` or `inbox-claude-code.md` uses the installed `gsepcore.ai-collab-visible-bridge` extension to locate the exact integrated terminal by agent process and project cwd, reveal it, and submit the prompt as terminal input. Reload the IDE once after install/update so the bridge activates.
+- `@claude-code-ide` targets the native Claude Code panel. The bridge opens/focuses Anthropic's registered native surface, injects its exact `project_id + agent_id + session_id + surface_id` bootstrap, then submits the wake message. Its private rule block is not mixed into terminal Claude's `CLAUDE.md`.
+- Any registered terminal agent can be resolved through its runtime session record and PID/TTY. Process-name matching remains only a compatibility fallback for older sessions.
 - New bridge sessions support focus-only preparation before the screenshot. An older bridge that is still active is handled explicitly: the exact-terminal submission focuses the pane, AI Collab takes immediate visual proof, and a second evidence-bearing prompt completes the visible handoff. Neither submission is called a response.
 - `@opencode` or `inbox-opencode.md` uses the OpenCode TUI endpoints: `POST /tui/clear-prompt`, `POST /tui/append-prompt`, then `POST /tui/submit-prompt`. This targets the visible prompt box instead of a background session, so the user can see the delegated task arrive. Set `AI_COLLAB_OPENCODE_SYNTHETIC=1` only if you explicitly prefer hidden prompts through `POST /session/{id}/prompt_async` and accept that this can feel like background/headless work when no visible response appears.
 - `@kilo` or `inbox-kilo.md` uses the same visible TUI endpoint pattern when a Kilo server is open. If Kilo returns HTTP 401, set `AI_COLLAB_KILO_BASIC_AUTH` or `AI_COLLAB_KILO_BEARER_TOKEN`.
 - `@hermes` or `inbox-hermes.md` can open/prefill the Hermes chat through `AI_COLLAB_HERMES_URI_TEMPLATE`. This is visible but may require the user to press send.
 - `@codex` or `inbox-codex.md` uses `antigravity-ide chat --reuse-window --mode agent`. CLI acceptance means `submitted visibly`; only a later Codex-authored message means `responded`.
-- `@kimi` supports ACP/CLI wakeups, but no verified visible-panel injection endpoint has been found yet.
+- `@kimi` and other registered terminal agents use the exact IDE bridge when their session is registered; ACP/CLI remains an explicitly selected non-visible mode.
 - If no visible panel/port/session exists, the adapter fails safely and normal retry/backoff applies.
 
 Visible prompt submission never marks an inbox as claimed. Only the target agent may claim it during its own real turn. Likewise, the director may say an agent "responded" only when that agent appended its own message to the shared thread.

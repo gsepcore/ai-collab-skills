@@ -57,12 +57,31 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("before answering or analyzing", inbox_all)
         import json
         capabilities = json.loads((self.root / ".ai-collab" / "capabilities.json").read_text(encoding="utf-8"))
+        agents_manifest = json.loads((self.root / ".ai-collab" / "agents.json").read_text(encoding="utf-8"))
+        self.assertEqual(agents_manifest["schema"], "ai-collab.agents.v2")
+        self.assertTrue(agents_manifest["project_id"].startswith("prj_"))
+        self.assertTrue(all(row["agent_id"].startswith("agt_") for row in agents_manifest["agents"]))
         self.assertEqual(capabilities["conversation_policy"]["delivery_order"], ["internal", "wait-for-response", "notify-user", "visible-chat"])
         codex = next(item for item in capabilities["agents"] if item["agent"] == "codex")
         self.assertTrue(codex["visible"]["native_chat_only"])
         self.assertEqual(codex["visible"]["availability"], "verify-at-runtime")
         self.assertTrue(codex["visible"]["delivery_is_not_response"])
         self.assertFalse(codex["wake_policy"]["hidden_fallback_allowed"])
+        self.assertEqual(codex["delivery"]["primary"], "visible-chat")
+        self.assertFalse(codex["wake_policy"]["internal_first"])
+        opencode = next(item for item in capabilities["agents"] if item["agent"] == "opencode")
+        self.assertEqual(opencode["delivery"]["primary"], "internal-inbox")
+        self.assertEqual(opencode["delivery"]["fallback"], "visible-chat")
+        self.assertTrue(opencode["wake_policy"]["internal_first"])
+
+    def test_agent_identity_is_stable_across_setup_reruns(self):
+        self.setup()
+        import json
+        first = json.loads((self.root / ".ai-collab/agents.json").read_text(encoding="utf-8"))
+        self.setup()
+        second = json.loads((self.root / ".ai-collab/agents.json").read_text(encoding="utf-8"))
+        self.assertEqual(first["project_id"], second["project_id"])
+        self.assertEqual({r["agent"]: r["agent_id"] for r in first["agents"]}, {r["agent"]: r["agent_id"] for r in second["agents"]})
 
     def test_shared_agents_md_can_hold_multiple_agent_snippets(self):
         self.setup()
@@ -77,7 +96,8 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("Mandatory preflight before EVERY response, analysis, or tool action:", agents_md)
         self.assertIn("Read `.ai-collab/roles.json` if it exists", agents_md)
         self.assertIn("Read `.ai-collab/capabilities.json`", agents_md)
-        self.assertIn("waits the short grace period", agents_md)
+        self.assertIn("Every other agent gets the short internal grace period", agents_md)
+        self.assertIn("Codex is submitted immediately to its exact visible chat", agents_md)
         self.assertIn("director is sleeping or stale", agents_md)
         self.assertIn("Development-team role contract:", agents_md)
         self.assertIn("Read the latest session logs in `.ai-collab/*.md` from other agents", agents_md)
@@ -185,6 +205,36 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("- kilo", team)
         self.assertIn("| kimi | worker | antigravity | moonshot/kimi-k2 |", team)
         self.assertIn("| kilo | worker | antigravity | kilo/default |", team)
+
+    def test_native_claude_has_identity_specific_rules_not_terminal_claude_rules(self):
+        self.setup(agents=("claude-code-ide",), models={})
+
+        native_rules = self.root / ".ai-collab" / "rules" / "claude-code-ide.md"
+        self.assertIn("AI-COLLAB-START agent=claude-code-ide", native_rules.read_text(encoding="utf-8"))
+        claude_md = (self.root / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn("AI-COLLAB-START agent=claude-code", claude_md)
+        self.assertNotIn("AI-COLLAB-START agent=claude-code-ide", claude_md)
+
+    def test_native_claude_migration_removes_stale_shared_rule_block(self):
+        collab = self.root / ".ai-collab"
+        collab.mkdir()
+        (collab / "agents.json").write_text(
+            '{"agents":[{"agent":"claude-code-ide","agent_id":"agt_native","rules":["AGENTS.md"]}]}',
+            encoding="utf-8",
+        )
+        (self.root / "AGENTS.md").write_text(
+            "user content\n\n<!-- AI-COLLAB-START agent=claude-code-ide -->\nstale identity\n"
+            "<!-- AI-COLLAB-END agent=claude-code-ide -->\n",
+            encoding="utf-8",
+        )
+
+        self.setup(agents=("claude-code-ide",), models={})
+
+        self.assertEqual((self.root / "AGENTS.md").read_text(encoding="utf-8"), "user content\n")
+        self.assertIn(
+            "agent_id: `agt_native`",
+            (collab / "rules" / "claude-code-ide.md").read_text(encoding="utf-8"),
+        )
 
 
 if __name__ == "__main__":

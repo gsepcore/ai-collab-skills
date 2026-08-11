@@ -169,6 +169,19 @@ Implementing live observation.
         self.assertEqual(snapshot["current_command"], "python3 -m unittest install/test_observer.py")
         self.assertEqual(snapshot["reported_events"][0]["event"], "command")
 
+    def test_native_claude_process_is_not_confused_with_terminal_claude(self):
+        command = (
+            f"/extensions/anthropic.claude-code/native-binary/claude --project {self.root} "
+            "--ide-native-session"
+        )
+
+        matched = _mod.classify_process(
+            "321", command, ["claude-code", "claude-code-ide"], self.root,
+            runner=self.fake_runner, system="Darwin",
+        )
+
+        self.assertEqual(matched, "claude-code-ide")
+
     def test_observer_reports_open_discussions(self):
         discussion_dir = self.collab / "discussions"
         discussion_dir.mkdir()

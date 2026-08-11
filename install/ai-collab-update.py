@@ -28,6 +28,8 @@ RAW_BASE = os.environ.get(
     "AI_COLLAB_UPDATE_RAW_BASE",
     "https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main",
 ).rstrip("/")
+LOCAL_SOURCE_VALUE = os.environ.get("AI_COLLAB_UPDATE_LOCAL_SOURCE", "").strip()
+LOCAL_SOURCE = Path(LOCAL_SOURCE_VALUE).expanduser().resolve() if LOCAL_SOURCE_VALUE else None
 
 CLAUDE_DIR = Path.home() / ".claude"
 SKILL_DIR = CLAUDE_DIR / "skills" / "collab"
@@ -51,6 +53,7 @@ GLOBAL_FILES: list[tuple[str, Path, bool]] = [
     ("install/ai-collab-project-setup.py", CLAUDE_DIR / "ai-collab-project-setup.py", True),
     ("install/ai-collab-orchestrate.py", CLAUDE_DIR / "ai-collab-orchestrate.py", True),
     ("install/ai-collab-team.py", CLAUDE_DIR / "ai-collab-team.py", True),
+    ("install/ai-collab-session.py", CLAUDE_DIR / "ai-collab-session.py", True),
     ("install/ai-collab-converse.py", CLAUDE_DIR / "ai-collab-converse.py", True),
     ("install/ai-collab-observer.py", CLAUDE_DIR / "ai-collab-observer.py", True),
     ("install/ai-collab-see.py", CLAUDE_DIR / "ai-collab-see.py", True),
@@ -85,6 +88,11 @@ def sha256(data: bytes) -> str:
 
 
 def fetch(rel: str, timeout: float) -> bytes:
+    if LOCAL_SOURCE is not None:
+        candidate = (LOCAL_SOURCE / rel).resolve()
+        if candidate != LOCAL_SOURCE and LOCAL_SOURCE not in candidate.parents:
+            raise OSError(f"update path escapes local source: {rel}")
+        return candidate.read_bytes()
     url = f"{RAW_BASE}/{rel}"
     request = urllib.request.Request(url, headers={"User-Agent": "ai-collab-update/1"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -278,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         "schema": "ai-collab.update.v1",
         "started": isoformat_z(started),
         "raw_base": RAW_BASE,
+        "local_source": str(LOCAL_SOURCE) if LOCAL_SOURCE else "",
         "global": {},
         "projects": [],
     }

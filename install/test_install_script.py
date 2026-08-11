@@ -38,6 +38,8 @@ class TestInstallScript(unittest.TestCase):
 
         self.assertIn('copy_or_download "install/ai-collab-team.py"', text)
         self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-team.py"', text)
+        self.assertIn('copy_or_download "install/ai-collab-session.py"', text)
+        self.assertIn('chmod +x "$CLAUDE_DIR/ai-collab-session.py"', text)
         self.assertIn("Team role onboarding", text)
 
     def test_self_updater_is_installed_and_configured(self):
@@ -48,6 +50,9 @@ class TestInstallScript(unittest.TestCase):
         self.assertIn("Self-updater", text)
         self.assertIn('add_plist_env "AI_COLLAB_AUTO_UPDATE" "${AI_COLLAB_AUTO_UPDATE:-1}"', text)
         self.assertIn('add_plist_env "AI_COLLAB_UPDATE_INTERVAL_SECONDS" "${AI_COLLAB_UPDATE_INTERVAL_SECONDS:-21600}"', text)
+        self.assertIn('add_plist_env "AI_COLLAB_UPDATE_LOCAL_SOURCE" "$update_local_source"', text)
+        self.assertIn('update_local_source="$REPO_DIR"', text)
+        self.assertNotIn('local update_local_source=', text)
 
     def test_unified_setup_is_installed_without_recursive_project_setup(self):
         text = INSTALL_SH.read_text(encoding="utf-8")

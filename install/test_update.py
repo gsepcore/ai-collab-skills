@@ -82,8 +82,22 @@ class TestUpdate(unittest.TestCase):
         self.assertIn("install/ai-collab-codex-bridge.py", rels)
         self.assertIn("install/ai-collab-recover.py", rels)
         self.assertIn("install/ai-collab-team.py", rels)
+        self.assertIn("install/ai-collab-session.py", rels)
         self.assertIn("install/ai-collab-setup.py", rels)
         self.assertTrue(any(".codex/skills/collab/SKILL.md" in path for path in destinations))
+
+    def test_fetch_can_use_pinned_local_development_source(self):
+        source = self.home / "source"
+        (source / "install").mkdir(parents=True)
+        (source / "install" / "sample.py").write_bytes(b"local-version")
+        previous = _mod.LOCAL_SOURCE
+        try:
+            _mod.LOCAL_SOURCE = source.resolve()
+            self.assertEqual(_mod.fetch("install/sample.py", 1), b"local-version")
+            with self.assertRaises(OSError):
+                _mod.fetch("../outside", 1)
+        finally:
+            _mod.LOCAL_SOURCE = previous
 
 
 if __name__ == "__main__":

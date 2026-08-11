@@ -339,6 +339,24 @@ def wait_for_inbox_response(path: Path, timeout: int) -> str:
     return ""
 
 
+def inbox_grace_seconds(root: Path, owner: str, requested: int) -> int:
+    if owner == "codex":
+        return 0
+    capabilities = read_json(collab_dir(root) / "capabilities.json", {})
+    for row in capabilities.get("agents", []) if isinstance(capabilities, dict) else []:
+        if not isinstance(row, dict) or row.get("agent") != owner:
+            continue
+        delivery = row.get("delivery") if isinstance(row.get("delivery"), dict) else {}
+        if delivery.get("primary") == "visible-chat":
+            return 0
+        policy = row.get("wake_policy") if isinstance(row.get("wake_policy"), dict) else {}
+        try:
+            return max(0, int(policy.get("internal_grace_seconds", requested)))
+        except (TypeError, ValueError):
+            break
+    return max(0, requested)
+
+
 def write_status(root: Path, run_id: str, status: str, now: datetime | None = None) -> None:
     now = now or utc_now()
     director = load_director(root, run_id)
@@ -529,7 +547,8 @@ Use `.ai-collab/thread-{task['id']}.md` for questions, review requests, and hand
         ),
     )
     owner_inbox = inbox_path(root, owner)
-    internal_status = wait_for_inbox_response(owner_inbox, args.internal_wait_seconds)
+    internal_grace = inbox_grace_seconds(root, owner, args.internal_wait_seconds)
+    internal_status = wait_for_inbox_response(owner_inbox, internal_grace)
     if internal_status:
         dispatch = {
             "ok": True,
@@ -541,7 +560,7 @@ Use `.ai-collab/thread-{task['id']}.md` for questions, review requests, and hand
     else:
         print(
             f"[AI-COLLAB] NOTICE: @{owner} did not respond internally after "
-            f"{args.internal_wait_seconds}s; proceeding to the exact visible chat."
+            f"{internal_grace}s; proceeding to the exact visible chat."
         )
         dispatch = visible_wake(root, owner_inbox)
     task["dispatch"] = {

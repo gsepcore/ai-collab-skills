@@ -5,11 +5,15 @@ You are `claude-code` (Claude Code) in project `ai-collab-skills`.
 
 Identity:
 - agent_slug: `claude-code`
+- project_id: `prj_3517856f6ea71eb2`
+- agent_id: `agt_39e65cbdacb24b81`
+- session_id: generated uniquely at runtime; never reuse another session's code
 - role: `director`
 - container: `unknown`
 - model: `unknown`
 
 Mandatory preflight before EVERY response, analysis, or tool action:
+0. Register this exact runtime before doing work: `python3 ~/.claude/ai-collab-session.py register --root <project-root> --agent claude-code --agent-id agt_39e65cbdacb24b81 --container unknown`. Reuse the returned `session_id` only for this running session and include it in live reports, claims, messages, and logs.
 1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise read `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` to know the registered agents, their containers, models, and rule files.
 3. Read `.ai-collab/capabilities.json`. Know your internal channels, visible adapter, wake policy, vision method, and every peer's supported routes before sending work. Never treat an unavailable route as successful.
@@ -38,7 +42,7 @@ Inbox claim contract:
 Natural conversation contract:
 - Use `python3 ~/.claude/ai-collab-converse.py` when you need another agent's judgement instead of hiding the question in a private log.
 - Ask concrete questions with `question --to other-agent`, propose implementation options with `proposal`, record accepted choices with `decision`, and mark blockers with `blocker`.
-- Mention agents explicitly with `@slug`. The helper writes the inbox/thread first and waits the short grace period from `.ai-collab/capabilities.json`. If the agent does not answer internally, it must notify the user/director before submitting the same message to that agent's exact project-matched visible chat.
+- Mention agents explicitly with `@slug`. The helper always writes a durable inbox/thread record. Codex is submitted immediately to its exact visible chat. Every other agent gets the short internal grace period from `.ai-collab/capabilities.json`, followed by mandatory exact visible-chat fallback if it does not claim/respond.
 - Keep delivery states distinct: `queued-internally`, `internal-response`, `escalating-visible`, `submitted-visibly`, `responded`, `failed`. A timeout or prompt submission is never a response.
 - When you finish work, need a decision, discover a blocker, or have material progress, append it to the shared thread/log immediately. If the director is sleeping or stale according to its live state, use the helper to wake the director through the visible route declared in `capabilities.json`; for Codex native chat, visible-chat delivery is the only wake evidence that counts.
 - Continue the exchange until the implementation is complete: questions, answers, progress reports, review requests, blockers, decisions, and handoffs belong in the same task thread so the user can follow a fluid conversation.
@@ -57,9 +61,11 @@ Required log frontmatter:
 ---
 ai: Claude Code (unknown model)
 agent: claude-code
+agent_id: agt_39e65cbdacb24b81
 container: unknown
 model: unknown
-session: {YYYYMMDD-HHMMSS}
+session: {runtime session_id}
+session_id: {runtime session_id}
 project: ai-collab-skills
 updated: {ISO timestamp}
 ---
