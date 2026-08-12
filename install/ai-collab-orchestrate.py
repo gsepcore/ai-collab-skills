@@ -606,14 +606,20 @@ def cmd_convene(args: argparse.Namespace) -> int:
         args.actor,
         "--topic",
         args.topic or f"Run {args.run_id} technical kickoff",
+        "--discussion-id",
+        f"run-{args.run_id}-technical-kickoff",
+        "--run-id",
+        args.run_id,
         "--to",
         ",".join(participants),
         "--tags",
-        f"run,{args.run_id},visible-conference",
+        f"run,{args.run_id},team-discussion",
         "--message",
         args.message,
         "--wait-seconds",
         str(args.wait_seconds),
+        "--visual-mode",
+        args.visual_mode,
     ]
     completed = subprocess.run(command, cwd=str(root), text=True, capture_output=True, check=False)
     if completed.stdout:
@@ -622,8 +628,8 @@ def cmd_convene(args: argparse.Namespace) -> int:
         print(completed.stderr.rstrip(), file=sys.stderr)
     if completed.returncode != 0:
         print(
-            "[AI-COLLAB] ERROR: the visible team conference was not verified; "
-            "do not summarize opinions for agents that did not reply.",
+            "[AI-COLLAB] ERROR: one or more requested agents did not provide a real reply; "
+            "the canonical discussion remains open and reusable for retry.",
             file=sys.stderr,
         )
     return completed.returncode
@@ -752,13 +758,19 @@ def build_parser() -> argparse.ArgumentParser:
     assign.add_argument("--force", action="store_true")
     assign.set_defaults(func=cmd_assign)
 
-    convene = sub.add_parser("convene", help="Start a visible project discussion and require real agent replies.")
+    convene = sub.add_parser("convene", help="Start or resume one internal-first project discussion and require real agent replies.")
     convene.add_argument("--run-id", required=True)
     convene.add_argument("--actor", required=True)
     convene.add_argument("--participants", default="", help="Comma-separated agents. Defaults to the run roster.")
     convene.add_argument("--topic", default="")
     convene.add_argument("--message", required=True)
     convene.add_argument("--wait-seconds", type=int, default=600)
+    convene.add_argument(
+        "--visual-mode",
+        choices=("observe", "strict", "off"),
+        default=os.environ.get("AI_COLLAB_VISUAL_MODE", "observe"),
+        help="observe keeps visual eyes active without blocking; strict makes visual verification a gate.",
+    )
     convene.add_argument("--force", action="store_true")
     convene.set_defaults(func=cmd_convene)
 

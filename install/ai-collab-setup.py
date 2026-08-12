@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -299,6 +300,147 @@ def run_role_onboarding(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     return {"status": "configured" if returncode == 0 else "failed", "returncode": returncode, "command": command}
 
 
+def capability_ack_status(root: Path, expected_agents: list[str]) -> dict[str, Any]:
+    capabilities = read_json(root / ".ai-collab" / "capabilities.json")
+    catalog = capabilities.get("capability_catalog") if isinstance(capabilities, dict) else {}
+    onboarding = capabilities.get("capability_onboarding") if isinstance(capabilities, dict) else {}
+    if not isinstance(catalog, dict) or not isinstance(onboarding, dict):
+        return {"status": "failed", "reason": "capability catalog/onboarding policy is missing", "missing": expected_agents}
+    digest = str(catalog.get("digest") or "")
+    relative = str(onboarding.get("thread") or "")
+    if not digest or not relative:
+        return {"status": "failed", "reason": "capability digest/onboarding thread is missing", "missing": expected_agents}
+    path = root / relative
+    acknowledged: set[str] = set()
+    manifest = read_json(root / ".ai-collab" / "agents.json")
+    agent_ids = {
+        str(row.get("agent")): str(row.get("agent_id") or "")
+        for row in manifest.get("agents", [])
+        if isinstance(row, dict) and row.get("agent")
+    }
+    feature_ids = [
+        str(item.get("id"))
+        for item in catalog.get("features", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    sections = re.split(r"(?m)^## [^\n]+ -- ([\w-]+)\s*$", text)
+    for index in range(1, len(sections), 2):
+        author = sections[index].strip()
+        body = sections[index + 1] if index + 1 < len(sections) else ""
+        expected_agent_id = agent_ids.get(author, "")
+        session_match = re.search(r"(?mi)^session_id:\s*(ses_[a-zA-Z0-9_]+)\s*$", body)
+        session_record = read_json(
+            root / ".ai-collab" / "live" / "sessions" / f"{session_match.group(1)}.json"
+        ) if session_match else {}
+        identity_matches = bool(
+            expected_agent_id
+            and session_match
+            and re.search(rf"(?mi)^agent_id:\s*{re.escape(expected_agent_id)}\s*$", body)
+            and session_record.get("agent_id") == expected_agent_id
+            and session_record.get("agent") == author
+            and session_record.get("project_id") == manifest.get("project_id")
+        )
+        features_match = all(feature_id in body for feature_id in feature_ids)
+        if (
+            re.search(rf"(?mi)^capability_ack:\s*{re.escape(digest)}\s*$", body)
+            and re.search(r"(?mi)^automatic_use:\s*enabled\s*$", body)
+            and identity_matches
+            and features_match
+        ):
+            acknowledged.add(author)
+    missing = sorted(agent for agent in expected_agents if agent not in acknowledged)
+    return {
+        "status": "confirmed" if not missing else "awaiting-agent-acknowledgements",
+        "digest": digest,
+        "thread": relative,
+        "acknowledged": sorted(acknowledged & set(expected_agents)),
+        "missing": missing,
+    }
+
+
+def run_capability_onboarding(root: Path, expected_agents: list[str], args: argparse.Namespace) -> dict[str, Any]:
+    before = capability_ack_status(root, expected_agents)
+    missing = list(before.get("missing") or [])
+    caller = str(getattr(args, "actor", "") or os.environ.get("AI_COLLAB_AGENT", "")).strip()
+    wake_targets = [agent for agent in missing if agent != caller]
+    if before.get("status") == "failed" or not missing:
+        return before
+    helper = CLAUDE_DIR / "ai-collab-converse.py"
+    if not helper.is_file() and args.installer_source:
+        source = Path(args.installer_source).expanduser().resolve()
+        source_root = source if source.is_dir() else source.parent.parent
+        candidate = source_root / "install" / "ai-collab-converse.py"
+        if candidate.is_file():
+            helper = candidate
+    if not helper.is_file():
+        return {**before, "dispatch": "failed", "reason": "conversation helper is not installed"}
+    digest = str(before.get("digest") or "")
+    feature_ids = [
+        str(item.get("id"))
+        for item in read_json(root / ".ai-collab" / "capabilities.json")
+        .get("capability_catalog", {})
+        .get("features", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    message = (
+        "Automatic capability onboarding after install/update. Read your complete managed Collab rules, "
+        "`.ai-collab/capabilities.json`, `.ai-collab/TEAM.md`, and `.ai-collab/roles.json`. Then respond "
+        "in this same thread without waiting for the user. Your own reply must contain:\n"
+        f"capability_ack: {digest}\n"
+        "agent_id: <your registered agent_id>\n"
+        "session_id: <your current session_id>\n"
+        f"understood_features: {', '.join(feature_ids)}\n"
+        "automatic_use: enabled\n"
+        "Do not merely claim prompt delivery; append the acknowledgement yourself."
+    )
+    command = [
+        sys.executable,
+        str(helper),
+        "--root",
+        str(root),
+        "start",
+        "--author",
+        "ai-collab-setup",
+        "--topic",
+        "Automatic Collab capability onboarding",
+        "--discussion-id",
+        f"capability-onboarding-{digest}",
+        "--to",
+        ",".join(wake_targets),
+        "--type",
+        "question",
+        "--tags",
+        "setup,capability-onboarding",
+        "--message",
+        message,
+        "--internal-wait-seconds",
+        "-1",
+        "--wait-seconds",
+        "0",
+        "--visual-mode",
+        "observe",
+    ]
+    queue_only = os.environ.get("AI_COLLAB_SETUP_ONBOARDING_QUEUE_ONLY", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if queue_only or not wake_targets:
+        command.append("--queue-only")
+    returncode = run_visible(command, cwd=root)
+    after = capability_ack_status(root, expected_agents)
+    after["dispatch"] = (
+        "queued-for-daemon" if (queue_only or not wake_targets) and returncode == 0
+        else "started" if returncode == 0
+        else "partially-failed"
+    )
+    after["returncode"] = returncode
+    after["command"] = command
+    return after
+
+
 def run_unified_setup(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     root = Path(args.root).expanduser().resolve() if args.root else project_root()
     started = utc_now()
@@ -364,10 +506,14 @@ def run_unified_setup(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     if report["role_onboarding"].get("status") not in {"configured"}:
         exit_code = 2 if report["role_onboarding"].get("status") == "required" else 1
 
-    expected_agents = agents or manifest_defaults(root)[0]
+    expected_agents = manifest_defaults(root)[0]
     report["project_verification"] = verify_project(root, expected_agents)
     if report["project_verification"]["status"] != "ok":
         exit_code = 1
+
+    report["capability_onboarding"] = run_capability_onboarding(root, expected_agents, args)
+    if report["capability_onboarding"].get("status") != "confirmed" and exit_code == 0:
+        exit_code = 3
 
     after_protected = protected_snapshot(root)
     changed_protected = protected_changes(before_protected, after_protected)
@@ -397,11 +543,17 @@ def run_unified_setup(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     report["installed_after"] = installed_fingerprint()
     report["agent_refresh"] = {
         "managed_rules_refreshed": report["project_migration"].get("status") == "updated",
-        "capability_preflight_applies_on_next_agent_turn": True,
+        "capability_catalog_in_every_turn": True,
+        "capability_digest": report.get("capability_onboarding", {}).get("digest", ""),
+        "agent_acknowledgements_confirmed": report.get("capability_onboarding", {}).get("status") == "confirmed",
         "ide_window_reload_recommended": not args.skip_global_install,
     }
     report["finished"] = isoformat_z(utc_now())
-    report["status"] = "ok" if exit_code == 0 else "partial"
+    report["status"] = (
+        "ok" if exit_code == 0
+        else "awaiting-agent-acknowledgements" if exit_code == 3
+        else "partial"
+    )
     report_path = root / ".ai-collab" / REPORT_NAME
     atomic_write_json(report_path, report)
     print(json.dumps(report, indent=2))
@@ -416,6 +568,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--container", default=None, help="IDE/container. Existing manifest is preserved by default.")
     parser.add_argument("--models", default=None, help="Comma-separated agent=model pairs.")
     parser.add_argument("--assign", action="append", default=[], help="Role assignment role=agent; repeat to complete onboarding non-interactively.")
+    parser.add_argument("--actor", default=os.environ.get("AI_COLLAB_AGENT", ""), help="Agent running setup; it self-acknowledges without waking its own visible chat.")
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt during project migration.")
     parser.add_argument("--installer-source", default=None, help="Local repository or install.sh path; default downloads current main.")
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("AI_COLLAB_SETUP_TIMEOUT", "30")))

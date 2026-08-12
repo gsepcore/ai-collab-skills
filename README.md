@@ -151,7 +151,7 @@ Every worker AI's rules file (created by `/collab setup` or pasted from `referen
 
 These are non-negotiable rules in every snippet so workers self-orient without the user prompting.
 
-When `/collab setup` runs on a fresh project, it also seeds `.ai-collab/inbox-all.md` with a **welcome onboarding task** — the first worker AI to open the project gets a concrete first instruction instead of an empty inbox.
+When `/collab setup` runs, it generates a versioned capability catalog and starts one automatic onboarding thread for that digest. Every registered agent is woken without a user prompt, reads the complete feature matrix, and appends its own acknowledgement. The same catalog is injected into every turn preflight so capabilities stay active in working memory; a new digest requires a new acknowledgement.
 
 ### 2.5 Per-agent monitors and natural conversations
 
@@ -166,7 +166,7 @@ discussions/*.md       natural agent questions, proposals, decisions, blockers
 @opencode              wake OpenCode from the latest conversation message
 ```
 
-Conversation mentions create wake events with `source_type: thread`, `reason: thread-mention`, `source_path`, `thread_path`, and the target slug. Before synchronous dispatch, the helper forces a fresh project screenshot and writes both the current `.ai-collab/live/visual-roster.json` and an immutable `.visual-roster.json` beside that screenshot. Every invited agent must inspect the actual PNG—natively or through `ai-collab-see.py`, which processes the pixels directly for text-only models—and include `visual_evidence:` plus `visible_peers:` in its own thread reply. The roster maps surface, host/agent process, PID/TTY, owned ports, bridge route, and logs. Any mismatch or missing proof exits nonzero; ports/logs alone are not sight.
+Conversation mentions create wake events with `source_type: thread`, `reason: thread-mention`, `source_path`, `thread_path`, and the target slug. Before and after visible fallback, the helper keeps the eyes active: it captures the project window and writes both the current `.ai-collab/live/visual-roster.json` and an immutable screenshot-bound roster. Default `observe` mode records and warns about mismatches without blocking a durable thread or agent-authored reply. Explicit `--visual-mode strict` requires direct PNG inspection plus `visual_evidence:` and `visible_peers:` and fails closed when proof is missing.
 
 ### 3. Each project is its own isolation bubble
 
@@ -401,7 +401,7 @@ python3 ~/.claude/ai-collab-converse.py --root "$PWD" decision \
   --message "Decision: use the adapter. Do not change the public API in this task."
 ```
 
-Task-bound conversations can still use the same helper with `--kind task --task-id TASK`, which writes the compatible `.ai-collab/thread-{task_id}.md` file. General discussions go to `.ai-collab/discussions/`. Direct `@slug` mentions run mandatory pre/post visual proofs, are submitted immediately to exact visible interfaces, and `--wait-seconds` requires a real response plus visual attestation from every recipient. Use `--queue-only` only when visible execution is explicitly not wanted.
+Task-bound conversations use `--kind task --task-id TASK` and write `.ai-collab/thread-{task_id}.md`. General discussions go to `.ai-collab/discussions/`; pass `--discussion-id` for retries so one canonical file is reused. Non-Codex agents receive internal delivery first and exact visible fallback only after the grace period; Codex visible chat remains immediate. `--wait-seconds` requires real agent-authored replies. The eyes run in `observe` mode by default; use `--visual-mode strict` only when visual proof itself is required.
 
 ### `/collab orchestrate`
 
@@ -480,10 +480,10 @@ The single install-or-migrate command for both new and already-running projects.
 - Regenerates managed rule blocks and the complete capability matrix without duplicates
 - Generates stable agent codes, installs per-runtime session registration, and runs mandatory role onboarding
 - Runs strict install/project verification and writes `.ai-collab/setup-report.json`
-- **Seeds `inbox-all.md` with a welcome onboarding task** — first worker AI to open this project self-orients automatically (preserved unchanged if file already exists)
+- Generates a digest-versioned capability catalog, opens one stable onboarding thread, and wakes every registered agent for its own acknowledgement
 - Writes Claude's first log entry
 - Starts Claude's live `/collab monitor` automatically for this project when the Claude Code runtime supports persistent Monitor/Task execution
-- Asks already-running agents to acknowledge the refreshed capabilities; Codex is contacted visibly immediately and other agents use internal-first/visible fallback
+- Keeps the complete capability inventory in every turn preflight; setup reports `awaiting-agent-acknowledgements` until every current-digest reply exists
 
 ```
 /collab setup

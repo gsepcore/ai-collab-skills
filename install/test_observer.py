@@ -556,6 +556,58 @@ to: opencode
         self.assertEqual(roster["missing_or_unverified"], ["codex"])
         self.assertFalse(roster["agents"][0]["host_surface"]["registered_host_match"])
 
+    def test_current_runtime_session_supersedes_stale_visible_route_without_disabling_eyes(self):
+        live = self.collab / "live"
+        screenshots = live / "screenshots"
+        sessions = live / "sessions"
+        screenshots.mkdir(parents=True)
+        sessions.mkdir(parents=True)
+        image = screenshots / "team.png"
+        image.write_bytes(b"png")
+        semantic_path = screenshots / "team.semantic.json"
+        semantic_path.write_text(json.dumps({
+            "project_match": True,
+            "visible_agents": ["opencode"],
+            "agent_visual_hits": {"opencode": [{"text": "OpenCode", "position": "left"}]},
+            "ocr": {"status": "ok"},
+        }), encoding="utf-8")
+        screenshot = {
+            "status": "captured", "path": str(image), "captured_at": "2026-08-12T13:10:00Z",
+            "window": {"app": "Electron", "pid": "900", "title": "demo"},
+            "semantic": {"path": str(semantic_path)},
+        }
+        (sessions / "current-opencode.json").write_text(json.dumps({
+            "agent": "opencode", "agent_id": "agt_open", "session_id": "ses_current",
+            "surface_id": "terminal:current", "project_path": str(self.root), "status": "active",
+            "pid": 222, "tty": "ttys037", "started": "2026-08-12T13:00:00Z",
+            "heartbeat_at": "2026-08-12T13:09:00Z",
+        }), encoding="utf-8")
+        (live / "opencode.visible.json").write_text(json.dumps({
+            "agent": "opencode", "status": "submitted-visibly", "project_path": str(self.root),
+            "session_id": "ses_old", "agent_pid": 111, "tty": "ttys018",
+            "updated": "2026-08-11T22:00:00Z",
+        }), encoding="utf-8")
+        processes = [{"pid": "222", "tty": "ttys037", "command": "opencode", "ports": [42234]}]
+        original_processes = _mod.visual_processes
+        original_inventory = _mod.ide_bridge_inventory
+        _mod.visual_processes = lambda root, rows, runner: processes
+        _mod.ide_bridge_inventory = lambda root, runner: []
+        try:
+            roster = _mod.build_visual_roster(
+                root=self.root, live_dir=live, now=self.now, agents=["opencode"],
+                snapshots={"opencode": {"processes": processes, "latest_log": {}}},
+                screenshot=screenshot, required_agents=["opencode"], runner=self.fake_runner,
+            )
+        finally:
+            _mod.visual_processes = original_processes
+            _mod.ide_bridge_inventory = original_inventory
+
+        agent = roster["agents"][0]
+        self.assertEqual(roster["status"], "verified")
+        self.assertEqual(agent["ide_routes"][0]["session_id"], "ses_current")
+        self.assertEqual(agent["ignored_stale_routes"][0]["session_id"], "ses_old")
+        self.assertTrue(agent["current_session_matches_process"])
+
     def test_background_refresh_does_not_mutate_screenshot_bound_roster(self):
         live = self.collab / "live"
         screenshots = live / "screenshots"

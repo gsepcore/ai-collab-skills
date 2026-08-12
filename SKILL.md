@@ -29,6 +29,8 @@ Execute its `required_actions`. Infer the correct behavior automatically:
 
 Never require the user to remember a Collab command. Slash commands remain explicit overrides and recovery/debugging surfaces.
 
+Every preflight returns the current versioned `capability_catalog`. Keep that entire feature inventory available throughout the turn and apply the matching capability automatically. Setup/update opens one stable capability-onboarding thread per catalog digest and wakes every registered agent. Each agent must read its managed rules and capability matrix, then append its own `capability_ack: <digest>` without waiting for the user. A changed digest invalidates the previous acknowledgement. Setup remains `awaiting-agent-acknowledgements` until every registered agent has confirmed.
+
 Each AI writes a Markdown log to `{project-root}/.ai-collab/`. Any AI with filesystem access to the project can read those logs. Claude manages its own log via this skill. Other agents (OpenCode, Codex, Aider, Cursor native chat, etc.) write via agent-specific rules installed by `~/.claude/ai-collab-project-setup.py`.
 
 Agents can also hold natural conversations: task-specific threads live at `.ai-collab/thread-{task_id}.md`, and broader design/review discussions live at `.ai-collab/discussions/*.md`. `@slug` mentions in either place are scanned by the daemon and can wake the mentioned agent.
@@ -37,7 +39,7 @@ Every onboarded project also has `.ai-collab/capabilities.json`. Each agent must
 
 Identity is code-based, not name-based. Setup persists one `project_id` and one stable `agent_id` per registered agent. Every running terminal or native-chat session must register a fresh `session_id` and its `surface_id` in `.ai-collab/live/sessions/`. Roles bind both the readable agent slug and `primary_agent_id`; visible routing resolves `project_id + agent_id + session_id + surface_id`. Labels, OCR text, process names, and pane positions are corroborating evidence only.
 
-The installed daemon also writes semantic live snapshots to `{project-root}/.ai-collab/live/`. These are the project-scoped "eyes" layer: current inbox/task state, latest log summary, self-reported commands/edits from each agent, process hints tied to the current project, git dirty files, director alerts, `health.json`, automatic project-window screenshots, and `.semantic.json` screenshot sidecars unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`. The installer attempts to install the local OCR engine (`tesseract`) by default; if unavailable, vision remains functional in metadata-only mode and `health.json` reports the degradation.
+The installed daemon also writes semantic live snapshots to `{project-root}/.ai-collab/live/`. These are the project-scoped "eyes" layer: current inbox/task state, latest log summary, self-reported commands/edits from each agent, process hints tied to the current project, git dirty files, director alerts, `health.json`, automatic project-window screenshots, and `.semantic.json` screenshot sidecars unless `AI_COLLAB_OBSERVER_SCREENSHOTS=0`. The eyes stay enabled for visible turns. Their default mode is `observe`: capture and report ambiguity without blocking a valid durable conversation. Use `--visual-mode strict` when the user requests a visual audit or proof; only that mode makes screenshot/roster verification a gate. The installer attempts to install the local OCR engine (`tesseract`) by default; if unavailable, vision remains functional in metadata-only mode and `health.json` reports the degradation.
 
 The daemon also runs the self-updater and reboot recovery by default. The self-updater refreshes the global `~/.claude` install from the configured GitHub branch, then re-applies managed `AI-COLLAB-START` / `AI-COLLAB-END` rule blocks in already-onboarded projects and refreshes generated `PROTOCOL.md` files with backups. Recovery refreshes stale/missing `CONTEXT.md` files and removes stale wakeup dedupe entries for unfinished inbox tasks after restart/session loss. Set `AI_COLLAB_AUTO_UPDATE=0` or `AI_COLLAB_RECOVERY=0` to disable either layer, or tune `AI_COLLAB_UPDATE_INTERVAL_SECONDS` / `AI_COLLAB_RECOVERY_INTERVAL_SECONDS`.
 
@@ -148,7 +150,7 @@ Show the live semantic observer view for the project.
 
 Start or continue a natural agent-to-agent discussion for questions, proposals, reviews, blockers, decisions, and handoffs.
 
-This is an internal-first execution contract, not a narration feature. With recipients in `--to`, the helper always writes the shared thread first. Non-Codex recipients receive the configured internal grace period and are not disturbed visibly if they answer. Codex skips that wait and is submitted immediately to its exact visible chat. Every other non-responsive agent is escalated to its exact registered visible surface. The helper records the escalation, verifies the real project window/surface, and submits the prompt; no hidden CLI substitute is allowed. A file write, port, process, log, prompt submission, or wake event alone is never a response.
+This is an internal-first execution contract, not a narration feature. With recipients in `--to`, the helper always writes the shared thread first. Every non-Codex recipient receives the configured internal grace period, including IDE-native agents that also have a visible adapter. Codex alone skips that wait and is submitted immediately to its exact visible chat. Every other non-responsive agent is escalated to its exact registered visible surface. The helper keeps its visual eyes active, but defaults to non-blocking `observe` mode. A file write, port, process, log, prompt submission, or wake event alone is never a response.
 
 **Steps:**
 1. Find project root.
@@ -174,8 +176,8 @@ This is an internal-first execution contract, not a narration feature. With reci
    ```
 
 5. Keep the same thread open for follow-up questions, progress requests, blockers, reviews, and handoffs until a terminal result exists. Do not reduce the collaboration to isolated wakeups.
-6. Require every visibly escalated agent to inspect the fresh screenshot and append a substantive, agent-authored reply with its opinion, risks, `visual_evidence: <path>`, and `visible_peers: <slugs>`. `--wait-seconds` exits nonzero when a real reply or visual attestation is missing.
-7. Require the automatic post-turn screenshot. Use only these delivery claims: `queued internally`, `internal response`, `escalating visibly`, `submitted visibly`, `responded`, or `failed`. Say `responded` only after the thread contains that agent's own compliant message.
+6. Keep automatic pre/post visual observations. In `observe` mode, surface ambiguity as a warning and accept a substantive agent-authored reply. In explicit `--visual-mode strict`, require the agent to inspect the PNG and append `visual_evidence:` plus `visible_peers:`; missing proof exits nonzero.
+7. Use `--discussion-id <stable-id>` for retries and run kickoffs so the helper appends to one canonical discussion instead of creating timestamped duplicates. Use only these delivery claims: `queued internally`, `internal response`, `escalating visibly`, `submitted visibly`, `responded`, or `failed`. Say `responded` only after the thread contains that agent's own message.
 8. Use `/collab observe` to inspect `visual-roster.json`, agent/process/TTY/port ownership, open conversations, and latest replies.
 
 ---
@@ -190,7 +192,7 @@ Use one idempotent command for first-time installation, global updates, existing
 2. Run the deterministic unified setup helper:
 
    ```bash
-   python3 ~/.claude/ai-collab-setup.py --root "$ROOT"
+   python3 ~/.claude/ai-collab-setup.py --root "$ROOT" --actor "$AGENT"
    ```
 
    If the helper is not installed but this repository is available, run `python3 install/ai-collab-setup.py --root "$ROOT" --installer-source .`. Otherwise bootstrap once with the published installer and then rerun `/collab setup`.
@@ -202,6 +204,7 @@ Use one idempotent command for first-time installation, global updates, existing
    - regenerate `TEAM.md`, `agents.json`, `capabilities.json`, and relevant runtime rule blocks
    - persist stable project/agent identity codes and install the runtime session registrar
    - run mandatory development-team role onboarding and bind each owner to its `agent_id`
+   - generate a versioned capability catalog, open/reuse its automatic onboarding thread, and wake every registered agent for its own acknowledgement
    - run strict global doctor checks and project capability checks
    - write `.ai-collab/setup-report.json` with before/after fingerprints, preservation results, migration status, and reload guidance
 4. Ask/record project values only when they are not already present:
@@ -225,11 +228,11 @@ Use one idempotent command for first-time installation, global updates, existing
    ✓ cursor-native → .cursorrules (created/appended)
    ```
 
-7. For an already-running project, start one setup-refresh discussion with every registered agent. Ask each agent to read its refreshed rule block plus `.ai-collab/capabilities.json` and append its own acknowledgement. Apply the internal-first grace period and visible fallback; do not claim an agent refreshed until its agent-authored acknowledgement exists.
+7. Start or reuse `.ai-collab/discussions/discussion-capability-onboarding-{digest}.md` for every installation and update. Wake every registered agent automatically. Each agent must read its refreshed rule block plus the complete `capability_catalog` and append its own digest-bound acknowledgement. Apply internal-first delivery and visible fallback; never ask the user to solicit these replies.
 8. Run `/collab write` immediately to log the current context.
 9. Start `/collab monitor` automatically for this project in the current Claude Code session. Do not ask the user to run it manually. If a monitor for this project is already active, keep it and report "monitor already active." If the current runtime cannot launch a persistent Monitor/Task, say that clearly and rely on the installed daemon + prompt hooks as the fallback.
 10. Role onboarding is part of setup, not an optional follow-up. Interactive setup must present every registered identity and role. Non-interactive setup without existing roles must exit incomplete and write `.ai-collab/role-onboarding.json`; rerun with repeated `--assign role=agent` values. Never report setup successful without `.ai-collab/roles.json` schema v2.
-11. Summarize the global install, identity codes, registered sessions/surfaces, containers, models, development-team roles, preservation audit, exact rules files, doctor result, agent acknowledgements, and whether one IDE window reload is recommended.
+11. Report `ok` only after all agent-authored capability acknowledgements exist for the current digest. Otherwise report `awaiting-agent-acknowledgements` with exact missing agents; do not call setup complete. Summarize the global install, identity codes, sessions/surfaces, roles, preservation audit, rules, doctor result, and reload guidance.
 
 **Re-run behavior:** Treat every invocation as install-or-migrate. Re-running it updates the global installation and current project to the same release, adds newly detected agents, refreshes managed blocks without duplication, and fails honestly if an existing inbox, run, role file, task thread, or discussion changed during migration. Never remove user-authored content or collaboration history.
 
@@ -485,7 +488,7 @@ Use this when the user gives a large implementation goal and wants multiple agen
 
 ```bash
 python3 ~/.claude/ai-collab-orchestrate.py init --goal "$GOAL" --director "$DIRECTOR" --agents "$AGENTS" --title "$TITLE"
-python3 ~/.claude/ai-collab-orchestrate.py convene --run-id "$RUN_ID" --actor "$DIRECTOR" --participants "$AGENTS" --message "$GOAL Ask each agent for its technical opinion, risks, and recommended approach." --wait-seconds 180
+python3 ~/.claude/ai-collab-orchestrate.py convene --run-id "$RUN_ID" --actor "$DIRECTOR" --participants "$AGENTS" --message "$GOAL Ask each agent for its technical opinion, risks, and recommended approach." --wait-seconds 180 --visual-mode observe
 python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK" --title "$TITLE" --owner "$AGENT" --allowed-files "$FILES" --description "$DESC" --validation "$VALIDATION"
 python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK" --title "$TITLE" --role frontend --allowed-files "$FILES" --description "$DESC" --validation "$VALIDATION"
 python3 ~/.claude/ai-collab-orchestrate.py assign --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK"
@@ -497,8 +500,8 @@ python3 ~/.claude/ai-collab-orchestrate.py finalize --run-id "$RUN_ID" --actor "
 **Execution workflow:**
 1. Read `.ai-collab/CONTEXT.md`, `TEAM.md`, `capabilities.json`, `roles.json`, active inboxes, and recent logs.
 2. Create the run with the selected director and participating agents. If none were explicitly selected, use the senior director and assigned role owners from `roles.json`.
-3. Convene the visible team. The helper must force a fresh pre-turn screenshot, build an immutable per-capture visual roster plus `.ai-collab/live/visual-roster.json`, and refuse dispatch unless every requested agent is visible in the correct project surface. Each agent must inspect the actual PNG with native vision or `ai-collab-see.py`, which directly processes the pixels for models without image input.
-4. Wait for a real thread reply from every participant. Every reply must include `visual_evidence:` and `visible_peers:`; after replies, require a second fresh visual proof showing the project interfaces. Show the user the actual agent-authored recommendations. Never paraphrase a missing or visually unverified reply as if that agent provided it.
+3. Convene the team in one stable run discussion. Write internally first, keep fresh pre/post screenshots and immutable visual rosters, then use exact visible fallback for non-responsive agents. In default `observe` mode, visual ambiguity warns but does not discard the durable thread or current-session identity.
+4. Wait for a real thread reply from every participant and show the actual agent-authored recommendations. When the user requests visible proof, pass `--visual-mode strict`; then every reply must include `visual_evidence:` and `visible_peers:` and the pre/post rosters must verify.
 5. Write a concrete `PLAN.md`: tasks, dependencies, required roles, owners, allowed files, and validation.
 6. Add and assign tasks with one owner each. Prefer `--role` for default routing; use `--owner` for an explicit override. Assignment writes the inbox/thread first, waits briefly for a claim, announces non-response, then escalates only that agent to its verified visible route. It exits nonzero when the visible route rejects the prompt.
 7. Agents ask and answer questions in `thread-{task_id}.md` using normal language and `@slug` mentions. Keep progress, doubts, recommendations, reviews, and handoffs in that same continuous conversation.
@@ -515,7 +518,7 @@ python3 ~/.claude/ai-collab-orchestrate.py finalize --run-id "$RUN_ID" --actor "
 - Never silently fall back to headless execution when the user requested visible multi-agent work.
 - Ports and logs are corroborating evidence, never substitutes for sight. The visual roster must map agent ↔ project ↔ visible surface ↔ PID/TTY ↔ agent-owned port, and label IDE-bridge ports as routing infrastructure rather than pretending they belong to an agent.
 - Evidence depends on surface type: terminals require one exact project process/PID/TTY and any agent-owned port; native IDE chats intentionally share the outer IDE host. Require that host PID to be an ancestor of the exact project bridge, then bind the agent with `registered-shared-project-host+position-bound-top-band-label` plus actual pane pixels. Never invent a child process or port.
-- A visible workflow fails closed if the screenshot is missing/stale, OCR cannot identify a required surface, process/project identity is ambiguous, an agent cannot inspect the image, or pre/post visual evidence disagrees.
+- Strict visual audit mode fails closed if the screenshot is missing/stale, OCR cannot identify a required surface, process/project identity is ambiguous, an agent cannot inspect the image, or pre/post evidence disagrees. Default observe mode preserves those findings as warnings and continues normal collaboration.
 
 ---
 

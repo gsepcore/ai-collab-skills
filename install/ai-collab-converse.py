@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover - Windows fallback
 
 SCHEMA_VERSION = "ai-collab.thread.v2"
 VALID_MESSAGE_TYPES = {"message", "question", "answer", "proposal", "decision", "blocker", "review", "handoff"}
+VALID_VISUAL_MODES = {"observe", "strict", "off"}
 MENTION_RE = re.compile(r"(?<![\w.-])@([a-z][a-z0-9_-]{1,40})\b")
 
 
@@ -97,6 +98,14 @@ def find_mentions(message: str) -> list[str]:
     return sorted(dict.fromkeys(match.group(1).lower() for match in MENTION_RE.finditer(message)))
 
 
+def visual_participants(root: Path, author: str, recipients: list[str]) -> list[str]:
+    registered = registered_agent_slugs(root)
+    candidates = [normalize_slug(author), *recipients]
+    if registered:
+        candidates = [agent for agent in candidates if agent in registered]
+    return list(dict.fromkeys(candidates))
+
+
 def registered_agent_slugs(root: Path) -> set[str]:
     payload = load_json_file(collab_dir(root) / "agents.json")
     rows = payload.get("agents") if isinstance(payload, dict) else None
@@ -153,7 +162,10 @@ def agent_is_active(root: Path, agent: str, threshold_seconds: int) -> bool:
 def internal_grace_seconds(root: Path, agent: str, requested: int) -> int:
     capability = capability_for(root, agent)
     delivery = capability.get("delivery") if isinstance(capability, dict) else {}
-    if agent == "codex" or (isinstance(delivery, dict) and delivery.get("primary") == "visible-chat"):
+    # Codex native chat is the one explicit exception to internal-first delivery.
+    # Every other agent gets its durable inbox/thread grace period even if it also
+    # exposes a visible adapter. A visible route is fallback, not the primary bus.
+    if agent == "codex":
         return 0
     policy = capability.get("wake_policy") if isinstance(capability, dict) else {}
     try:
@@ -161,19 +173,17 @@ def internal_grace_seconds(root: Path, agent: str, requested: int) -> int:
     except (TypeError, ValueError):
         configured = requested
     grace = max(0, requested if requested >= 0 else configured)
-    visible = capability.get("visible") if isinstance(capability, dict) else {}
-    try:
-        sleep_threshold = int(
-            os.environ.get(
-                "AI_COLLAB_DIRECTOR_SLEEP_SECONDS",
-                str((policy or {}).get("sleep_threshold_seconds", 60)),
-            )
-        )
-    except (TypeError, ValueError):
-        sleep_threshold = 60
-    if isinstance(visible, dict) and visible.get("native_chat_only") and not agent_is_active(root, agent, sleep_threshold):
-        return 0
     return grace
+
+
+def visual_mode(value: str | None = None) -> str:
+    legacy = os.environ.get("AI_COLLAB_VISUAL_PROOF", "1").strip().lower()
+    if legacy in {"0", "false", "no", "off"}:
+        return "off"
+    mode = (value or os.environ.get("AI_COLLAB_VISUAL_MODE", "observe")).strip().lower()
+    if mode not in VALID_VISUAL_MODES:
+        raise SystemExit(f"Invalid visual mode: {mode}. Expected observe, strict, or off.")
+    return mode
 
 
 def emit_escalation_notice(root: Path, targets: list[str], source: Path, grace_seconds: int) -> None:
@@ -311,8 +321,10 @@ def task_thread_path(collab: Path, task_id: str) -> Path:
     return collab / f"thread-{slugify(task_id, 'task')}.md"
 
 
-def discussion_path(collab: Path, topic: str, now: datetime) -> Path:
+def discussion_path(collab: Path, topic: str, now: datetime, discussion_id: str = "") -> Path:
     slug = slugify(topic, "discussion")
+    if discussion_id:
+        return collab / "discussions" / f"discussion-{slugify(discussion_id, slug)}.md"
     return collab / "discussions" / f"discussion-{now.strftime('%Y%m%d-%H%M%S')}-{slug}.md"
 
 
@@ -448,7 +460,7 @@ def start_conversation(args: argparse.Namespace) -> Path:
         path = task_thread_path(collab, task_id)
         kind = "task"
     else:
-        path = discussion_path(collab, args.topic, now)
+        path = discussion_path(collab, args.topic, now, args.discussion_id)
     message = prefix_mentions(args.message, recipients)
     return append_message(
         path,
@@ -589,6 +601,26 @@ def visual_context(message: str, proof: dict[str, Any], participants: list[str])
     )
 
 
+def visual_observation_context(message: str, proof: dict[str, Any], participants: list[str]) -> str:
+    result = proof.get("result") if isinstance(proof.get("result"), dict) else {}
+    screenshot = result.get("screenshot") if isinstance(result.get("screenshot"), dict) else {}
+    roster_path = result.get("visual_roster", "")
+    screenshot_path = screenshot.get("path", "")
+    peers = render_csv(participants)
+    evidence = []
+    if screenshot_path:
+        evidence.append(f"screenshot `{screenshot_path}`")
+    if roster_path:
+        evidence.append(f"roster `{roster_path}`")
+    suffix = ", ".join(evidence) or "the live visual observer"
+    return (
+        message.rstrip()
+        + f"\n\nVisual observation is available from {suffix} for peers ({peers}). "
+        + "Use it as situational evidence when useful. A visual ambiguity does not invalidate "
+        + "this durable thread or an agent-authored reply; strict visual audit was not requested."
+    )
+
+
 def dispatch_visible(path: Path, root: Path, targets: list[str] | None = None) -> dict[str, Any]:
     script = wakeup_script_path()
     if not script:
@@ -726,10 +758,12 @@ def dispatch_and_optionally_wait(
     internal_wait_seconds: int,
     wait_seconds: int,
     visual_agents: list[str],
+    requested_visual_mode: str = "observe",
 ) -> int:
     if queue_only:
         print("[AI-COLLAB] Conversation queued without visible dispatch (--queue-only).")
         return 0
+    mode = visual_mode(requested_visual_mode)
     pending_internal = set(recipients)
     escalated: list[str] = []
     dispatch_failed = False
@@ -750,18 +784,24 @@ def dispatch_and_optionally_wait(
             grace = max(grace_by_agent[agent] for agent in due)
             print(
                 "[AI-COLLAB] NOTICE: no internal response from " + ", ".join(due)
-                + f" after {grace}s; proceeding to their visible chats after visual verification."
+                + f" after {grace}s; proceeding to their visible chats with visual observation."
             )
             emit_escalation_notice(root, due, path, grace)
             prepared = prepare_visible_surfaces(root, due)
             print("[AI-COLLAB] Visible surface preparation: " + json.dumps(prepared, sort_keys=True))
             if not prepared.get("ok"):
+                if mode == "strict":
+                    print(
+                        "[AI-COLLAB] ERROR: strict visual mode refused fallback because the exact "
+                        "visible surface could not be prepared.",
+                        file=sys.stderr,
+                    )
+                    return 4
                 print(
-                    "[AI-COLLAB] ERROR: the internal message remains queued, but the exact visible "
-                    "surface could not be focused without sending the prompt.",
+                    "[AI-COLLAB] WARNING: visible preparation was inconclusive; the durable internal "
+                    "message remains valid and the adapter will resolve the current session directly.",
                     file=sys.stderr,
                 )
-                return 4
             preparation_result = prepared.get("result") if isinstance(prepared.get("result"), dict) else {}
             preparation_rows = preparation_result.get("results") if isinstance(preparation_result, dict) else []
             if not isinstance(preparation_rows, list):
@@ -770,6 +810,7 @@ def dispatch_and_optionally_wait(
                 isinstance(row, dict) and row.get("status") == "legacy-focus-on-submit"
                 for row in preparation_rows
             )
+            proof: dict[str, Any] = {"ok": True, "skipped": True, "reason": "visual mode off"}
             if legacy_focus:
                 print(
                     "[AI-COLLAB] NOTICE: the installed bridge is legacy; submitting to the exact "
@@ -783,27 +824,42 @@ def dispatch_and_optionally_wait(
                     pending_internal -= set(due)
                     continue
                 time.sleep(0.75)
-                proof = visual_proof(root, visual_agents, "after-legacy-focus-submit")
+                if mode != "off":
+                    proof = visual_proof(root, visual_agents, "after-legacy-focus-submit")
                 print("[AI-COLLAB] Immediate post-submit visual proof: " + json.dumps(proof, sort_keys=True))
-                if not proof.get("ok"):
+                if not proof.get("ok") and mode == "strict":
                     print(
                         "[AI-COLLAB] ERROR: the prompt was submitted to the exact terminal, but its "
                         "visible surface could not be verified afterward. Do not claim a response.",
                         file=sys.stderr,
                     )
                     return 4
+                if not proof.get("ok"):
+                    print(
+                        "[AI-COLLAB] WARNING: the eyes recorded an ambiguous post-submit roster; "
+                        "delivery continues in observe mode.",
+                        file=sys.stderr,
+                    )
             else:
                 time.sleep(0.75)
-                proof = visual_proof(root, visual_agents, "before-visible-turn")
+                if mode != "off":
+                    proof = visual_proof(root, visual_agents, "before-visible-turn")
                 print("[AI-COLLAB] Pre-turn visual proof: " + json.dumps(proof, sort_keys=True))
-                if not proof.get("ok"):
+                if not proof.get("ok") and mode == "strict":
                     print(
                         "[AI-COLLAB] ERROR: the internal message remains queued, but visible escalation "
                         "was refused because visual preflight failed.",
                         file=sys.stderr,
                     )
                     return 4
-            escalation_message = visual_context(
+                if not proof.get("ok"):
+                    print(
+                        "[AI-COLLAB] WARNING: the eyes recorded an ambiguous pre-turn roster; "
+                        "the internal thread and current-session delivery remain authoritative.",
+                        file=sys.stderr,
+                    )
+            context_builder = visual_context if mode == "strict" else visual_observation_context
+            escalation_message = context_builder(
                 "Visible fallback after the internal grace period expired. Read the full thread and reply there.",
                 proof,
                 visual_agents,
@@ -847,25 +903,35 @@ def dispatch_and_optionally_wait(
             return 3
         print("[AI-COLLAB] Verified real thread replies from: " + ", ".join(recipients))
         missing_visual = missing_visual_attestations(path, recipients, visual_agents, kickoff_at)
-        if missing_visual and os.environ.get("AI_COLLAB_VISUAL_PROOF", "1").strip().lower() not in {"0", "false", "no", "off"}:
+        if missing_visual and mode == "strict":
             print(
                 "[AI-COLLAB] ERROR: replies lacked required agent-authored visual evidence from: "
                 + ", ".join(missing_visual),
                 file=sys.stderr,
             )
             return 5
-    post = visual_proof(root, visual_agents, "after-visible-turn")
+    post = (
+        visual_proof(root, visual_agents, "after-visible-turn")
+        if mode != "off"
+        else {"ok": True, "skipped": True, "reason": "visual mode off"}
+    )
     print("[AI-COLLAB] Post-turn visual proof: " + json.dumps(post, sort_keys=True))
-    if not post.get("ok"):
+    if not post.get("ok") and mode == "strict":
         print("[AI-COLLAB] ERROR: response/delivery exists but post-turn visual proof failed.", file=sys.stderr)
         return 4
+    if not post.get("ok"):
+        print(
+            "[AI-COLLAB] WARNING: post-turn visual observation is ambiguous; responses and durable "
+            "delivery evidence remain valid in observe mode.",
+            file=sys.stderr,
+        )
     return 0
 
 
 def cmd_start(args: argparse.Namespace) -> int:
     root = root_from_arg(args.root)
     recipients = normalize_slugs(args.to)
-    visual_agents = list(dict.fromkeys([normalize_slug(args.author), *recipients]))
+    visual_agents = visual_participants(root, args.author, recipients)
     kickoff_at = isoformat_z(utc_now())
     path = start_conversation(args)
     print(f"[AI-COLLAB] Conversation started: {path}")
@@ -879,13 +945,14 @@ def cmd_start(args: argparse.Namespace) -> int:
         internal_wait_seconds=args.internal_wait_seconds,
         wait_seconds=args.wait_seconds,
         visual_agents=visual_agents,
+        requested_visual_mode=args.visual_mode,
     )
 
 
 def cmd_reply(args: argparse.Namespace) -> int:
     root = root_from_arg(args.root)
     recipients = normalize_slugs(args.to)
-    visual_agents = list(dict.fromkeys([normalize_slug(args.author), *recipients]))
+    visual_agents = visual_participants(root, args.author, recipients)
     kickoff_at = isoformat_z(utc_now())
     path = reply_conversation(args)
     print(f"[AI-COLLAB] Conversation updated: {path}")
@@ -899,13 +966,14 @@ def cmd_reply(args: argparse.Namespace) -> int:
         internal_wait_seconds=args.internal_wait_seconds,
         wait_seconds=args.wait_seconds,
         visual_agents=visual_agents,
+        requested_visual_mode=args.visual_mode,
     )
 
 
 def cmd_typed_reply(args: argparse.Namespace) -> int:
     root = root_from_arg(args.root)
     recipients = normalize_slugs(args.to)
-    visual_agents = list(dict.fromkeys([normalize_slug(args.author), *recipients]))
+    visual_agents = visual_participants(root, args.author, recipients)
     kickoff_at = isoformat_z(utc_now())
     path = reply_conversation(args, message_type=args.command)
     print(f"[AI-COLLAB] Conversation updated: {path}")
@@ -919,6 +987,7 @@ def cmd_typed_reply(args: argparse.Namespace) -> int:
         internal_wait_seconds=args.internal_wait_seconds,
         wait_seconds=args.wait_seconds,
         visual_agents=visual_agents,
+        requested_visual_mode=args.visual_mode,
     )
 
 
@@ -974,6 +1043,12 @@ def add_common_reply_args(parser: argparse.ArgumentParser) -> None:
         help="Wait for an internal thread/inbox response before notifying and escalating to visible chat.",
     )
     parser.add_argument("--wait-seconds", type=int, default=0, help="Wait for real replies from every --to recipient.")
+    parser.add_argument(
+        "--visual-mode",
+        choices=sorted(VALID_VISUAL_MODES),
+        default=os.environ.get("AI_COLLAB_VISUAL_MODE", "observe"),
+        help="observe keeps the eyes active without blocking; strict requires verified visual evidence; off skips capture.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -990,6 +1065,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--kind", choices=("discussion", "task"), default="discussion")
     start.add_argument("--task-id", default="")
     start.add_argument("--run-id", default="")
+    start.add_argument("--discussion-id", default="", help="Stable id used to reuse one discussion across retries.")
     start.add_argument("--type", choices=sorted(VALID_MESSAGE_TYPES), default="message")
     start.add_argument("--queue-only", action="store_true", help="Write without activating visible agent interfaces.")
     start.add_argument(
@@ -999,6 +1075,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Wait for an internal response before notifying and escalating to visible chat.",
     )
     start.add_argument("--wait-seconds", type=int, default=0, help="Wait for real replies from every --to recipient.")
+    start.add_argument(
+        "--visual-mode",
+        choices=sorted(VALID_VISUAL_MODES),
+        default=os.environ.get("AI_COLLAB_VISUAL_MODE", "observe"),
+        help="observe keeps the eyes active without blocking; strict requires verified visual evidence; off skips capture.",
+    )
     start.set_defaults(func=cmd_start)
 
     reply = sub.add_parser("reply", help="Append a normal message.")

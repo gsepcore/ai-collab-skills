@@ -122,6 +122,33 @@ CONTAINER_CHOICES = ["antigravity", "cursor", "vscode", "windsurf", "terminal", 
 
 DEFAULT_INTERNAL_GRACE_SECONDS = max(0, int(os.environ.get("AI_COLLAB_INTERNAL_GRACE_SECONDS", "15")))
 DEFAULT_SLEEP_THRESHOLD_SECONDS = max(1, int(os.environ.get("AI_COLLAB_DIRECTOR_SLEEP_SECONDS", "60")))
+CAPABILITY_CATALOG_SCHEMA = "ai-collab.features.v1"
+CAPABILITY_FEATURES: list[dict[str, str]] = [
+    {"id": "always-on-intent-routing", "use": "Infer and run the appropriate Collab workflow without requiring a slash command."},
+    {"id": "shared-context-preflight", "use": "Read team context, capabilities, roles, inboxes, relevant threads, locks, and live state each turn."},
+    {"id": "stable-identity-sessions", "use": "Address one project_id + agent_id and a fresh session_id/surface_id for each runtime."},
+    {"id": "role-onboarding-routing", "use": "Route work through persistent development-team roles; explicit assignments override defaults."},
+    {"id": "internal-inboxes", "use": "Assign and claim durable direct or broadcast work with an explicit lifecycle."},
+    {"id": "shared-conversations", "use": "Keep questions, debate, decisions, blockers, reviews, and handoffs in one canonical thread."},
+    {"id": "directed-orchestration", "use": "Plan, delegate, monitor, validate, and finalize multi-agent implementation runs."},
+    {"id": "visible-wake-fallback", "use": "Use internal delivery first for non-Codex agents, then exact visible chat fallback; Codex visible chat is immediate."},
+    {"id": "visual-eyes", "use": "Capture screenshots, OCR, surfaces, PID/TTY, ports, and visual rosters continuously; observe by default and gate only in strict audit mode."},
+    {"id": "live-observer", "use": "Expose current phases, commands, tasks, alerts, conversations, health, and screenshots."},
+    {"id": "conflict-avoidance-handoffs", "use": "Respect file boundaries and Do Not Touch locks; publish progress, blockers, completion, and handoffs."},
+    {"id": "recovery-self-update", "use": "Restore context/wakeup state after restarts and refresh installed helpers and managed project rules."},
+    {"id": "setup-migration", "use": "Install or migrate idempotently while preserving roles, inboxes, tasks, discussions, and user-authored rules."},
+    {"id": "truthful-evidence", "use": "Distinguish queued, submitted, responded, started, visually verified, and completed states."},
+]
+
+
+def capability_catalog() -> dict[str, Any]:
+    canonical = json.dumps(CAPABILITY_FEATURES, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return {
+        "schema": CAPABILITY_CATALOG_SCHEMA,
+        "digest": f"cap_{digest}",
+        "features": CAPABILITY_FEATURES,
+    }
 
 
 def visible_adapter_for(agent: str) -> str:
@@ -325,6 +352,8 @@ Always-on activation contract:
 - Infer the collaboration behavior from intent: team execution or multiple role owners -> orchestrate; debate/review/opinions -> convene a discussion; another role owner -> route to that owner; vacant role -> ask the user/director to assign it; direct mention/question -> converse in the existing thread; small single-owner work -> execute directly with shared live/log state.
 - Unread inboxes and unanswered current-thread mentions take priority over unrelated work. Do not make the user ask you to check them.
 - Complete live updates, handoffs, and session logs automatically. Never tell the user to invoke a Collab feature that you can invoke yourself.
+- Treat the `capability_catalog` returned by every turn preflight as your always-current feature inventory. Keep every listed capability available throughout the turn and select it automatically from user intent.
+- If preflight says `acknowledgement_required`, read the current managed Collab rules plus `.ai-collab/capabilities.json`, then append your own acknowledgement to the specified onboarding thread before unrelated work. A changed catalog digest invalidates an older acknowledgement automatically.
 - If the helper is missing or reports inactive, fall back to the context checks below and report the installation/setup defect; do not silently behave as if Collab were absent.
 
 Context fallback only when the always-on helper is missing or returns `active: false`:
@@ -362,9 +391,9 @@ Natural conversation contract:
 - When you finish work, need a decision, discover a blocker, or have material progress, append it to the shared thread/log immediately. If the director is sleeping or stale according to its live state, use the helper to wake the director through the visible route declared in `capabilities.json`; for Codex native chat, visible-chat delivery is the only wake evidence that counts.
 - Continue the exchange until the implementation is complete: questions, answers, progress reports, review requests, blockers, decisions, and handoffs belong in the same task thread so the user can follow a fluid conversation.
 - When a visible collaboration prompt reaches you, read the entire referenced thread and append your own substantive opinion, risks, or recommendation to that same thread before unrelated work. Mention the director and any agent whose response you need.
-- Inspect the fresh team screenshot with native vision or the direct-pixel helper before replying. Your thread response must contain `visual_evidence: <screenshot path>` and `visible_peers: <slugs actually seen>`, plus the direct-vision SHA-256 when using the fallback. If neither visual path works or any surface/project/process identity disagrees, write a blocker; do not claim you saw the team.
+- Keep the visual eyes active for visible turns. In the default `observe` mode, inspect fresh screenshot/roster evidence when available and report ambiguity without invalidating a durable message or agent-authored reply. In explicit `strict` audit mode, inspect the actual PNG with native vision or the direct-pixel helper and require `visual_evidence:` plus `visible_peers:`; a mismatch blocks only that strict visual claim.
 - If you are the director and the user asks the team to execute work, begin with `ai-collab-orchestrate.py convene`; require a real thread reply from every requested participant before presenting their opinions or assigning implementation tasks.
-- The director must require both pre-turn and post-turn visual proofs. `.ai-collab/live/visual-roster.json` must say `status: verified` for every required participant and must distinguish agent-owned ports from IDE-bridge routing ports.
+- The director must keep pre-turn and post-turn visual observations enabled. Require both proofs to pass only when the user requests a visible verification/audit or `--visual-mode strict`; normal collaboration continues from durable identity and agent-authored replies while visual ambiguity is surfaced as a warning.
 - Apply surface-specific identity evidence. Terminal agents require one exact project PID/TTY and their own listening port when applicable. An IDE-native chat has no invented child PID or port: verify the captured window PID is an ancestor-host of the exact project bridge, plus a position-bound top-band agent label and actual pane pixels (`registered-shared-project-host+position-bound-top-band-label`).
 - Never roleplay another agent or claim it started, reviewed, agreed, or completed work from an inbox write, daemon event, process listing, or prompt submission alone.
 - Evidence vocabulary is strict: `queued` requires an inbox/thread on disk; `submitted visibly` requires a successful project-matched adapter result; `visually verified` requires a fresh screenshot plus verified visual roster; `responded` requires an agent-authored thread message with its visual attestation; `started` requires the agent's own inbox claim/live update; `completed` requires `status: done`, `done_at`, and an agent-authored handoff.
@@ -521,7 +550,11 @@ def write_capabilities_json(root: Path, manifest: dict[str, Any], container: str
                     "target_identity": ["project_id", "agent_id", "session_id", "surface_id"],
                 },
                 "vision": {
-                    "required_for_visible_turns": True,
+                    "default_mode": "observe",
+                    "eyes_enabled_for_visible_turns": True,
+                    "strict_mode_available": True,
+                    "strict_mode_is_blocking": True,
+                    "observe_mode_is_blocking": False,
                     "method": "native-or-direct-pixel-ocr",
                 },
                 "wake_policy": {
@@ -533,11 +566,20 @@ def write_capabilities_json(root: Path, manifest: dict[str, Any], container: str
                 },
             }
         )
+    catalog = capability_catalog()
     payload = {
         "schema": "ai-collab.capabilities.v2",
         "project": root.name,
         "project_id": manifest.get("project_id"),
         "updated": isoformat_z(now),
+        "capability_catalog": catalog,
+        "capability_onboarding": {
+            "automatic": True,
+            "continuous_turn_awareness": True,
+            "acknowledgement_required_per_digest": True,
+            "thread": f".ai-collab/discussions/discussion-capability-onboarding-{catalog['digest']}.md",
+            "user_prompt_required": False,
+        },
         "conversation_policy": {
             "delivery_order": ["internal", "wait-for-response", "notify-user", "visible-chat"],
             "continue_until_terminal_handoff": True,
@@ -560,6 +602,7 @@ def write_capabilities_json(root: Path, manifest: dict[str, Any], container: str
                 "single-owner-task": "execute-with-shared-state",
             },
             "automatic_completion_handoff": True,
+            "feature_inventory_in_every_preflight": True,
         },
         "agents": rows,
     }

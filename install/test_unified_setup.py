@@ -138,6 +138,50 @@ class TestUnifiedSetup(unittest.TestCase):
         self.assertEqual(pending["status"], "required")
         self.assertEqual(pending["agents"][0]["agent_id"], "agt_codex")
 
+    def test_capability_ack_requires_current_registered_identity_session_and_all_features(self):
+        digest = "cap_test"
+        (self.collab / "agents.json").write_text(json.dumps({
+            "project_id": "prj_test",
+            "agents": [{"agent": "codex", "agent_id": "agt_codex"}],
+        }), encoding="utf-8")
+        (self.collab / "capabilities.json").write_text(json.dumps({
+            "capability_catalog": {"digest": digest, "features": [{"id": "visual-eyes"}, {"id": "shared-conversations"}]},
+            "capability_onboarding": {"thread": ".ai-collab/discussions/discussion-capability-onboarding-cap_test.md"},
+        }), encoding="utf-8")
+        sessions = self.collab / "live" / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "current-codex.json").write_text(json.dumps({
+            "agent": "codex", "agent_id": "agt_codex", "session_id": "ses_current", "status": "active",
+        }), encoding="utf-8")
+        (sessions / "ses_current.json").write_text(json.dumps({
+            "project_id": "prj_test", "agent": "codex", "agent_id": "agt_codex",
+            "session_id": "ses_current", "status": "active",
+        }), encoding="utf-8")
+        discussions = self.collab / "discussions"
+        discussions.mkdir()
+        thread = discussions / "discussion-capability-onboarding-cap_test.md"
+        thread.write_text(
+            "## 2026-08-12T12:00:00Z -- codex\n\n"
+            "capability_ack: cap_test\nagent_id: agt_codex\nsession_id: ses_old\n"
+            "understood_features: visual-eyes, shared-conversations\nautomatic_use: enabled\n\n---\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(_mod.capability_ack_status(self.root, ["codex"])["missing"], ["codex"])
+
+        thread.write_text(
+            "## 2026-08-12T12:01:00Z -- codex\n\n"
+            "capability_ack: cap_test\nagent_id: agt_codex\nsession_id: ses_current\n"
+            "understood_features: visual-eyes, shared-conversations\nautomatic_use: enabled\n\n---\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(_mod.capability_ack_status(self.root, ["codex"])["status"], "confirmed")
+
+        (sessions / "ses_current.json").write_text(json.dumps({
+            "project_id": "prj_other", "agent": "codex", "agent_id": "agt_codex",
+            "session_id": "ses_current", "status": "active",
+        }), encoding="utf-8")
+        self.assertEqual(_mod.capability_ack_status(self.root, ["codex"])["missing"], ["codex"])
+
     def test_global_reinstall_suppresses_recursive_project_setup(self):
         installer = self.root / "install.sh"
         installer.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
@@ -188,6 +232,7 @@ class TestUnifiedSetup(unittest.TestCase):
                 "AI_COLLAB_NO_CODEX_BRIDGE": "1",
                 "AI_COLLAB_NO_IDE_BRIDGE": "1",
                 "AI_COLLAB_INSTALL_OCR": "0",
+                "AI_COLLAB_SETUP_ONBOARDING_QUEUE_ONLY": "1",
             }
         )
         repo = Path(__file__).resolve().parent.parent
@@ -210,9 +255,11 @@ class TestUnifiedSetup(unittest.TestCase):
             check=False,
         )
 
-        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(completed.returncode, 3, completed.stdout + completed.stderr)
         report = json.loads((self.collab / "setup-report.json").read_text(encoding="utf-8"))
-        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["status"], "awaiting-agent-acknowledgements")
+        self.assertEqual(report["capability_onboarding"]["status"], "awaiting-agent-acknowledgements")
+        self.assertTrue(report["capability_onboarding"]["missing"])
         self.assertEqual(report["mode"], "migration")
         self.assertEqual(report["preservation"]["status"], "ok")
         self.assertIn("design-bot", report["project_verification"]["registered_agents"])

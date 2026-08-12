@@ -218,6 +218,72 @@ def unread_inboxes(root: Path, slug: str) -> list[dict[str, str]]:
     return result
 
 
+def capability_awareness(
+    root: Path,
+    slug: str,
+    expected_agent_id: str = "",
+) -> dict[str, Any]:
+    capabilities = read_json(root / ".ai-collab" / "capabilities.json")
+    catalog = capabilities.get("capability_catalog") if isinstance(capabilities, dict) else {}
+    if not isinstance(catalog, dict):
+        catalog = {}
+    digest = str(catalog.get("digest") or "")
+    features = catalog.get("features") if isinstance(catalog.get("features"), list) else []
+    onboarding = capabilities.get("capability_onboarding") if isinstance(capabilities, dict) else {}
+    if not isinstance(onboarding, dict):
+        onboarding = {}
+    relative = str(onboarding.get("thread") or "")
+    path = root / relative if relative else None
+    acknowledged = False
+    if path and path.is_file() and digest:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        sections = re.split(r"(?m)^## [^\n]+ -- ([\w-]+)\s*$", text)
+        for index in range(1, len(sections), 2):
+            author = sections[index].strip().casefold()
+            body = sections[index + 1] if index + 1 < len(sections) else ""
+            ack_matches = re.search(rf"(?mi)^capability_ack:\s*{re.escape(digest)}\s*$", body)
+            agent_matches = not expected_agent_id or re.search(
+                rf"(?mi)^agent_id:\s*{re.escape(expected_agent_id)}\s*$", body
+            )
+            session_match = re.search(r"(?mi)^session_id:\s*(ses_[a-zA-Z0-9_]+)\s*$", body)
+            session_record = read_json(
+                root / ".ai-collab" / "live" / "sessions" / f"{session_match.group(1)}.json"
+            ) if session_match else {}
+            session_matches = bool(
+                session_match
+                and session_record.get("agent") == slug
+                and session_record.get("agent_id") == expected_agent_id
+                and session_record.get("project_id") == capabilities.get("project_id")
+            )
+            automatic_matches = re.search(r"(?mi)^automatic_use:\s*enabled\s*$", body)
+            features_match = all(feature_id in body for feature_id in [
+                str(item.get("id")) for item in features if isinstance(item, dict) and item.get("id")
+            ])
+            if (
+                author == slug.casefold()
+                and ack_matches
+                and agent_matches
+                and session_matches
+                and automatic_matches
+                and features_match
+            ):
+                acknowledged = True
+                break
+    return {
+        "digest": digest,
+        "features": features,
+        "feature_ids": [str(item.get("id")) for item in features if isinstance(item, dict) and item.get("id")],
+        "thread": relative,
+        "thread_exists": bool(path and path.is_file()),
+        "acknowledged": acknowledged,
+        "acknowledgement_required": bool(digest and not acknowledged),
+        "continuous_turn_awareness": bool(onboarding.get("continuous_turn_awareness", True)),
+    }
+
+
 def direct_mentions(
     root: Path,
     slug: str,
@@ -225,7 +291,10 @@ def direct_mentions(
     max_age_seconds: float | None = None,
 ) -> list[str]:
     if max_age_seconds is None:
-        max_age_seconds = float(os.environ.get("AI_COLLAB_TURN_MENTION_MAX_AGE_SECONDS", "86400"))
+        # The daemon/wakeup path owns durable peer delivery. Turn preflight only
+        # surfaces recent unresolved mentions so yesterday's open discussion
+        # cannot hijack a new user request.
+        max_age_seconds = float(os.environ.get("AI_COLLAB_TURN_MENTION_MAX_AGE_SECONDS", "3600"))
     candidates = [*root.glob(".ai-collab/thread-*.md"), *root.glob(".ai-collab/discussions/*.md")]
     candidates.sort(key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
     result: list[str] = []
@@ -303,13 +372,30 @@ def build_packet(root: Path, slug: str, prompt: str = "", surface_kind: str = "p
     intent = classify_intent(prompt, slug, owners, registered)
     inboxes = unread_inboxes(root, slug)
     mentions = direct_mentions(root, slug)
+    session = register_session(root, slug, row, surface_kind)
+    awareness = capability_awareness(
+        root,
+        slug,
+        expected_agent_id=str(row.get("agent_id") or ""),
+    )
     required: list[str] = []
     if inboxes:
         required.append("claim-and-execute-unread-inbox-before-unrelated-work")
-    if mentions:
-        required.append("answer-direct-mentions-before-unrelated-work")
+    if awareness["acknowledgement_required"]:
+        if awareness["thread_exists"]:
+            required.append(
+                "read-the-current-capability-catalog-and-managed-collab-rules-then-append-your-own-answer-to-"
+                f"{awareness['thread']}-with-capability_ack:{awareness['digest']}-agent_id-and-current-session_id; "
+                "do-this-autonomously-without-asking-the-user"
+            )
+        else:
+            required.append("capability-onboarding-thread-is-missing; report-setup-incomplete-and-repair-collab-setup")
     required.extend(action_commands(intent["action"]))
-    session = register_session(root, slug, row, surface_kind)
+    if mentions:
+        required.append(
+            "continue-recent-direct-mentions-in-their-existing-threads-without-creating-duplicates; "
+            "the current user request remains primary unless it is the same collaboration turn"
+        )
     director = owners.get("senior-director")
 
     return {
@@ -322,6 +408,11 @@ def build_packet(root: Path, slug: str, prompt: str = "", surface_kind: str = "p
         "agent": slug,
         "agent_id": row.get("agent_id"),
         "session": session,
+        "capability_catalog": {
+            "digest": awareness["digest"],
+            "features": awareness["features"],
+        },
+        "capability_awareness": awareness,
         "director": director,
         "role_owners": owners,
         "unread_inboxes": inboxes,

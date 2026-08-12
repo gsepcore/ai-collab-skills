@@ -152,6 +152,53 @@ class TestTurnPreflight(unittest.TestCase):
         self.assertEqual(packet["unread_inboxes"][0]["task_id"], "task-1")
         self.assertEqual(packet["required_actions"][0], "claim-and-execute-unread-inbox-before-unrelated-work")
 
+    def test_every_turn_contains_versioned_feature_catalog_and_requires_current_ack(self):
+        digest = "cap_test123"
+        thread_rel = f".ai-collab/discussions/discussion-capability-onboarding-{digest}.md"
+        (self.root / ".ai-collab/capabilities.json").write_text(
+            json.dumps({
+                "project_id": "prj_test",
+                "capability_catalog": {"digest": digest, "features": [{"id": "visual-eyes", "use": "observe"}]},
+                "capability_onboarding": {"thread": thread_rel, "continuous_turn_awareness": True},
+            }),
+            encoding="utf-8",
+        )
+        thread = self.root / thread_rel
+        thread.write_text("---\nstatus: open\n---\n", encoding="utf-8")
+        sessions = self.root / ".ai-collab/live/sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "ses_test.json").write_text(json.dumps({
+            "project_id": "prj_test", "agent": "codex", "agent_id": "agt_codex", "session_id": "ses_test",
+        }), encoding="utf-8")
+
+        packet = self.packet(prompt="Haz una tarea pequeña")
+
+        self.assertEqual(packet["capability_catalog"]["digest"], digest)
+        self.assertEqual(packet["capability_awareness"]["feature_ids"], ["visual-eyes"])
+        self.assertTrue(packet["capability_awareness"]["acknowledgement_required"])
+        self.assertIn("capability_ack:cap_test123", packet["required_actions"][0])
+
+        thread.write_text(
+            thread.read_text(encoding="utf-8")
+            + "## 2026-08-12T12:00:00Z -- codex\n\n"
+            "capability_ack: cap_test123\n"
+            "agent_id: agt_codex\n"
+            "session_id: ses_test\n"
+            "understood_features: visual-eyes\n"
+            "automatic_use: enabled\n\n---\n",
+            encoding="utf-8",
+        )
+        acknowledged = self.packet()
+        self.assertTrue(acknowledged["capability_awareness"]["acknowledged"])
+        self.assertFalse(acknowledged["capability_awareness"]["acknowledgement_required"])
+
+        (sessions / "ses_test.json").write_text(json.dumps({
+            "project_id": "prj_other", "agent": "codex", "agent_id": "agt_codex", "session_id": "ses_test",
+        }), encoding="utf-8")
+        wrong_project = self.packet()
+        self.assertFalse(wrong_project["capability_awareness"]["acknowledged"])
+        self.assertTrue(wrong_project["capability_awareness"]["acknowledgement_required"])
+
     def test_missing_project_manifest_requires_setup(self):
         other = Path(tempfile.mkdtemp())
         packet = _mod.build_packet(other, "codex")

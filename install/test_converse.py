@@ -161,6 +161,29 @@ class TestConverse(unittest.TestCase):
         self.assertEqual(meta["inbox"], "inbox-opencode.md")
         self.assertIn("@opencode Please review", text)
 
+    def test_stable_discussion_id_reuses_one_file_across_retries(self):
+        for message in ("First attempt.", "Retry after wake repair."):
+            self.run_cli(
+                "start",
+                "--author",
+                "codex",
+                "--topic",
+                "Architecture debate",
+                "--discussion-id",
+                "run-42-technical-kickoff",
+                "--to",
+                "opencode",
+                "--message",
+                message,
+            )
+
+        path = self.collab / "discussions" / "discussion-run-42-technical-kickoff.md"
+        self.assertTrue(path.is_file())
+        self.assertEqual(len(list((self.collab / "discussions").glob("*.md"))), 1)
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("First attempt.", text)
+        self.assertIn("Retry after wake repair.", text)
+
     def test_close_prevents_later_replies(self):
         self.run_cli(
             "start",
@@ -207,6 +230,70 @@ class TestConverse(unittest.TestCase):
             _mod.prepare_visible_surfaces = original_prepare
         self.assertEqual(result, 2)
         self.assertTrue(self.only_discussion().exists())
+
+    def test_observe_mode_keeps_eyes_but_visual_ambiguity_does_not_block_delivery(self):
+        path = self.collab / "thread-observe.md"
+        kickoff = "2026-08-09T12:00:00Z"
+        _mod.append_message(
+            path, root=self.root, author="codex", message="@opencode review",
+            recipients=["opencode"], now=_mod.datetime(2026, 8, 9, 12, 0, 0, tzinfo=_mod.timezone.utc),
+        )
+        originals = (_mod.dispatch_visible, _mod.prepare_visible_surfaces, _mod.visual_proof, _mod.emit_escalation_notice)
+        proof_calls = []
+        dispatches = []
+        _mod.dispatch_visible = lambda path, root, targets=None: dispatches.append(targets) or {"ok": True, "result": {}}
+        _mod.prepare_visible_surfaces = lambda root, targets: {"ok": False, "reason": "stale route"}
+        _mod.visual_proof = lambda root, agents, stage: proof_calls.append(stage) or {"ok": False, "reason": "ambiguous roster"}
+        _mod.emit_escalation_notice = lambda *args, **kwargs: None
+        try:
+            result = _mod.dispatch_and_optionally_wait(
+                path, root=self.root, author="codex", recipients=["opencode"], kickoff_at=kickoff,
+                queue_only=False, internal_wait_seconds=0, wait_seconds=0,
+                visual_agents=["codex", "opencode"], requested_visual_mode="observe",
+            )
+        finally:
+            (_mod.dispatch_visible, _mod.prepare_visible_surfaces, _mod.visual_proof, _mod.emit_escalation_notice) = originals
+
+        self.assertEqual(result, 0)
+        self.assertEqual(dispatches, [["opencode"]])
+        self.assertEqual(proof_calls, ["before-visible-turn", "after-visible-turn"])
+
+    def test_strict_visual_mode_still_fails_closed(self):
+        path = self.collab / "thread-strict.md"
+        kickoff = "2026-08-09T12:00:00Z"
+        _mod.append_message(
+            path, root=self.root, author="codex", message="@opencode audit",
+            recipients=["opencode"], now=_mod.datetime(2026, 8, 9, 12, 0, 0, tzinfo=_mod.timezone.utc),
+        )
+        originals = (_mod.dispatch_visible, _mod.prepare_visible_surfaces, _mod.emit_escalation_notice)
+        dispatches = []
+        _mod.dispatch_visible = lambda path, root, targets=None: dispatches.append(targets) or {"ok": True}
+        _mod.prepare_visible_surfaces = lambda root, targets: {"ok": False, "reason": "stale route"}
+        _mod.emit_escalation_notice = lambda *args, **kwargs: None
+        try:
+            result = _mod.dispatch_and_optionally_wait(
+                path, root=self.root, author="codex", recipients=["opencode"], kickoff_at=kickoff,
+                queue_only=False, internal_wait_seconds=0, wait_seconds=0,
+                visual_agents=["codex", "opencode"], requested_visual_mode="strict",
+            )
+        finally:
+            (_mod.dispatch_visible, _mod.prepare_visible_surfaces, _mod.emit_escalation_notice) = originals
+
+        self.assertEqual(result, 4)
+        self.assertEqual(dispatches, [])
+
+    def test_only_codex_skips_internal_grace(self):
+        (self.collab / "capabilities.json").write_text(
+            json.dumps({"agents": [{
+                "agent": "claude-code-ide",
+                "delivery": {"primary": "visible-chat"},
+                "wake_policy": {"internal_grace_seconds": 7},
+            }]}),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(_mod.internal_grace_seconds(self.root, "claude-code-ide", -1), 7)
+        self.assertEqual(_mod.internal_grace_seconds(self.root, "codex", 30), 0)
 
     def test_internal_reply_skips_visible_escalation(self):
         path = self.collab / "thread-internal.md"

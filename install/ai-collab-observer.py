@@ -778,7 +778,40 @@ def build_visual_roster(
                             **terminal,
                         }
                     )
+        current_session_path = live_dir / "sessions" / f"current-{agent}.json"
+        current_session = load_json(current_session_path, {})
+        if not isinstance(current_session, dict):
+            current_session = {}
+        current_pid = str(current_session.get("pid") or "")
+        process_pids = {str(process.get("pid") or "") for process in processes}
+        current_session_matches_process = bool(
+            current_session.get("status") == "active"
+            and current_session.get("agent") == agent
+            and path_matches_root(current_session.get("project_path"), root)
+            and current_pid
+            and current_pid in process_pids
+        )
+        if current_session_matches_process:
+            routes.insert(
+                0,
+                {
+                    "owner": "runtime-session",
+                    "bridge_pid": "",
+                    "bridge_port": "",
+                    "terminal_name": "",
+                    "shell_pid": "",
+                    "agent_pid": current_pid,
+                    "tty": current_session.get("tty") or "",
+                    "project_path": current_session.get("project_path") or "",
+                    "agent_id": current_session.get("agent_id") or "",
+                    "session_id": current_session.get("session_id") or "",
+                    "surface_id": current_session.get("surface_id") or "",
+                    "updated": current_session.get("heartbeat_at") or "",
+                    "source": str(current_session_path),
+                },
+            )
         dispatch_evidence = load_json(live_dir / f"{agent}.visible.json", {})
+        ignored_stale_routes: list[dict[str, Any]] = []
         if (
             isinstance(dispatch_evidence, dict)
             and dispatch_evidence.get("agent") == agent
@@ -793,11 +826,32 @@ def build_visual_roster(
                 "shell_pid": dispatch_evidence.get("shell_pid") or "",
                 "agent_pid": dispatch_evidence.get("agent_pid") or "",
                 "tty": dispatch_evidence.get("tty") or "",
+                "agent_id": dispatch_evidence.get("agent_id") or "",
+                "session_id": dispatch_evidence.get("session_id") or "",
+                "surface_id": dispatch_evidence.get("surface_id") or "",
                 "project_path": dispatch_evidence.get("project_path") or "",
                 "updated": dispatch_evidence.get("updated") or "",
                 "source": str(live_dir / f"{agent}.visible.json"),
             }
-            if route not in routes:
+            current_session_id = str(current_session.get("session_id") or "")
+            evidence_session_id = str(dispatch_evidence.get("session_id") or "")
+            session_started = parse_iso(str(current_session.get("started") or ""))
+            evidence_updated = parse_iso(str(dispatch_evidence.get("updated") or ""))
+            stale_against_current_session = bool(
+                current_session_id
+                and (
+                    (evidence_session_id and evidence_session_id != current_session_id)
+                    or (
+                        not evidence_session_id
+                        and session_started is not None
+                        and (evidence_updated is None or evidence_updated < session_started)
+                    )
+                )
+            )
+            if stale_against_current_session:
+                route["ignored_reason"] = "superseded-by-current-runtime-session"
+                ignored_stale_routes.append(route)
+            elif route not in routes:
                 routes.append(route)
         visible_agent_pids = {str(route.get("agent_pid")) for route in routes if route.get("agent_pid")}
         visible_processes = [process for process in processes if str(process.get("pid")) in visible_agent_pids]
@@ -864,6 +918,9 @@ def build_visual_roster(
                 "visible_processes": visible_processes,
                 "visible_owned_ports": visible_owned_ports,
                 "ide_routes": routes,
+                "current_session": current_session,
+                "current_session_matches_process": current_session_matches_process,
+                "ignored_stale_routes": ignored_stale_routes,
                 "host_surface": host_surface,
                 "latest_log": str((snapshot.get("latest_log") or {}).get("path", "")),
                 "live_state": str(live_dir / f"{agent}.json"),

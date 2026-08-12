@@ -144,7 +144,7 @@ Cada archivo de reglas de los workers (creado por `/collab setup` o pegado desde
 
 Estas reglas son no negociables en cada snippet, así los workers se auto-orientan sin que el usuario tenga que recordarles nada.
 
-Cuando `/collab setup` corre en un proyecto nuevo, también siembra `.ai-collab/inbox-all.md` con una **tarea de bienvenida (onboarding)** — el primer worker que abra el proyecto recibe una instrucción inicial concreta en vez de un inbox vacío.
+Cuando `/collab setup` corre, genera un catálogo versionado de todas las capacidades y abre un único thread de onboarding para ese digest. Despierta automáticamente a cada agente registrado para que lea sus reglas y la matriz completa, y escriba su propia confirmación sin que el usuario tenga que preguntárselo. El catálogo también aparece en cada preflight para mantener todas las funciones presentes durante cada turno; una versión nueva invalida la confirmación anterior.
 
 ### 3. Cada proyecto es su propia burbuja de aislamiento
 
@@ -195,6 +195,8 @@ Abre Claude Code dentro de tu proyecto y ejecuta:
 ```
 
 Esto actualiza primero toda la instalación global —incluidas las copias de la skill para Claude y Codex— y luego crea o migra el proyecto. Conserva el historial y los roles, refresca `PROTOCOL.md`, `TEAM.md`, `agents.json`, `capabilities.json` y los bloques de reglas, valida daemon y puentes visuales y guarda el resultado exacto en `.ai-collab/setup-report.json`.
+
+El setup no declara éxito mientras falten respuestas propias de agentes para el digest actual. En ese caso informa `awaiting-agent-acknowledgements`, identifica exactamente quién falta y deja el despertar interno/fallback visible en marcha.
 
 El onboarding de equipo es una fase obligatoria del setup: detecta las identidades registradas y pregunta quién será responsable de cada disciplina. Las elecciones se guardan en `.ai-collab/roles.json` junto con el `agent_id`; un agente puede ocupar varios puestos y un puesto puede quedar vacante. Un setup no interactivo sin roles existentes ni valores `--assign role=agente` queda incompleto en vez de saltarse el onboarding.
 
@@ -327,7 +329,7 @@ python3 ~/.claude/ai-collab-converse.py --root "$PWD" decision \
   --message "Decisión: usar el adapter. No cambiar el API público en esta tarea."
 ```
 
-Las conversaciones ligadas a una tarea usan `--kind task --task-id TAREA` y escriben `.ai-collab/thread-{task_id}.md`. Antes y después de cada turno visible, el helper captura la ventana real y escribe el roster actual más un `.visual-roster.json` inmutable junto a la captura. Cada destinatario debe inspeccionar el PNG: con visión nativa o con `ai-collab-see.py`, que procesa directamente los píxeles y devuelve el SHA-256 para modelos sin entrada de imagen. Después responde con `visual_evidence:` y `visible_peers:`. El roster relaciona superficie, proceso host/del agente, PID/TTY, puertos propios, routing del bridge y logs. Cualquier falta o ambigüedad falla cerrado; puertos y logs solos no son visión.
+Las conversaciones ligadas a una tarea usan `--kind task --task-id TAREA` y escriben `.ai-collab/thread-{task_id}.md`; los debates reintentados usan `--discussion-id` para continuar en un solo archivo canónico. Antes y después del fallback visible, los ojos siguen capturando la ventana real y escriben el roster actual más un `.visual-roster.json` inmutable. El modo predeterminado `observe` conserva y avisa cualquier ambigüedad sin bloquear un hilo durable ni una respuesta escrita por el agente. Cuando se requiera auditoría visual, `--visual-mode strict` exige inspección directa del PNG, `visual_evidence:` y `visible_peers:`, y entonces sí falla cerrado si falta evidencia.
 
 ### `/collab team configure`
 
@@ -386,9 +388,9 @@ Comando único para instalar o actualizar AI Collab y crear o migrar un proyecto
 - Regenera los bloques administrados y la matriz completa de capacidades sin duplicados
 - Genera códigos estables de agente, registra cada sesión de ejecución y ejecuta el onboarding obligatorio de roles
 - Ejecuta el diagnóstico estricto y guarda `.ai-collab/setup-report.json`
-- **Siembra `inbox-all.md` con una tarea de onboarding** — el primer worker que abra este proyecto se auto-orienta automáticamente (preservado intacto si el archivo ya existe)
+- Genera un catálogo de capacidades con digest, abre/reutiliza un único thread de onboarding y despierta solo a los agentes que todavía no confirmaron esa versión
 - Escribe el primer log de Claude
-- Pide confirmación a los agentes activos: Codex recibe escritura visible inmediata y los demás usan inbox interno con fallback visible
+- Incluye el catálogo completo en cada preflight y conserva el setup como `awaiting-agent-acknowledgements` hasta tener respuestas propias de todos los agentes
 
 ```
 /collab setup
