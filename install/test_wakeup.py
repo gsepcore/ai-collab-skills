@@ -2171,6 +2171,55 @@ project: gsep
         self.assertEqual(result["reason"], "closed")
         self.assertFalse(self.events.exists())
 
+    def test_stale_open_thread_is_ignored_without_being_closed(self):
+        self.append()
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now + timedelta(days=10),
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "ignored")
+        self.assertEqual(result["reason"], "stale")
+        self.assertFalse(self.events.exists())
+        meta, _ = parse_frontmatter(self.thread.read_text(encoding="utf-8"))
+        self.assertEqual(meta.get("status"), "open")
+
+    def test_recent_open_thread_is_not_treated_as_stale(self):
+        self.append()
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now + timedelta(hours=1),
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertNotEqual(result.get("reason"), "stale")
+
+    def test_stale_cutoff_is_configurable_via_env(self):
+        self.append()
+        os.environ["AI_COLLAB_THREAD_STALE_DAYS"] = "0"
+        try:
+            result = process_thread(
+                self.thread,
+                "gsep",
+                now=self.now + timedelta(days=365),
+                events_file=self.events,
+                state_file=self.state,
+                log_file=self.log,
+            )
+        finally:
+            del os.environ["AI_COLLAB_THREAD_STALE_DAYS"]
+
+        self.assertNotEqual(result.get("reason"), "stale")
+
     def test_discussion_mention_uses_project_root(self):
         discussion_dir = self.collab / "discussions"
         discussion_dir.mkdir()

@@ -146,6 +146,16 @@ def max_attempts_from_env() -> int:
     return max(1, coerce_int(os.environ.get("AI_COLLAB_WAKEUP_MAX_ATTEMPTS"), DEFAULT_MAX_ATTEMPTS))
 
 
+def thread_stale_days() -> int:
+    # Inboxes already stop retrying via max_attempts/backoff. Discussion/task
+    # threads had no such cap: an unanswered @mention in a thread nobody
+    # ever formally closed gets rescanned and re-escalated to visible chat
+    # forever. Skip threads whose last activity is this old instead of
+    # requiring every stale test/onboarding thread to be closed by hand.
+    # 0 disables the cutoff.
+    return max(0, coerce_int(os.environ.get("AI_COLLAB_THREAD_STALE_DAYS"), 7))
+
+
 def backoff_for_attempts(attempts: int) -> int:
     if attempts <= 0:
         return 0
@@ -2400,6 +2410,17 @@ def process_thread(
     meta, body = parse_frontmatter(text)
     if meta.get("status") == "closed":
         return {"action": "ignored", "reason": "closed"}
+
+    stale_days = thread_stale_days()
+    if stale_days > 0:
+        last_activity = parse_iso(str(meta.get("updated") or meta.get("created") or ""))
+        if last_activity and (now - last_activity).days >= stale_days:
+            return {
+                "action": "ignored",
+                "reason": "stale",
+                "last_activity": isoformat_z(last_activity),
+                "stale_days": stale_days,
+            }
 
     message = latest_thread_message(body)
     if not message:
