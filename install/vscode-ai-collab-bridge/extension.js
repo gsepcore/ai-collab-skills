@@ -46,7 +46,16 @@ function nativeConfig(target) {
   return null;
 }
 
-function nativeSession(projectPath, target, surfaceId) {
+function nativeTargetAvailable(target) {
+  const appName = String(vscode.env.appName || '').toLowerCase();
+  if (target === 'cursor-native') return appName.includes('cursor');
+  if (target === 'windsurf-native') return appName.includes('windsurf');
+  if (target === 'copilot-chat') return Boolean(vscode.extensions.getExtension('github.copilot-chat'));
+  if (target === 'claude-code-ide') return Boolean(vscode.extensions.getExtension('anthropic.claude-code'));
+  return false;
+}
+
+function buildNativeSession(projectPath, target, surfaceId) {
   const key = `${real(projectPath)}\0${target}\0${surfaceId}`;
   if (nativeSessions.has(key)) return nativeSessions.get(key);
   const manifestPath = path.join(real(projectPath), '.ai-collab', 'agents.json');
@@ -61,8 +70,13 @@ function nativeSession(projectPath, target, surfaceId) {
     host_pid: process.pid, adapter: 'ide-native-chat', status: 'active', started: new Date().toISOString(),
     heartbeat_at: new Date().toISOString(),
   };
+  return payload;
+}
+
+function persistNativeSession(projectPath, target, surfaceId, payload) {
+  const key = `${real(projectPath)}\0${target}\0${surfaceId}`;
   const sessionDir = path.join(real(projectPath), '.ai-collab', 'live', 'sessions');
-  atomicWrite(path.join(sessionDir, `${sessionId}.json`), payload);
+  atomicWrite(path.join(sessionDir, `${payload.session_id}.json`), payload);
   atomicWrite(path.join(sessionDir, `current-${target}.json`), payload);
   nativeSessions.set(key, payload);
   return payload;
@@ -82,6 +96,9 @@ function nativeBootstrap(projectPath, target, session) {
 async function focusNative(target) {
   const config = nativeConfig(target);
   if (!config) throw new Error(`native chat adapter does not support target ${target}`);
+  if (!nativeTargetAvailable(target)) {
+    throw new Error(`native target ${target} is not installed in ${vscode.env.appName || 'this IDE'}`);
+  }
   const commands = new Set(await vscode.commands.getCommands(true));
   if (!commands.has(config.focus)) throw new Error(`native command unavailable: ${config.focus}`);
   if (commands.has(config.open)) await vscode.commands.executeCommand(config.open);
@@ -90,8 +107,7 @@ async function focusNative(target) {
   await delay(150);
 }
 
-async function submitNative(target, prompt) {
-  await focusNative(target);
+async function pasteNative(prompt) {
   const previous = await vscode.env.clipboard.readText();
   await vscode.env.clipboard.writeText(prompt);
   try {
@@ -315,12 +331,13 @@ async function activate(context) {
           sendJson(response, 409, { status: 'failed', message: `no native adapter for ${target}` });
           return;
         }
-        const session = nativeSession(projectPath, target, surfaceId);
+        await focusNative(target);
+        const session = buildNativeSession(projectPath, target, surfaceId);
         if (requestUrl.pathname === '/native/send') {
-          await submitNative(target, `${nativeBootstrap(projectPath, target, session)}\n\n${prompt}`);
-        } else await focusNative(target);
+          await pasteNative(`${nativeBootstrap(projectPath, target, session)}\n\n${prompt}`);
+        }
         session.heartbeat_at = new Date().toISOString();
-        atomicWrite(path.join(real(projectPath), '.ai-collab', 'live', 'sessions', `${session.session_id}.json`), session);
+        persistNativeSession(projectPath, target, surfaceId, session);
         sendJson(response, 200, {
           status: 'success', message: requestUrl.pathname === '/native/send' ? 'prompt submitted to exact native chat' : 'exact native chat focused',
           target_slug: target, project_path: real(projectPath), surface_id: surfaceId,

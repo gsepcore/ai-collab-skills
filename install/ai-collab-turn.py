@@ -272,10 +272,14 @@ def capability_awareness(
             ):
                 acknowledged = True
                 break
+    feature_ids = [str(item.get("id")) for item in features if isinstance(item, dict) and item.get("id")]
     return {
         "digest": digest,
-        "features": features,
-        "feature_ids": [str(item.get("id")) for item in features if isinstance(item, dict) and item.get("id")],
+        # The full descriptions are needed for onboarding. Once this agent has
+        # acknowledged the digest, IDs are enough to detect changes without
+        # spending tokens rereading the same catalog on every turn.
+        "features": features if not acknowledged else [],
+        "feature_ids": feature_ids,
         "thread": relative,
         "thread_exists": bool(path and path.is_file()),
         "acknowledged": acknowledged,

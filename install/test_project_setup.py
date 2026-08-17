@@ -64,7 +64,9 @@ class TestProjectSetup(unittest.TestCase):
         self.assertEqual(capabilities["conversation_policy"]["delivery_order"], ["internal", "wait-for-response", "notify-user", "visible-chat"])
         self.assertEqual(capabilities["automation_policy"]["mode"], "always-on")
         self.assertFalse(capabilities["automation_policy"]["user_invocation_required"])
-        self.assertTrue(capabilities["automation_policy"]["feature_inventory_in_every_preflight"])
+        self.assertFalse(capabilities["automation_policy"]["feature_inventory_in_every_preflight"])
+        self.assertTrue(capabilities["automation_policy"]["capability_digest_in_every_preflight"])
+        self.assertTrue(capabilities["automation_policy"]["full_catalog_until_acknowledged"])
         self.assertTrue(capabilities["capability_catalog"]["digest"].startswith("cap_"))
         self.assertIn("visual-eyes", [item["id"] for item in capabilities["capability_catalog"]["features"]])
         self.assertTrue(capabilities["capability_onboarding"]["continuous_turn_awareness"])
@@ -93,6 +95,75 @@ class TestProjectSetup(unittest.TestCase):
         self.assertEqual(first["project_id"], second["project_id"])
         self.assertEqual({r["agent"]: r["agent_id"] for r in first["agents"]}, {r["agent"]: r["agent_id"] for r in second["agents"]})
 
+    def test_rerun_uses_requested_roster_exactly_and_removes_stale_rules(self):
+        import json
+
+        self.setup(agents=("codex", "opencode", "cursor", "windsurf", "hermes"), models={})
+        self.setup(agents=("codex", "opencode"), models={})
+
+        agents = json.loads((self.root / ".ai-collab" / "agents.json").read_text(encoding="utf-8"))
+        capabilities = json.loads((self.root / ".ai-collab" / "capabilities.json").read_text(encoding="utf-8"))
+        self.assertEqual({row["agent"] for row in agents["agents"]}, {"claude-code", "codex", "opencode"})
+        self.assertEqual({row["agent"] for row in capabilities["agents"]}, {"claude-code", "codex", "opencode"})
+
+        team = (self.root / ".ai-collab" / "TEAM.md").read_text(encoding="utf-8")
+        self.assertNotIn("cursor-native", team)
+        self.assertNotIn("windsurf-native", team)
+        self.assertNotIn("hermes", team)
+        self.assertNotIn("AI-COLLAB-START agent=cursor-native", (self.root / ".cursorrules").read_text(encoding="utf-8"))
+        self.assertNotIn("AI-COLLAB-START agent=windsurf-native", (self.root / ".windsurfrules").read_text(encoding="utf-8"))
+        self.assertNotIn("AI-COLLAB-START agent=hermes", (self.root / "AGENTS.md").read_text(encoding="utf-8"))
+
+    def test_detection_prefers_existing_manifest_over_stale_rule_files(self):
+        import json
+
+        collab = self.root / ".ai-collab"
+        collab.mkdir()
+        (collab / "agents.json").write_text(
+            json.dumps({"agents": [{"agent": "claude-code"}, {"agent": "codex"}]}),
+            encoding="utf-8",
+        )
+        (self.root / ".cursorrules").write_text("historical cursor rules\n", encoding="utf-8")
+        (self.root / ".windsurfrules").write_text("historical windsurf rules\n", encoding="utf-8")
+
+        self.assertEqual(_mod.detect_agents(self.root), ["claude-code", "codex"])
+
+    def test_detection_ignores_globally_installed_but_project_inactive_agents(self):
+        original = _mod.command_exists
+        try:
+            _mod.command_exists = lambda _command: True
+            self.assertEqual(_mod.detect_agents(self.root), ["claude-code"])
+        finally:
+            _mod.command_exists = original
+
+    def test_rerun_synchronizes_roles_and_vacates_removed_owner(self):
+        import json
+
+        self.setup(agents=("codex", "hermes"), models={})
+        roles = {
+            "schema": "ai-collab.roles.v2",
+            "project": "demo",
+            "agents": ["claude-code", "codex", "hermes"],
+            "agent_ids": {"hermes": "agt_old_hermes"},
+            "assignments": {
+                "qa": {
+                    "primary": "hermes",
+                    "primary_agent_id": "agt_old_hermes",
+                    "label": "QA reviewer",
+                    "responsibility": "Review behavior.",
+                }
+            },
+        }
+        (self.root / ".ai-collab" / "roles.json").write_text(json.dumps(roles), encoding="utf-8")
+
+        self.setup(agents=("codex", "opencode"), models={})
+
+        updated = json.loads((self.root / ".ai-collab" / "roles.json").read_text(encoding="utf-8"))
+        self.assertEqual(updated["agents"], ["claude-code", "codex", "opencode"])
+        self.assertEqual(set(updated["agent_ids"]), {"claude-code", "codex", "opencode"})
+        self.assertIsNone(updated["assignments"]["qa"]["primary"])
+        self.assertIsNone(updated["assignments"]["qa"]["primary_agent_id"])
+
     def test_shared_agents_md_can_hold_multiple_agent_snippets(self):
         self.setup()
 
@@ -107,7 +178,7 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("Never wait for the user to say `collab`", agents_md)
         self.assertIn("ai-collab-turn.py preflight", agents_md)
         self.assertIn("user to invoke a Collab feature", agents_md)
-        self.assertIn("always-current feature inventory", agents_md)
+        self.assertIn("complete `capability_catalog`", agents_md)
         self.assertIn("acknowledgement_required", agents_md)
         self.assertIn("default `observe` mode", agents_md)
         self.assertIn("Context fallback only when the always-on helper is missing", agents_md)

@@ -362,13 +362,45 @@ def capability_ack_status(root: Path, expected_agents: list[str]) -> dict[str, A
     }
 
 
+def queued_capability_agents(root: Path, digest: str, relative_thread: str) -> set[str]:
+    if not digest or not relative_thread:
+        return set()
+    path = root / relative_thread
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    queued: set[str] = set()
+    sections = re.split(r"(?m)^## [^\n]+ -- ([\w-]+)\s*$", text)
+    for index in range(1, len(sections), 2):
+        author = sections[index].strip().casefold()
+        body = sections[index + 1] if index + 1 < len(sections) else ""
+        if author != "ai-collab-setup" or f"capability_ack: {digest}" not in body:
+            continue
+        for match in re.finditer(r"(?mi)^to:\s*(.+)$", body):
+            queued.update(item.strip().casefold() for item in match.group(1).split(",") if item.strip())
+    return queued
+
+
 def run_capability_onboarding(root: Path, expected_agents: list[str], args: argparse.Namespace) -> dict[str, Any]:
     before = capability_ack_status(root, expected_agents)
     missing = list(before.get("missing") or [])
     caller = str(getattr(args, "actor", "") or os.environ.get("AI_COLLAB_AGENT", "")).strip()
-    wake_targets = [agent for agent in missing if agent != caller]
     if before.get("status") == "failed" or not missing:
         return before
+    already_queued = queued_capability_agents(root, str(before.get("digest") or ""), str(before.get("thread") or ""))
+    retry = bool(getattr(args, "retry_capability_onboarding", False))
+    wake_targets = [
+        agent for agent in missing
+        if agent != caller and (retry or agent.casefold() not in already_queued)
+    ]
+    thread_exists = bool(before.get("thread") and (root / str(before["thread"])).is_file())
+    if thread_exists and not wake_targets:
+        return {
+            **before,
+            "dispatch": "already-queued" if already_queued else "awaiting-caller-acknowledgement",
+            "queued_agents": sorted(already_queued & set(expected_agents)),
+        }
     helper = CLAUDE_DIR / "ai-collab-converse.py"
     if not helper.is_file() and args.installer_source:
         source = Path(args.installer_source).expanduser().resolve()
@@ -454,6 +486,8 @@ def run_unified_setup(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             if agent.strip() and model.strip():
                 requested_models[agent.strip()] = model.strip()
     agents = requested_agents or existing_agents
+    if not agents and args.actor:
+        agents = [args.actor.strip()]
     container = args.container or existing_container
     models = requested_models or existing_models
     before_fingerprint = installed_fingerprint()
@@ -543,7 +577,8 @@ def run_unified_setup(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     report["installed_after"] = installed_fingerprint()
     report["agent_refresh"] = {
         "managed_rules_refreshed": report["project_migration"].get("status") == "updated",
-        "capability_catalog_in_every_turn": True,
+        "capability_catalog_in_every_turn": False,
+        "capability_digest_in_every_turn": True,
         "capability_digest": report.get("capability_onboarding", {}).get("digest", ""),
         "agent_acknowledgements_confirmed": report.get("capability_onboarding", {}).get("status") == "confirmed",
         "ide_window_reload_recommended": not args.skip_global_install,
@@ -569,6 +604,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--models", default=None, help="Comma-separated agent=model pairs.")
     parser.add_argument("--assign", action="append", default=[], help="Role assignment role=agent; repeat to complete onboarding non-interactively.")
     parser.add_argument("--actor", default=os.environ.get("AI_COLLAB_AGENT", ""), help="Agent running setup; it self-acknowledges without waking its own visible chat.")
+    parser.add_argument("--retry-capability-onboarding", action="store_true", help="Explicitly resend onboarding to active agents that were already queued for this capability digest.")
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt during project migration.")
     parser.add_argument("--installer-source", default=None, help="Local repository or install.sh path; default downloads current main.")
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("AI_COLLAB_SETUP_TIMEOUT", "30")))

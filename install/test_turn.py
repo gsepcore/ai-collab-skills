@@ -191,6 +191,8 @@ class TestTurnPreflight(unittest.TestCase):
         acknowledged = self.packet()
         self.assertTrue(acknowledged["capability_awareness"]["acknowledged"])
         self.assertFalse(acknowledged["capability_awareness"]["acknowledgement_required"])
+        self.assertEqual(acknowledged["capability_catalog"]["features"], [])
+        self.assertEqual(acknowledged["capability_awareness"]["feature_ids"], ["visual-eyes"])
 
         (sessions / "ses_test.json").write_text(json.dumps({
             "project_id": "prj_other", "agent": "codex", "agent_id": "agt_codex", "session_id": "ses_test",

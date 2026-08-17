@@ -214,7 +214,8 @@ def project_agent_known(project_root: Path, target_slug: str) -> bool:
     if not target_slug:
         return False
 
-    agents = load_json(collab / "agents.json", {})
+    agents_path = collab / "agents.json"
+    agents = load_json(agents_path, {})
     if isinstance(agents, dict):
         roster = agents.get("agents", agents.get("roster", []))
         if isinstance(roster, list):
@@ -226,6 +227,14 @@ def project_agent_known(project_root: Path, target_slug: str) -> bool:
         if target_slug in {str(key).lower() for key in agents.keys()}:
             return True
 
+        # A valid v2 manifest is the authoritative active roster. Historical
+        # TEAM entries, inboxes, and session logs must never resurrect an
+        # agent that was deliberately removed from this project.
+        if agents_path.exists() and isinstance(roster, list):
+            return False
+
+    # Legacy projects without a usable agents.json keep the old discovery
+    # fallbacks until they are migrated.
     try:
         team_text = (collab / "TEAM.md").read_text(encoding="utf-8").lower()
     except FileNotFoundError:
@@ -257,6 +266,19 @@ def capability_for(project_root: Path, target_slug: str) -> dict[str, Any]:
 
 def agent_is_active(project_root: Path, target_slug: str, now: datetime, threshold_seconds: int) -> bool:
     live = project_root / ".ai-collab" / "live"
+    # The per-turn session registration file (written every preflight by
+    # ai-collab-turn.py) is the most direct "is a human actually driving this
+    # agent right now" signal -- check it first, keyed on heartbeat_at/status
+    # rather than the task-phase vocabulary used by the other two files.
+    session_state = load_json(live / "sessions" / f"current-{target_slug}.json", {})
+    if isinstance(session_state, dict):
+        heartbeat = parse_iso(str(session_state.get("heartbeat_at") or session_state.get("started") or ""))
+        if (
+            heartbeat
+            and (now - heartbeat).total_seconds() <= threshold_seconds
+            and str(session_state.get("status") or "").lower() == "active"
+        ):
+            return True
     for path in (live / f"{target_slug}.agent.json", live / f"{target_slug}.json"):
         state = load_json(path, {})
         if not isinstance(state, dict):
@@ -307,6 +329,33 @@ def internal_grace_seconds(project_root: Path, target_slug: str, now: datetime) 
     if isinstance(visible, dict) and visible.get("native_chat_only"):
         if not agent_is_active(project_root, target_slug, now, threshold):
             return 0
+    # An agent with its own per-prompt hook (e.g. Claude Code's
+    # UserPromptSubmit) already surfaces pending mentions passively on its
+    # next turn preflight -- no terminal injection needed while it is
+    # verifiably alive. capabilities.json opts an agent into this by setting
+    # visible.required_when_internal_timeout=false (it still keeps
+    # required_when_sleeping=true, so a stale/inactive session falls back to
+    # the normal short grace period and gets nudged visibly as before).
+    try:
+        active_session_threshold = max(
+            1, int(os.environ.get("AI_COLLAB_ACTIVE_SESSION_THRESHOLD_SECONDS", "900"))
+        )
+    except (TypeError, ValueError):
+        active_session_threshold = 900
+    if (
+        isinstance(visible, dict)
+        and visible.get("required_when_sleeping")
+        and visible.get("required_when_internal_timeout") is False
+        and agent_is_active(project_root, target_slug, now, active_session_threshold)
+    ):
+        try:
+            active_grace = max(
+                grace,
+                int(os.environ.get("AI_COLLAB_ACTIVE_GRACE_SECONDS", "1200")),
+            )
+        except (TypeError, ValueError):
+            active_grace = max(grace, 1200)
+        return active_grace
     return grace
 
 
@@ -772,7 +821,11 @@ def build_cli_command(input_data: dict[str, str]) -> list[str] | None:
     if target == "opencode":
         return [exe, "run", prompt, "--dir", project_path, "--file", inbox_path]
     if target in {"claude", "claude-code"}:
-        return [exe, "-p", "--permission-mode", "acceptEdits", "--add-dir", project_path, prompt]
+        # A wakeup-triggered turn runs with nobody watching. Default to a
+        # read-only permission mode so an injected prompt can never edit
+        # files on its own -- only an explicit env override widens this.
+        permission_mode = os.environ.get("AI_COLLAB_CLAUDE_CLI_PERMISSION_MODE", "plan")
+        return [exe, "-p", "--permission-mode", permission_mode, "--add-dir", project_path, prompt]
     if target == "kimi":
         return [exe, prompt]
     if target == "kilo":
@@ -2094,10 +2147,24 @@ def run_visible_adapter(
     runner=subprocess.run,
 ) -> dict[str, str]:
     target = input_data["target_slug"]
+    project_root = Path(input_data["project_path"])
+    capability = capability_for(project_root, target)
+    cli_fallback_enabled = bool(
+        isinstance(capability, dict) and (capability.get("visible") or {}).get("cli_fallback")
+    )
+
+    def _with_cli_fallback(result: dict[str, Any]) -> dict[str, Any]:
+        if result.get("status") == "success" or not cli_fallback_enabled:
+            return result
+        cli_result = run_cli_adapter(input_data, timeout=timeout, runner=runner)
+        cli_result["fallback_from"] = result.get("adapter_name", "visible")
+        cli_result["fallback_reason"] = result.get("message", "")
+        return cli_result
+
     if target in {"claude-code-ide", "cursor-native", "windsurf-native", "copilot-chat"}:
         return run_ide_native_chat_adapter(input_data, timeout=timeout)
     if target in {"claude", "claude-code"}:
-        return run_ide_terminal_visible_adapter(input_data, timeout=timeout)
+        return _with_cli_fallback(run_ide_terminal_visible_adapter(input_data, timeout=timeout))
     if target == "opencode":
         # When a project-local IDE bridge exists it is stronger evidence than
         # port discovery: the bridge resolves the exact integrated terminal,
@@ -2105,8 +2172,8 @@ def run_visible_adapter(
         # rejection is intentionally terminal; silently switching adapters
         # would destroy the visual guarantee.
         if ide_bridge_candidates(input_data["project_path"]):
-            return run_ide_terminal_visible_adapter(input_data, timeout=timeout)
-        return run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner)
+            return _with_cli_fallback(run_ide_terminal_visible_adapter(input_data, timeout=timeout))
+        return _with_cli_fallback(run_opencode_visible_adapter(input_data, timeout=timeout, runner=runner))
     if target == "kilo":
         if ide_bridge_candidates(input_data["project_path"]):
             return run_ide_terminal_visible_adapter(input_data, timeout=timeout)
@@ -2511,11 +2578,23 @@ def process_inbox(
         return {"action": "ignored", "reason": "status", "status": meta.get("status", "")}
 
     task_id = meta.get("task_id") or f"{project}:{inbox_path.name}"
-    target_slug = (meta.get("to") or inbox_path.stem.replace("inbox-", "")).strip()
+    target_slug = (meta.get("to") or inbox_path.stem.replace("inbox-", "")).strip().lower()
+    project_root = inbox_path.parent.parent
+    if target_slug != "all" and not project_agent_known(project_root, target_slug):
+        log(
+            f"INBOX action=skipped task_id={task_id} target={target_slug} "
+            f"reason=agent-not-in-project project={project_root} inbox={inbox_path}",
+            log_file,
+        )
+        return {
+            "action": "skipped",
+            "reason": "agent-not-in-project",
+            "task_id": task_id,
+            "target_slug": target_slug,
+        }
     attempts = coerce_int(meta.get("attempts"), 0)
     last_attempt = parse_iso(meta.get("last_attempt"))
 
-    project_root = inbox_path.parent.parent
     grace = internal_grace_seconds(project_root, target_slug, now)
     queued_at = parse_iso(meta.get("updated"))
     elapsed_internal = (now - queued_at).total_seconds() if queued_at else grace

@@ -29,7 +29,7 @@ Execute its `required_actions`. Infer the correct behavior automatically:
 
 Never require the user to remember a Collab command. Slash commands remain explicit overrides and recovery/debugging surfaces.
 
-Every preflight returns the current versioned `capability_catalog`. Keep that entire feature inventory available throughout the turn and apply the matching capability automatically. Setup/update opens one stable capability-onboarding thread per catalog digest and wakes every registered agent. Each agent must read its managed rules and capability matrix, then append its own `capability_ack: <digest>` without waiting for the user. A changed digest invalidates the previous acknowledgement. Setup remains `awaiting-agent-acknowledgements` until every registered agent has confirmed.
+During onboarding, every active registered agent receives the complete versioned `capability_catalog`, reads its managed rules, team, roles, and capability matrix, then appends its own `capability_ack: <digest>` without waiting for the user. After that acknowledgement, preflight returns the digest and feature IDs rather than repeating identical descriptions on every turn. Setup/update queues only missing active agents and does not resend the same onboarding unless `--retry-capability-onboarding` is explicitly requested. A changed digest or newly added agent triggers onboarding again.
 
 Each AI writes a Markdown log to `{project-root}/.ai-collab/`. Any AI with filesystem access to the project can read those logs. Claude manages its own log via this skill. Other agents (OpenCode, Codex, Aider, Cursor native chat, etc.) write via agent-specific rules installed by `~/.claude/ai-collab-project-setup.py`.
 
@@ -204,7 +204,7 @@ Use one idempotent command for first-time installation, global updates, existing
    - regenerate `TEAM.md`, `agents.json`, `capabilities.json`, and relevant runtime rule blocks
    - persist stable project/agent identity codes and install the runtime session registrar
    - run mandatory development-team role onboarding and bind each owner to its `agent_id`
-   - generate a versioned capability catalog, open/reuse its automatic onboarding thread, and wake every registered agent for its own acknowledgement
+   - generate a versioned capability catalog, open/reuse its automatic onboarding thread, and wake every active registered agent that has not already acknowledged or been queued for that digest
    - run strict global doctor checks and project capability checks
    - write `.ai-collab/setup-report.json` with before/after fingerprints, preservation results, migration status, and reload guidance
 4. Ask/record project values only when they are not already present:
@@ -228,11 +228,11 @@ Use one idempotent command for first-time installation, global updates, existing
    ✓ cursor-native → .cursorrules (created/appended)
    ```
 
-7. Start or reuse `.ai-collab/discussions/discussion-capability-onboarding-{digest}.md` for every installation and update. Wake every registered agent automatically. Each agent must read its refreshed rule block plus the complete `capability_catalog` and append its own digest-bound acknowledgement. Apply internal-first delivery and visible fallback; never ask the user to solicit these replies.
+7. Start or reuse `.ai-collab/discussions/discussion-capability-onboarding-{digest}.md`. Wake only active registered agents that are still missing and have not already been queued. Each agent must read its refreshed rule block, team, roles, and complete `capability_catalog`, then append its own digest-bound acknowledgement. Apply internal-first delivery and visible fallback; never ask the user to solicit these replies. Use `--retry-capability-onboarding` only for an intentional retry.
 8. Run `/collab write` immediately to log the current context.
 9. Start `/collab monitor` automatically for this project in the current Claude Code session. Do not ask the user to run it manually. If a monitor for this project is already active, keep it and report "monitor already active." If the current runtime cannot launch a persistent Monitor/Task, say that clearly and rely on the installed daemon + prompt hooks as the fallback.
 10. Role onboarding is part of setup, not an optional follow-up. Interactive setup must present every registered identity and role. Non-interactive setup without existing roles must exit incomplete and write `.ai-collab/role-onboarding.json`; rerun with repeated `--assign role=agent` values. Never report setup successful without `.ai-collab/roles.json` schema v2.
-11. Report `ok` only after all agent-authored capability acknowledgements exist for the current digest. Otherwise report `awaiting-agent-acknowledgements` with exact missing agents; do not call setup complete. Summarize the global install, identity codes, sessions/surfaces, roles, preservation audit, rules, doctor result, and reload guidance.
+11. Report `ok` only after all active registered agents have authored capability acknowledgements for the current digest. Otherwise report `awaiting-agent-acknowledgements` with exact missing active agents; do not call setup complete. Summarize the global install, identity codes, sessions/surfaces, roles, preservation audit, rules, doctor result, and reload guidance.
 
 **Re-run behavior:** Treat every invocation as install-or-migrate. Re-running it updates the global installation and current project to the same release, adds newly detected agents, refreshes managed blocks without duplication, and fails honestly if an existing inbox, run, role file, task thread, or discussion changed during migration. Never remove user-authored content or collaboration history.
 
@@ -294,7 +294,7 @@ Add a single AI to the project after the initial setup. Use when:
 4. Run:
 
    ```bash
-   python3 ~/.claude/ai-collab-project-setup.py --root "$ROOT" --agents "$SLUG" --container "$CONTAINER" --models "$SLUG=$MODEL"
+   python3 ~/.claude/ai-collab-project-setup.py --root "$ROOT" --add-agents "$SLUG" --container "$CONTAINER" --models "$SLUG=$MODEL"
    ```
 
 5. Report: "Onboarded `{slug}` with container `{container}` and model `{model}`."

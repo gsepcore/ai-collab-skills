@@ -37,6 +37,12 @@ KNOWN_SLUGS = {
 }
 SKIP_FILES = {"PROTOCOL.md", "CONTEXT.md", "TEAM.md"}
 LOG_RE = re.compile(r"^([a-z][a-z0-9_-]*)-\d{8}-\d{6}\.md$")
+AGENT_ALIASES = {
+    "antigravity": "codex",
+    "cursor": "cursor-native",
+    "windsurf": "windsurf-native",
+    "copilot": "copilot-chat",
+}
 
 
 def utc_now() -> datetime:
@@ -71,6 +77,25 @@ def slug_from_log(path: Path) -> str | None:
         return None
     match = LOG_RE.match(path.name)
     return match.group(1).lower() if match else None
+
+
+def registered_agents(collab_dir: Path) -> set[str] | None:
+    manifest_path = collab_dir / "agents.json"
+    manifest = load_json(manifest_path, None)
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("agents"), list):
+        return None
+    registered: set[str] = set()
+    for item in manifest["agents"]:
+        if isinstance(item, str):
+            slug = item
+        elif isinstance(item, dict):
+            slug = str(item.get("agent") or item.get("slug") or "")
+        else:
+            continue
+        slug = slug.strip().lower()
+        if slug:
+            registered.add(AGENT_ALIASES.get(slug, slug))
+    return registered
 
 
 def protocol_path() -> Path:
@@ -251,7 +276,11 @@ def process_log(project: str, log_path: Path, *, now: datetime | None = None) ->
     if slug in seen:
         return {"action": "noop", "slug": slug}
 
-    if slug in KNOWN_SLUGS:
+    roster = registered_agents(collab_dir)
+    normalized_slug = AGENT_ALIASES.get(slug, slug)
+    if roster is not None and normalized_slug not in roster:
+        action = "ignored-unregistered"
+    elif slug in KNOWN_SLUGS:
         action = append_rules_if_missing(root, slug)
         merge_team_member(collab_dir, project, slug, now)
     else:

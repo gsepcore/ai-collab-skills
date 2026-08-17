@@ -4,6 +4,7 @@ Tests for ai-collab-auto-onboard.py
 Run with: python3 install/test_auto_onboard.py
 """
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -155,6 +156,19 @@ class TestAutoOnboard(unittest.TestCase):
 
         self.assertEqual(result, {"action": "ignored", "slug": ""})
         self.assertFalse((self.root / ".cursorrules").exists())
+
+    def test_manifest_prevents_historical_log_from_reenabling_removed_agent(self):
+        (self.collab / "agents.json").write_text(
+            json.dumps({"schema": "ai-collab.agents.v2", "agents": [{"agent": "codex"}]}),
+            encoding="utf-8",
+        )
+        log = self.write_log("hermes-20260513-110000.md")
+
+        result = process_log("demo", log, now=self.now)
+
+        self.assertEqual(result, {"action": "ignored-unregistered", "slug": "hermes"})
+        self.assertFalse((self.root / "AGENTS.md").exists())
+        self.assertFalse((self.collab / "TEAM.md").exists())
 
 
 if __name__ == "__main__":

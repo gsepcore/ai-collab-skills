@@ -227,6 +227,29 @@ class TestProcessInbox(unittest.TestCase):
         self.assertEqual(result["action"], "ignored")
         self.assertFalse(self.events.exists())
 
+    def test_manifest_blocks_stale_inbox_for_removed_agent(self):
+        (self.inbox.parent / "agents.json").write_text(
+            json.dumps({"schema": "ai-collab.agents.v2", "agents": [{"agent": "codex"}]}),
+            encoding="utf-8",
+        )
+        self.inbox = self.inbox.parent / "inbox-hermes.md"
+        self.write_inbox(SAMPLE_INBOX.replace("to: codex", "to: hermes"))
+
+        result = process_inbox(
+            self.inbox,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+
+        self.assertEqual(result["action"], "skipped")
+        self.assertEqual(result["reason"], "agent-not-in-project")
+        self.assertEqual(result["target_slug"], "hermes")
+        self.assertFalse(self.events.exists())
+
     def test_done_inbox_closes_existing_thread(self):
         self.write_inbox(SAMPLE_INBOX.replace("status: unread", "status: done"))
         thread = self.inbox.parent / "thread-task-123.md"
@@ -2102,6 +2125,29 @@ project: gsep
         )
 
         self.assertEqual(result["action"], "thread-mentions")
+        self.assertEqual(result["results"][0]["action"], "skipped")
+        self.assertEqual(result["results"][0]["reason"], "agent-not-in-project")
+        self.assertFalse(self.events.exists())
+
+    def test_agents_manifest_blocks_stale_files_from_resurrecting_removed_agent(self):
+        (self.collab / "agents.json").write_text(
+            json.dumps({"schema": "ai-collab.agents.v2", "agents": [{"agent": "codex"}]}),
+            encoding="utf-8",
+        )
+        (self.collab / "TEAM.md").write_text("## Roster\n\n- codex\n- hermes\n", encoding="utf-8")
+        (self.collab / "inbox-hermes.md").write_text("status: unread\n", encoding="utf-8")
+        (self.collab / "hermes-20260512-120000.md").write_text("historical session\n", encoding="utf-8")
+        self.append(author="codex", message="@hermes please review this.")
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
         self.assertEqual(result["results"][0]["action"], "skipped")
         self.assertEqual(result["results"][0]["reason"], "agent-not-in-project")
         self.assertFalse(self.events.exists())

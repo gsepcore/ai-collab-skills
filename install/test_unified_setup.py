@@ -182,6 +182,33 @@ class TestUnifiedSetup(unittest.TestCase):
         }), encoding="utf-8")
         self.assertEqual(_mod.capability_ack_status(self.root, ["codex"])["missing"], ["codex"])
 
+    def test_capability_onboarding_does_not_redispatch_same_missing_agents_without_explicit_retry(self):
+        digest = "cap_test"
+        (self.collab / "agents.json").write_text(json.dumps({
+            "project_id": "prj_test",
+            "agents": [{"agent": "codex", "agent_id": "agt_codex"}, {"agent": "opencode", "agent_id": "agt_opencode"}],
+        }), encoding="utf-8")
+        thread_rel = ".ai-collab/discussions/discussion-capability-onboarding-cap_test.md"
+        (self.collab / "capabilities.json").write_text(json.dumps({
+            "capability_catalog": {"digest": digest, "features": [{"id": "shared-conversations"}]},
+            "capability_onboarding": {"thread": thread_rel},
+        }), encoding="utf-8")
+        thread = self.root / thread_rel
+        thread.parent.mkdir(parents=True)
+        thread.write_text(
+            "## 2026-08-17T12:00:00Z -- ai-collab-setup\n\n"
+            "type: question\nto: opencode\n\ncapability_ack: cap_test\n",
+            encoding="utf-8",
+        )
+        args = argparse.Namespace(actor="codex", installer_source=None, retry_capability_onboarding=False)
+
+        with mock.patch.object(_mod, "run_visible") as run_visible:
+            result = _mod.run_capability_onboarding(self.root, ["codex", "opencode"], args)
+
+        self.assertEqual(result["dispatch"], "already-queued")
+        self.assertEqual(result["queued_agents"], ["opencode"])
+        run_visible.assert_not_called()
+
     def test_global_reinstall_suppresses_recursive_project_setup(self):
         installer = self.root / "install.sh"
         installer.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")

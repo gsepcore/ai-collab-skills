@@ -244,6 +244,15 @@ def command_exists(command: str) -> bool:
 
 
 def detect_agents(root: Path) -> list[str]:
+    existing = read_existing_manifest(root / ".ai-collab" / "agents.json")
+    registered = [
+        normalize_agent(str(item.get("agent") or item.get("slug") or ""))
+        for item in existing.get("agents", [])
+        if isinstance(item, dict) and (item.get("agent") or item.get("slug"))
+    ]
+    if registered:
+        return list(dict.fromkeys(registered))
+
     detected: list[str] = ["claude-code"]
     existing_paths = {
         ".cursorrules": "cursor-native",
@@ -255,16 +264,9 @@ def detect_agents(root: Path) -> list[str]:
     for rel, agent in existing_paths.items():
         if (root / rel).exists() and agent not in detected:
             detected.append(agent)
-    for agent, config in AGENT_CATALOG.items():
-        for signal in config.get("detect", []):
-            if len(signal) != 1:
-                continue
-            value = signal[0]
-            found = Path(value).exists() if value.startswith("/") else command_exists(value)
-            if found and agent not in detected:
-                detected.append(agent)
-    if (Path.home() / ".antigravity/extensions").exists() and "codex" not in detected:
-        detected.append("codex")
+    # A globally installed CLI/application only proves availability on the
+    # machine, not membership in this project. Project-local rules or an
+    # explicit setup/onboard request are the only safe first-run signals.
     return detected
 
 
@@ -352,7 +354,7 @@ Always-on activation contract:
 - Infer the collaboration behavior from intent: team execution or multiple role owners -> orchestrate; debate/review/opinions -> convene a discussion; another role owner -> route to that owner; vacant role -> ask the user/director to assign it; direct mention/question -> converse in the existing thread; small single-owner work -> execute directly with shared live/log state.
 - Unread inboxes and unanswered current-thread mentions take priority over unrelated work. Do not make the user ask you to check them.
 - Complete live updates, handoffs, and session logs automatically. Never tell the user to invoke a Collab feature that you can invoke yourself.
-- Treat the `capability_catalog` returned by every turn preflight as your always-current feature inventory. Keep every listed capability available throughout the turn and select it automatically from user intent.
+- During onboarding or after a catalog change, preflight returns the complete `capability_catalog`; read and acknowledge it once. After acknowledgement, preflight returns only its digest and feature IDs so you retain awareness without rereading identical descriptions every turn.
 - If preflight says `acknowledgement_required`, read the current managed Collab rules plus `.ai-collab/capabilities.json`, then append your own acknowledgement to the specified onboarding thread before unrelated work. A changed catalog digest invalidates an older acknowledgement automatically.
 - If the helper is missing or reports inactive, fall back to the context checks below and report the installation/setup defect; do not silently behave as if Collab were absent.
 
@@ -491,14 +493,15 @@ def read_existing_manifest(path: Path) -> dict[str, Any]:
 def write_agents_json(root: Path, agents: list[str], container: str, models: dict[str, str], rules: dict[str, list[str]], now: datetime) -> dict[str, Any]:
     path = root / ".ai-collab" / "agents.json"
     existing = read_existing_manifest(path)
-    by_agent: dict[str, dict[str, Any]] = {}
+    previous_by_agent: dict[str, dict[str, Any]] = {}
     for item in existing.get("agents", []):
         if isinstance(item, dict) and item.get("agent"):
-            by_agent[str(item["agent"])] = item
+            previous_by_agent[str(item["agent"])] = item
+    by_agent: dict[str, dict[str, Any]] = {}
     project_id = project_identity(root, existing)
     for agent in agents:
         config = AGENT_CATALOG.get(agent, AGENT_CATALOG["generic"])
-        previous = by_agent.get(agent, {})
+        previous = previous_by_agent.get(agent, {})
         by_agent[agent] = {
             "agent": agent,
             "agent_id": agent_identity(root, agent, previous),
@@ -602,7 +605,9 @@ def write_capabilities_json(root: Path, manifest: dict[str, Any], container: str
                 "single-owner-task": "execute-with-shared-state",
             },
             "automatic_completion_handoff": True,
-            "feature_inventory_in_every_preflight": True,
+            "feature_inventory_in_every_preflight": False,
+            "capability_digest_in_every_preflight": True,
+            "full_catalog_until_acknowledged": True,
         },
         "agents": rows,
     }
@@ -611,19 +616,49 @@ def write_capabilities_json(root: Path, manifest: dict[str, Any], container: str
     return status
 
 
+def sync_roles_json(root: Path, manifest: dict[str, Any], now: datetime) -> str:
+    path = root / ".ai-collab" / "roles.json"
+    if not path.exists():
+        return "absent"
+    try:
+        roles = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        roles = {}
+    if not isinstance(roles, dict):
+        roles = {}
+    active_rows = [row for row in manifest.get("agents", []) if isinstance(row, dict) and row.get("agent")]
+    active_agents = [str(row["agent"]) for row in active_rows]
+    agent_ids = {str(row["agent"]): row.get("agent_id") for row in active_rows}
+    assignments = roles.get("assignments", {}) if isinstance(roles, dict) else {}
+    if not isinstance(assignments, dict):
+        assignments = {}
+    for item in assignments.values():
+        if not isinstance(item, dict):
+            continue
+        primary = str(item.get("primary") or "")
+        if primary not in agent_ids:
+            item["primary"] = None
+            item["primary_agent_id"] = None
+        else:
+            item["primary_agent_id"] = agent_ids[primary]
+    roles.update(
+        {
+            "schema": roles.get("schema") or "ai-collab.roles.v2",
+            "project": root.name,
+            "updated": isoformat_z(now),
+            "agents": active_agents,
+            "agent_ids": agent_ids,
+            "assignments": assignments,
+        }
+    )
+    atomic_write(path, json.dumps(roles, indent=2, sort_keys=False) + "\n")
+    return "updated"
+
+
 def write_team_md(root: Path, agents: list[str], container: str, models: dict[str, str], rules: dict[str, list[str]], now: datetime) -> None:
     path = root / ".ai-collab" / "TEAM.md"
-    existing_agents: list[str] = []
-    if path.exists():
-        text = path.read_text(encoding="utf-8")
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("- "):
-                slug = stripped[2:].split()[0].strip("*`")
-                if slug and slug not in existing_agents:
-                    existing_agents.append(normalize_agent(slug))
     roster = []
-    for agent in ["claude-code", *existing_agents, *agents]:
+    for agent in ["claude-code", *agents]:
         normalized = normalize_agent(agent)
         if normalized not in roster:
             roster.append(normalized)
@@ -761,6 +796,17 @@ def setup_project(
     project_id = project_identity(root, existing_manifest)
     previous_rows = {str(row.get("agent")): row for row in existing_manifest.get("agents", []) if isinstance(row, dict)}
     agent_ids = {agent: agent_identity(root, agent, previous_rows.get(agent, {})) for agent in normalized_agents}
+    removed_agents = sorted(set(previous_rows) - set(normalized_agents))
+    if removed_agents:
+        result["removed_rules"] = {}
+        for agent in removed_agents:
+            statuses: list[str] = []
+            previous_rules = previous_rows.get(agent, {}).get("rules", [])
+            if isinstance(previous_rules, list):
+                for rel in previous_rules:
+                    if isinstance(rel, str):
+                        statuses.append(f"{rel}:{remove_snippet(root / rel, agent)}")
+            result["removed_rules"][agent] = statuses
     for agent in normalized_agents:
         snippet = build_snippet(agent, container, models.get(agent, ""), root.name, project_id, agent_ids[agent])
         statuses: list[str] = []
@@ -779,6 +825,7 @@ def setup_project(
         rule_paths[agent] = paths
     manifest = write_agents_json(root, normalized_agents, container, models, rule_paths, now)
     result["capabilities"] = write_capabilities_json(root, manifest, container, models, now)
+    result["roles"] = sync_roles_json(root, manifest, now)
     write_team_md(root, normalized_agents, container, models, rule_paths, now)
     result["inbox_all"] = write_inbox_all(root, normalized_agents, container, models, now)
     return result
@@ -804,6 +851,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Set up AI Collab in the current project.")
     parser.add_argument("--root", default=None, help="Project root. Defaults to git root or cwd.")
     parser.add_argument("--agents", default=None, help="Comma-separated agents, e.g. claude-code,opencode,codex")
+    parser.add_argument("--add-agents", default=None, help="Comma-separated agents to add without removing the existing roster.")
     parser.add_argument("--container", default=None, help="IDE/container, e.g. antigravity, cursor, vscode, terminal")
     parser.add_argument("--models", default=None, help="Comma-separated agent=model pairs")
     parser.add_argument("--non-interactive", action="store_true", help="Use detected/default values without prompts.")
@@ -813,6 +861,7 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.root).resolve() if args.root else project_root()
     defaults = detect_agents(root)
     agents = parse_csv(args.agents)
+    added_agents = parse_csv(args.add_agents)
     models = parse_models(args.models)
     container = args.container or ""
 
@@ -823,12 +872,21 @@ def main(argv: list[str] | None = None) -> int:
         agents = agents or defaults
         container = container or os.environ.get("AI_COLLAB_CONTAINER", "unknown")
 
+    if added_agents:
+        existing = [
+            normalize_agent(str(row.get("agent") or ""))
+            for row in read_existing_manifest(root / ".ai-collab" / "agents.json").get("agents", [])
+            if isinstance(row, dict) and row.get("agent")
+        ]
+        agents = list(dict.fromkeys([*existing, *agents, *added_agents]))
+
     result = setup_project(root, agents, container, models, refresh_protocol=args.refresh_protocol)
     print("[AI-COLLAB] Project onboarding complete")
     print(f"  root: {result['root']}")
     for agent, statuses in result["rules"].items():
         print(f"  {agent}: {', '.join(statuses)}")
     print(f"  capabilities: {result['capabilities']}")
+    print(f"  roles: {result['roles']}")
     print(f"  inbox-all: {result['inbox_all']}")
     if interactive and not (root / ".ai-collab" / "roles.json").exists():
         configure_roles = choose_interactive("Configure development-team roles now? (yes/no)", "yes")
