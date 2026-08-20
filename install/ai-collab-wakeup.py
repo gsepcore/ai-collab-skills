@@ -41,6 +41,7 @@ DEFAULT_LOG_FILE = Path("/tmp/ai-collab-wakeup.log")
 DEFAULT_NOTIFICATIONS_FILE = Path.home() / ".ai-collab-notifications.json"
 DEFAULT_ADAPTER = "visible"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
+DEFAULT_REPLY_WAIT_SECONDS = 90
 DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude", "claude-code", "hermes", "kimi", "kilo")
 DEFAULT_VISIBLE_TARGETS = (
     "codex", "opencode", "claude", "claude-code", "claude-code-ide", "aider", "kilo", "hermes", "kimi",
@@ -154,6 +155,14 @@ def thread_stale_days() -> int:
     # requiring every stale test/onboarding thread to be closed by hand.
     # 0 disables the cutoff.
     return max(0, coerce_int(os.environ.get("AI_COLLAB_THREAD_STALE_DAYS"), 7))
+
+
+def reply_wait_seconds_from_env() -> int:
+    # A successful visible dispatch only proves the prompt reached the
+    # target's window, not that the agent read and answered it. Wait this
+    # long for a real thread reply from the target before treating the
+    # delivery as a non-response (RESUMEN DE EJECUCION, discussion-20260817-214951).
+    return max(0, coerce_int(os.environ.get("AI_COLLAB_REPLY_WAIT_SECONDS"), DEFAULT_REPLY_WAIT_SECONDS))
 
 
 def backoff_for_attempts(attempts: int) -> int:
@@ -2387,6 +2396,101 @@ def close_thread_for_inbox(
     return True
 
 
+def resolve_pending_dispatch(
+    *,
+    entry: dict[str, Any],
+    thread_path: Path,
+    project_root: Path,
+    project: str,
+    task_id: str,
+    inbox_name: str,
+    target_slug: str,
+    author_slug: str,
+    synthetic_prompt: str,
+    now: datetime,
+    adapter_runner=subprocess.run,
+) -> dict[str, Any]:
+    """Decide what to do about a visible dispatch that already reported delivery
+    success but has not yet produced a real reply from the target.
+
+    A prior daemon cycle only proves the prompt reached the target's window
+    (adapter status "success"), not that the agent read and answered it. This
+    waits `reply_wait_seconds_from_env()` before treating silence as a real
+    non-response, then either falls back to a real headless CLI turn (only for
+    targets whose capability opts into it) or records an explicit
+    timeout-no-response note instead of retrying in silence forever.
+    """
+    dispatched_at = parse_iso(str(entry.get("dispatched_at", ""))) or now
+    wait = reply_wait_seconds_from_env()
+    elapsed = (now - dispatched_at).total_seconds()
+    if elapsed < wait:
+        return {
+            "entry": entry,
+            "result": {
+                "action": "awaiting-reply",
+                "elapsed_seconds": elapsed,
+                "wait_seconds": wait,
+            },
+        }
+
+    capability = capability_for(project_root, target_slug)
+    cli_fallback_enabled = bool(
+        isinstance(capability, dict) and (capability.get("visible") or {}).get("cli_fallback")
+    )
+    attempts = coerce_int(str(entry.get("attempts", "0")), 0)
+    timestamp = isoformat_z(now)
+    done_entry = {"done": True, "attempts": attempts, "last_attempt": timestamp}
+
+    if cli_fallback_enabled:
+        cli_input = {
+            "project_path": str(project_root),
+            "target_slug": target_slug,
+            "inbox_path": str(project_root / ".ai-collab" / inbox_name) if inbox_name else "",
+            "source_path": str(thread_path),
+            "source_type": "thread",
+            "thread_path": str(thread_path),
+            "task_id": task_id,
+            "synthetic_prompt": synthetic_prompt,
+        }
+        cli_result = run_cli_adapter(cli_input, timeout=adapter_timeout_from_env(), runner=adapter_runner)
+        if cli_result.get("status") == "success":
+            note = (
+                f"No se detecto respuesta propia de @{target_slug} en este hilo durante los {int(wait)}s "
+                "posteriores al despacho visible (el mensaje llego a su ventana, pero eso no es lo mismo "
+                "que una respuesta real). Se activo el fallback CLI headless y se entrego correctamente; "
+                f"@{author_slug} puede seguir el hilo para ver si produce una respuesta."
+            )
+            resolution = "cli-fallback-success"
+        else:
+            note = (
+                f"No se detecto respuesta propia de @{target_slug} en este hilo durante los {int(wait)}s "
+                "posteriores al despacho visible, y el fallback CLI headless tambien fallo "
+                f"({cli_result.get('message', 'sin detalle')}). No se reintenta mas para este mensaje; "
+                f"@{author_slug} deberia decidir si esperar, redirigir, o seguir sin @{target_slug}."
+            )
+            resolution = "cli-fallback-failed"
+    else:
+        note = (
+            f"timeout esperando a @{target_slug}: el mensaje se entrego a su chat visible pero no hubo "
+            f"respuesta propia en este hilo durante los {int(wait)}s de espera. Puede estar ocupado en otra "
+            f"tarea o proyecto. No se reintenta mas para este mensaje; @{author_slug} deberia decidir si "
+            f"esperar, redirigir, o seguir sin @{target_slug}."
+        )
+        resolution = "timeout-no-response"
+
+    append_thread_message(
+        thread_path,
+        task_id=task_id,
+        project=project,
+        inbox_name=inbox_name,
+        author_slug="daemon",
+        message=note,
+        now=now,
+    )
+    done_entry["resolution"] = resolution
+    return {"entry": done_entry, "result": {"action": resolution, "wait_seconds": wait}}
+
+
 def process_thread(
     thread_path: Path,
     project: str,
@@ -2476,6 +2580,38 @@ def process_thread(
         if entry.get("done") or entry.get("seen"):
             results.append({"target_slug": target_slug, "action": "deduped"})
             continue
+        if entry.get("dispatched"):
+            # Delivery already succeeded once; a successful visible dispatch
+            # only means the prompt reached the target's window, not that it
+            # was read and answered. Resolve real-reply-or-timeout instead of
+            # silently treating "delivered" as "done" forever.
+            resolution = resolve_pending_dispatch(
+                entry=entry,
+                thread_path=thread_path,
+                project_root=project_root,
+                project=project,
+                task_id=task_id,
+                inbox_name=inbox_name,
+                target_slug=target_slug,
+                author_slug=author_slug,
+                synthetic_prompt=(
+                    f"You were mentioned in {thread_path} by @{author_slug}. "
+                    "This is a real visible team conversation. Read the entire thread, add your own "
+                    "opinion or recommendation to that same thread, explicitly mention the director "
+                    "and relevant participants, then update your log. Do not merely acknowledge the wakeup."
+                ),
+                now=now,
+                adapter_runner=adapter_runner,
+            )
+            state[state_key] = resolution["entry"]
+            results.append({"target_slug": target_slug, **resolution["result"]})
+            log(
+                "THREAD "
+                f"action={resolution['result']['action']} task_id={task_id} target={target_slug} "
+                f"thread={thread_path}",
+                log_file,
+            )
+            continue
         if attempts >= max_attempts:
             results.append({"target_slug": target_slug, "action": "failed", "attempts": attempts})
             continue
@@ -2538,7 +2674,7 @@ def process_thread(
 
         action = "notified"
         if adapter_result["status"] == "success":
-            entry = {"done": True, "attempts": attempts, "last_attempt": timestamp}
+            entry = {"dispatched": True, "dispatched_at": timestamp, "attempts": attempts, "last_attempt": timestamp}
             action = "dispatched"
         elif adapter_result["status"] == "degraded":
             entry = {"seen": True, "attempts": attempts, "last_attempt": timestamp}

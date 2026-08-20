@@ -175,20 +175,47 @@ def cmd_run(args: argparse.Namespace) -> int:
             raise SystemExit("Could not locate the discussion thread that was just created")
         cursor = started_at
 
-    total_turns = args.rounds * len(participants)
-    turn = 0
+    # Round-robin state. Picking "next agent" used to be inferred from the
+    # thread's last message author, which broke as soon as a nudge escalated
+    # to visible chat: that escalation appends its own handoff message
+    # authored by the debate's own --author, so "whoever isn't the last
+    # author" kept resolving to the first participant over and over whenever
+    # that author wasn't itself a participant (see discussion-20260817-214951,
+    # point 3 -- codex ate 6/6 turns because opencode was never picked).
+    # Track whose turn it is explicitly instead of re-deriving it from text.
+    total_rounds = args.rounds
+    per_agent_used = {p: 0 for p in participants}
+    per_agent_noreply_streak = {p: 0 for p in participants}
+    queue = list(participants)
+    # A no-reply attempt gets one immediate retry before yielding the floor,
+    # so a single silent agent can delay but never fully consume the debate.
+    max_attempts = total_rounds * len(participants) * 3
+    attempt = 0
     decision: dict[str, str] | None = None
 
-    while turn < total_turns:
+    def remaining() -> bool:
+        return any(per_agent_used[p] < total_rounds for p in participants)
+
+    while attempt < max_attempts and remaining():
         text = thread_path.read_text(encoding="utf-8")
         messages = parse_messages(text)
         decision = find_decision(messages, cursor)
         if decision:
             break
-        last_author = messages[-1]["author"] if messages else args.author
-        next_agent = next((p for p in participants if p != last_author), participants[turn % len(participants)])
 
-        print(f"[AI-COLLAB-DEBATE] Round turn {turn + 1}/{total_turns} -> @{next_agent}")
+        if not queue:
+            queue = [p for p in participants if per_agent_used[p] < total_rounds]
+            if not queue:
+                break
+        next_agent = queue.pop(0)
+        if per_agent_used[next_agent] >= total_rounds:
+            continue
+
+        attempt += 1
+        print(
+            f"[AI-COLLAB-DEBATE] Attempt {attempt}/{max_attempts} -> @{next_agent} "
+            f"(used {per_agent_used[next_agent]}/{total_rounds} rounds)"
+        )
         nudge_args = [
             "question",
             "--thread",
@@ -206,7 +233,26 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(completed.stdout.rstrip())
         if completed.stderr:
             print(completed.stderr.rstrip(), file=sys.stderr)
-        turn += 1
+
+        # converse.py's question/dispatch_and_optionally_wait returns 0 only
+        # once a real thread reply was verified for the recipient; any other
+        # code (timeout, dispatch failure) means no real reply landed.
+        if completed.returncode == 0:
+            per_agent_used[next_agent] += 1
+            per_agent_noreply_streak[next_agent] = 0
+            if per_agent_used[next_agent] < total_rounds:
+                queue.append(next_agent)
+        else:
+            per_agent_noreply_streak[next_agent] += 1
+            print(
+                f"[AI-COLLAB-DEBATE] No confirmed reply from @{next_agent} "
+                f"(no-reply streak {per_agent_noreply_streak[next_agent]}); not counted as a used round."
+            )
+            if per_agent_noreply_streak[next_agent] < 2:
+                queue.insert(0, next_agent)
+            else:
+                per_agent_noreply_streak[next_agent] = 0
+                queue.append(next_agent)
 
         text = thread_path.read_text(encoding="utf-8")
         messages = parse_messages(text)
@@ -225,7 +271,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("PENDIENTE DE AUTORIZACION DE LUIS antes de implementar.\n")
         print(decision["body"])
         return 0
-    print(f"No execution-summary decision after {total_turns} turns ({args.rounds} rounds x {len(participants)} agents).")
+    used_summary = ", ".join(f"@{p}={per_agent_used[p]}/{total_rounds}" for p in participants)
+    print(f"No execution-summary decision after {attempt} attempts ({used_summary}).")
     print("Revisa el hilo y decide si conviene otra ronda o cerrarlo manualmente.")
     return 3
 

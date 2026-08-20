@@ -2062,7 +2062,12 @@ project: gsep
         self.assertEqual(events[0]["thread_path"], str(self.thread))
         self.assertIn("mentioned", events[0]["synthetic_prompt"])
 
-    def test_thread_mention_dedupes_same_message_and_target(self):
+    def test_thread_mention_does_not_redispatch_before_reply_wait_elapses(self):
+        # A successful visible dispatch only proves the prompt reached the
+        # target's window, not that it produced a real reply. Immediately
+        # rescanning the same unanswered message must not re-dispatch or
+        # mark it permanently done -- only "awaiting-reply" until the reply
+        # wait window elapses (discussion-20260817-214951).
         self.append()
         process_thread(
             self.thread,
@@ -2071,6 +2076,7 @@ project: gsep
             events_file=self.events,
             state_file=self.state,
             log_file=self.log,
+            adapter_mode="mock-success",
         )
         result = process_thread(
             self.thread,
@@ -2079,11 +2085,98 @@ project: gsep
             events_file=self.events,
             state_file=self.state,
             log_file=self.log,
+            adapter_mode="mock-success",
         )
 
-        self.assertEqual(result["results"][0]["action"], "deduped")
+        self.assertEqual(result["results"][0]["action"], "awaiting-reply")
         events = json.loads(self.events.read_text(encoding="utf-8"))
         self.assertEqual(len(events), 2)
+
+    def test_dispatched_thread_records_explicit_timeout_when_no_reply_and_no_cli_fallback(self):
+        # codex has no cli_fallback capability (RESUMEN point 2: never force
+        # codex exec automatically). After the reply wait elapses with no
+        # real reply, the daemon must say so explicitly in the thread
+        # instead of silently doing nothing forever (RESUMEN point 4).
+        self.append()
+        process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now + timedelta(seconds=95),
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+
+        self.assertEqual(result["results"][0]["action"], "timeout-no-response")
+        text = self.thread.read_text(encoding="utf-8")
+        self.assertIn("timeout esperando a @codex", text)
+        self.assertIn("@claude", text)
+        self.assertEqual(text.count("timeout esperando a @codex"), 1)
+
+        state = json.loads(self.state.read_text(encoding="utf-8"))
+        entry = next(v for k, v in state.items() if k.endswith(":codex"))
+        self.assertTrue(entry.get("done"))
+        self.assertEqual(entry.get("resolution"), "timeout-no-response")
+
+    def test_dispatched_thread_falls_back_to_cli_when_reply_wait_elapses_and_enabled(self):
+        self.write_capabilities("opencode", grace=0)
+        capabilities_path = self.collab / "capabilities.json"
+        payload = json.loads(capabilities_path.read_text(encoding="utf-8"))
+        payload["agents"][0]["visible"]["cli_fallback"] = True
+        capabilities_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        self.append(author="claude", message="@opencode please review this.")
+        process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_mode="mock-success",
+        )
+
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append(command)
+
+            class Completed:
+                returncode = 0
+                stdout = "done"
+                stderr = ""
+
+            return Completed()
+
+        os.environ["AI_COLLAB_OPENCODE_BIN"] = "/usr/bin/opencode"
+        try:
+            result = process_thread(
+                self.thread,
+                "gsep",
+                now=self.now + timedelta(seconds=95),
+                events_file=self.events,
+                state_file=self.state,
+                log_file=self.log,
+                adapter_mode="mock-success",
+                adapter_runner=fake_runner,
+            )
+        finally:
+            del os.environ["AI_COLLAB_OPENCODE_BIN"]
+
+        self.assertEqual(result["results"][0]["action"], "cli-fallback-success")
+        self.assertEqual(len(calls), 1)
+        text = self.thread.read_text(encoding="utf-8")
+        self.assertIn("fallback CLI headless", text)
 
     def test_thread_does_not_wake_author_self_mention(self):
         self.append(author="codex", message="@codex note to self.")

@@ -85,6 +85,7 @@ class TestUpdate(unittest.TestCase):
         self.assertIn("install/ai-collab-session.py", rels)
         self.assertIn("install/ai-collab-turn.py", rels)
         self.assertIn("install/ai-collab-setup.py", rels)
+        self.assertIn("install/ai-collab-debate.py", rels)
         self.assertTrue(any(".codex/skills/collab/SKILL.md" in path for path in destinations))
 
     def test_fetch_can_use_pinned_local_development_source(self):

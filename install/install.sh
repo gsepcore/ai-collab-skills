@@ -15,15 +15,16 @@
 #    9. Multi-agent orchestrator → ~/.claude/ai-collab-orchestrate.py
 #   10. Team role onboarding     → ~/.claude/ai-collab-team.py
 #   11. Natural conversation CLI → ~/.claude/ai-collab-converse.py
-#   12. Live observer            → ~/.claude/ai-collab-observer.py
-#   13. Doctor script            → ~/.claude/ai-collab-doctor.py
-#   14. Self-updater             → ~/.claude/ai-collab-update.py
-#   15. Reboot recovery          → ~/.claude/ai-collab-recover.py
-#   16. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
-#   17. Visible IDE bridge       → VS Code/Antigravity/Cursor/Windsurf extension
-#   18. OCR engine               → tesseract auto-install when possible
-#   19. Background daemon        → launchd (macOS) / cron (Linux)
-#   20. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
+#   12. Bounded debate mode      → ~/.claude/ai-collab-debate.py
+#   13. Live observer            → ~/.claude/ai-collab-observer.py
+#   14. Doctor script            → ~/.claude/ai-collab-doctor.py
+#   15. Self-updater             → ~/.claude/ai-collab-update.py
+#   16. Reboot recovery          → ~/.claude/ai-collab-recover.py
+#   17. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
+#   18. Visible IDE bridge       → VS Code/Antigravity/Cursor/Windsurf extension
+#   19. OCR engine               → tesseract auto-install when possible
+#   20. Background daemon        → launchd (macOS) / cron (Linux)
+#   21. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
 #    bash install/install.sh
@@ -266,6 +267,7 @@ copy_or_download "install/ai-collab-team.py"                  "$CLAUDE_DIR/ai-co
 copy_or_download "install/ai-collab-session.py"               "$CLAUDE_DIR/ai-collab-session.py"
 copy_or_download "install/ai-collab-turn.py"                  "$CLAUDE_DIR/ai-collab-turn.py"
 copy_or_download "install/ai-collab-converse.py"              "$CLAUDE_DIR/ai-collab-converse.py"
+copy_or_download "install/ai-collab-debate.py"                "$CLAUDE_DIR/ai-collab-debate.py"
 copy_or_download "install/ai-collab-observer.py"              "$CLAUDE_DIR/ai-collab-observer.py"
 copy_or_download "install/ai-collab-see.py"                   "$CLAUDE_DIR/ai-collab-see.py"
 copy_or_download "install/ai-collab-doctor.py"                "$CLAUDE_DIR/ai-collab-doctor.py"
@@ -282,6 +284,7 @@ chmod +x "$CLAUDE_DIR/ai-collab-team.py"
 chmod +x "$CLAUDE_DIR/ai-collab-session.py"
 chmod +x "$CLAUDE_DIR/ai-collab-turn.py"
 chmod +x "$CLAUDE_DIR/ai-collab-converse.py"
+chmod +x "$CLAUDE_DIR/ai-collab-debate.py"
 chmod +x "$CLAUDE_DIR/ai-collab-observer.py"
 chmod +x "$CLAUDE_DIR/ai-collab-see.py"
 chmod +x "$CLAUDE_DIR/ai-collab-doctor.py"
@@ -301,6 +304,7 @@ green "Team role onboarding → $CLAUDE_DIR/ai-collab-team.py"
 green "Session identity     → $CLAUDE_DIR/ai-collab-session.py"
 green "Always-on turn router → $CLAUDE_DIR/ai-collab-turn.py"
 green "Conversation helper  → $CLAUDE_DIR/ai-collab-converse.py"
+green "Bounded debate mode  → $CLAUDE_DIR/ai-collab-debate.py"
 green "Live observer        → $CLAUDE_DIR/ai-collab-observer.py"
 green "Doctor script        → $CLAUDE_DIR/ai-collab-doctor.py"
 green "Self-updater         → $CLAUDE_DIR/ai-collab-update.py"
