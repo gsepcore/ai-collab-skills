@@ -52,6 +52,41 @@ DISCUSSION_SIGNALS = (
     "what do the others think",
     "qué piensan los otros",
 )
+# RESUMEN DE EJECUCION discussion-20260820-113730 (Luis's non-negotiable
+# mandate): a request touching 2+ role owners must converge on an
+# implementation plan through ai-collab-debate.py before anyone executes --
+# that is the default, not something the director opts into. These signals
+# are the only way to skip straight to orchestrate.
+DIRECT_OVERRIDE_SIGNALS = (
+    "hazlo directo",
+    "hazlo tu",
+    "hazlo vos",
+    "sin debate",
+    "no debatan",
+    "you decide",
+    "just do it",
+    "do it directly",
+    "skip the debate",
+)
+# Conservative signal for ai-collab-debate.py's quick mode (1 round/30s,
+# director decides) vs full mode (3 rounds/10min). Default is full: getting
+# this wrong toward more deliberation is cheap, getting it wrong toward
+# skipping real convergence on a feature is not.
+MECHANICAL_SIGNALS = (
+    "rename",
+    "renombrar",
+    "renombra",
+    "move file",
+    "mover archivo",
+    "mueve el archivo",
+    "typo",
+    "reformat",
+    "formatting",
+    "refactor menor",
+    "trivial",
+    "mecánico",
+    "mecanico",
+)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -170,16 +205,23 @@ def classify_intent(prompt: str, slug: str, owners: dict[str, str | None], regis
     mentioned_agents = sorted(agent for agent in registered if agent != slug and f"@{agent.casefold()}" in normalized)
     asks_team = any(signal in normalized for signal in TEAM_SIGNALS)
     asks_discussion = any(signal in normalized for signal in DISCUSSION_SIGNALS)
+    wants_direct = any(signal in normalized for signal in DIRECT_OVERRIDE_SIGNALS)
+    multi_owner = len(matched_owners) > 1 or (asks_team and len(registered) > 1)
 
+    debate_mode: str | None = None
     if asks_discussion or (asks_team and mentioned_agents):
         action = "convene-discussion"
         reason = "The request asks for multiple agents' judgement or debate."
     elif vacant_roles:
         action = "resolve-vacant-role"
         reason = "The request includes a configured role that has no owner."
-    elif len(matched_owners) > 1 or (asks_team and len(registered) > 1):
+    elif multi_owner and not wants_direct:
+        action = "auto-debate"
+        debate_mode = "quick" if any(signal in normalized for signal in MECHANICAL_SIGNALS) else "full"
+        reason = "The request spans 2+ role owners; converge on an implementation plan before executing (non-negotiable default)."
+    elif multi_owner and wants_direct:
         action = "orchestrate"
-        reason = "The request spans multiple owners or explicitly asks the team to execute."
+        reason = "The request spans multiple owners, but the user explicitly asked to skip debate and execute directly."
     elif matched_owners and matched_owners[0] != slug:
         action = "route-to-role-owner"
         reason = f"Configured role ownership routes this work to {matched_owners[0]}."
@@ -190,7 +232,7 @@ def classify_intent(prompt: str, slug: str, owners: dict[str, str | None], regis
         action = "execute-with-shared-state"
         reason = "No cross-agent routing condition was detected; keep collaboration state updated automatically."
 
-    return {
+    result = {
         "action": action,
         "reason": reason,
         "roles": roles,
@@ -199,6 +241,9 @@ def classify_intent(prompt: str, slug: str, owners: dict[str, str | None], regis
         "mentioned_agents": mentioned_agents,
         "user_must_name_collab_feature": False,
     }
+    if debate_mode:
+        result["debate_mode"] = debate_mode
+    return result
 
 
 def unread_inboxes(root: Path, slug: str) -> list[dict[str, str]]:
@@ -330,9 +375,15 @@ def direct_mentions(
     return result
 
 
-def action_commands(action: str) -> list[str]:
+def action_commands(action: str, debate_mode: str | None = None) -> list[str]:
     if action == "convene-discussion":
         return ["Use ai-collab-orchestrate.py convene or ai-collab-converse.py before answering for peers."]
+    if action == "auto-debate":
+        params = "--rounds 1 --wait-seconds 30" if debate_mode == "quick" else "--rounds 3 --wait-seconds 600"
+        return [
+            f"Run ai-collab-debate.py run {params} with the matched role owners before executing anything. "
+            "Only bring the user a converged RESUMEN DE EJECUCION for authorization -- never before that."
+        ]
     if action == "orchestrate":
         return ["Initialize/convene a directed run and route tasks through roles.json automatically."]
     if action == "route-to-role-owner":
@@ -394,7 +445,7 @@ def build_packet(root: Path, slug: str, prompt: str = "", surface_kind: str = "p
             )
         else:
             required.append("capability-onboarding-thread-is-missing; report-setup-incomplete-and-repair-collab-setup")
-    required.extend(action_commands(intent["action"]))
+    required.extend(action_commands(intent["action"], intent.get("debate_mode")))
     if mentions:
         required.append(
             "continue-recent-direct-mentions-in-their-existing-threads-without-creating-duplicates; "

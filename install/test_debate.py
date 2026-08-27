@@ -83,6 +83,82 @@ class FakeConverse:
         return subprocess.CompletedProcess(args, 0, stdout="[AI-COLLAB] Verified real thread replies from: " + to, stderr="")
 
 
+class TestFindDecision(unittest.TestCase):
+    # Reproduces a real false positive hit live on 2026-08-20: claude-code's
+    # own type:answer message said "...antes de cerrar con RESUMEN DE
+    # EJECUCION" (talking ABOUT closing later, not closing now) and got
+    # mistaken for the actual close, ending the debate after a single
+    # round with no real convergence from opencode/codex.
+
+    def _thread(self, *messages: str) -> str:
+        return "".join(messages)
+
+    def _message(self, ts: str, author: str, type_: str, body: str) -> str:
+        return f"## {ts} -- {author}\n\ntype: {type_}\n\n{body}\n\n"
+
+    def test_answer_that_merely_mentions_closing_later_is_not_a_decision(self):
+        text = self._thread(
+            self._message(
+                "2026-08-20T11:41:08Z",
+                "claude-code",
+                "answer",
+                "De acuerdo con tus 4 puntos. Dejo correr el round-robin antes de cerrar con RESUMEN DE EJECUCION.",
+            )
+        )
+        messages = _mod.parse_messages(text)
+
+        decision = _mod.find_decision(messages, "2026-08-20T11:00:00Z")
+
+        self.assertIsNone(decision)
+
+    def test_type_decision_with_title_alone_is_detected(self):
+        text = self._thread(
+            self._message(
+                "2026-08-20T12:00:00Z",
+                "opencode",
+                "decision",
+                "RESUMEN DE EJECUCION -- cierro esta ronda.\nEnfoque acordado: X.",
+            )
+        )
+        messages = _mod.parse_messages(text)
+
+        decision = _mod.find_decision(messages, "2026-08-20T11:00:00Z")
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["author"], "opencode")
+
+    def test_fallback_type_requires_both_title_and_closing_line(self):
+        text = self._thread(
+            self._message(
+                "2026-08-20T12:00:00Z",
+                "opencode",
+                "review",
+                "RESUMEN DE EJECUCION -- esto es un cierre real.\n"
+                "PENDIENTE DE AUTORIZACION DE LUIS -- no implementar hasta que el confirme.",
+            )
+        )
+        messages = _mod.parse_messages(text)
+
+        decision = _mod.find_decision(messages, "2026-08-20T11:00:00Z")
+
+        self.assertIsNotNone(decision)
+
+    def test_fallback_type_with_only_title_is_not_a_decision(self):
+        text = self._thread(
+            self._message(
+                "2026-08-20T12:00:00Z",
+                "opencode",
+                "proposal",
+                "Mi propuesta apunta a un RESUMEN DE EJECUCION mas adelante, todavia no.",
+            )
+        )
+        messages = _mod.parse_messages(text)
+
+        decision = _mod.find_decision(messages, "2026-08-20T11:00:00Z")
+
+        self.assertIsNone(decision)
+
+
 class TestDebateRoundRobin(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -169,8 +245,14 @@ class TestDebateRoundRobin(unittest.TestCase):
             if to == "opencode" and fake.calls.count("opencode") == 0:
                 fake.calls.append(to)
                 text = self.thread.read_text(encoding="utf-8")
+                # Must be after cmd_run's own cursor (real utc_now() at resume
+                # time, since this test resumes an existing --thread) or
+                # find_decision ignores it as a stale pre-debate message. A
+                # hardcoded past timestamp broke this test the moment real
+                # wall-clock time passed it (caught 2026-08-27).
+                decision_ts = _isoformat(datetime.now(timezone.utc) + timedelta(minutes=5))
                 text += (
-                    "\n\n## 2026-08-20T12:05:00Z -- opencode\n\n"
+                    f"\n\n## {decision_ts} -- opencode\n\n"
                     "type: decision\n\nRESUMEN DE EJECUCION -- test.\n"
                     "PENDIENTE DE AUTORIZACION DE LUIS -- no implementar hasta que el confirme.\n"
                 )

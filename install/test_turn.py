@@ -77,11 +77,30 @@ class TestTurnPreflight(unittest.TestCase):
         self.assertEqual(packet["intent"]["owners"], ["opencode"])
         self.assertIn("Create a task thread/inbox", packet["required_actions"][-1])
 
-    def test_team_request_automatically_orchestrates(self):
+    def test_team_request_defaults_to_auto_debate_not_direct_orchestrate(self):
+        # RESUMEN DE EJECUCION discussion-20260820-113730 (Luis's non-negotiable
+        # mandate): a multi-role request converges on a plan through
+        # ai-collab-debate.py by default -- it no longer jumps straight to
+        # orchestrate just because the user asked the team to do something.
         packet = self.packet(prompt="Que el equipo implemente backend, frontend y pruebas")
 
-        self.assertEqual(packet["intent"]["action"], "orchestrate")
+        self.assertEqual(packet["intent"]["action"], "auto-debate")
         self.assertEqual(packet["intent"]["owners"], ["codex", "opencode"])
+        self.assertEqual(packet["intent"]["debate_mode"], "full")
+        self.assertIn("ai-collab-debate.py run --rounds 3 --wait-seconds 600", packet["required_actions"][-1])
+
+    def test_explicit_direct_override_skips_debate(self):
+        packet = self.packet(prompt="Que el equipo implemente backend y frontend, hazlo directo")
+
+        self.assertEqual(packet["intent"]["action"], "orchestrate")
+        self.assertNotIn("debate_mode", packet["intent"])
+
+    def test_mechanical_multi_role_request_uses_quick_debate_mode(self):
+        packet = self.packet(prompt="Renombrar un archivo que toca backend y frontend")
+
+        self.assertEqual(packet["intent"]["action"], "auto-debate")
+        self.assertEqual(packet["intent"]["debate_mode"], "quick")
+        self.assertIn("ai-collab-debate.py run --rounds 1 --wait-seconds 30", packet["required_actions"][-1])
 
     def test_debate_request_automatically_convenes(self):
         packet = self.packet(prompt="Quiero que los agentes debatan la arquitectura")

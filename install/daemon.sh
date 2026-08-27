@@ -95,6 +95,9 @@ while true; do
         [ -f "$thread" ] || continue
         python3 "$WAKEUP_SCRIPT" "$PROJECT" "$thread" >/dev/null 2>>"$LOG_FILE" || log "Warning: thread wakeup scan failed for $thread"
       done
+      # Daemon safety-net: dispatch review wakes for agents that completed
+      # non-trivial work but did not fire a review request themselves.
+      python3 "$WAKEUP_SCRIPT" --scan-reviews "$COLLAB_DIR/.." >/dev/null 2>>"$LOG_FILE" || log "Warning: review safety-net scan failed for $PROJECT"
     fi
   done
 

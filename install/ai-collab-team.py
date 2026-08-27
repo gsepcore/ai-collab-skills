@@ -13,18 +13,18 @@ from pathlib import Path
 from typing import Any
 
 
-ROLE_CATALOG: tuple[tuple[str, str, str], ...] = (
-    ("senior-director", "Senior director", "Own architecture, planning, delegation, integration, and final decisions."),
-    ("frontend", "Frontend developer", "Implement client-side interfaces, state, accessibility, and frontend tests."),
-    ("backend", "Backend developer", "Implement APIs, services, domain logic, integrations, and backend tests."),
-    ("database", "Database developer", "Own schemas, migrations, queries, data integrity, and persistence performance."),
-    ("devops", "DevOps engineer", "Own CI/CD, environments, automation, observability, and operational readiness."),
-    ("qa", "QA reviewer", "Independently verify requirements, regressions, edge cases, and release readiness."),
-    ("security-review", "Security reviewer", "Review threats, dependencies, secrets, permissions, and security controls."),
-    ("architecture-review", "Architecture reviewer", "Review boundaries, maintainability, structure, and cross-system effects."),
-    ("functional-review", "Functional reviewer", "Verify end-to-end behavior against the user's acceptance criteria."),
-    ("deployment", "Deployment owner", "Prepare, execute, verify, and if necessary roll back deployments."),
-    ("ui-ux-design", "UI/UX designer", "Own user flows, interaction design, visual system, responsive behavior, and handoff."),
+ROLE_CATALOG: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    ("senior-director", "Senior director", "Own architecture, planning, delegation, integration, and final decisions.", ()),
+    ("frontend", "Frontend developer", "Implement client-side interfaces, state, accessibility, and frontend tests.", ("ui-ux-design", "backend")),
+    ("backend", "Backend developer", "Implement APIs, services, domain logic, integrations, and backend tests.", ("database", "frontend", "security-review")),
+    ("database", "Database developer", "Own schemas, migrations, queries, data integrity, and persistence performance.", ("backend", "security-review")),
+    ("devops", "DevOps engineer", "Own CI/CD, environments, automation, observability, and operational readiness.", ("deployment", "security-review", "architecture-review")),
+    ("qa", "QA reviewer", "Independently verify requirements, regressions, edge cases, and release readiness.", ("functional-review",)),
+    ("security-review", "Security reviewer", "Review threats, dependencies, secrets, permissions, and security controls.", ("backend", "devops", "deployment")),
+    ("architecture-review", "Architecture reviewer", "Review boundaries, maintainability, structure, and cross-system effects.", ("backend", "devops")),
+    ("functional-review", "Functional reviewer", "Verify end-to-end behavior against the user's acceptance criteria.", ("qa",)),
+    ("deployment", "Deployment owner", "Prepare, execute, verify, and if necessary roll back deployments.", ("devops", "security-review")),
+    ("ui-ux-design", "UI/UX designer", "Own user flows, interaction design, visual system, responsive behavior, and handoff.", ("frontend",)),
 )
 
 ROLE_ALIASES = {
@@ -147,12 +147,12 @@ def parse_assignments(values: list[str]) -> dict[str, str | None]:
     return assignments
 
 
-def role_metadata(role: str) -> tuple[str, str]:
-    for slug, label, responsibility in ROLE_CATALOG:
+def role_metadata(role: str) -> tuple[str, str, tuple[str, ...]]:
+    for slug, label, responsibility, related_roles in ROLE_CATALOG:
         if slug == role:
-            return label, responsibility
+            return label, responsibility, related_roles
     label = role.replace("-", " ").title()
-    return label, "Own tasks assigned to this team role."
+    return label, "Own tasks assigned to this team role.", ()
 
 
 def render_roles_section(profile: dict[str, Any]) -> str:
@@ -172,7 +172,9 @@ def render_roles_section(profile: dict[str, Any]) -> str:
         primary = item.get("primary") or "unassigned"
         label = item.get("label") or role_metadata(role)[0]
         responsibility = str(item.get("responsibility") or role_metadata(role)[1]).replace("|", "/")
-        lines.append(f"| {label} (`{role}`) | {primary} | {responsibility} |")
+        related = item.get("related_roles")
+        related_suffix = f" (related: {', '.join(related)})" if related else ""
+        lines.append(f"| {label} (`{role}`) | {primary} | {responsibility}{related_suffix} |")
     lines.extend(["", ROLES_END])
     return "\n".join(lines)
 
@@ -210,7 +212,7 @@ def configure_team(
 
     existing = load_profile(root)
     existing_assignments = existing.get("assignments", {}) if not replace else {}
-    roles = [slug for slug, _label, _responsibility in ROLE_CATALOG]
+    roles = [slug for slug, _label, _responsibility, _related_roles in ROLE_CATALOG]
     for role in [*existing_assignments.keys(), *requested.keys()]:
         if role not in roles:
             roles.append(role)
@@ -219,14 +221,20 @@ def configure_team(
     for role in roles:
         previous = existing_assignments.get(role, {}) if isinstance(existing_assignments, dict) else {}
         primary = requested[role] if role in requested else (previous.get("primary") if isinstance(previous, dict) else None)
-        default_label, default_responsibility = role_metadata(role)
+        default_label, default_responsibility, default_related_roles = role_metadata(role)
         label = previous.get("label") if isinstance(previous, dict) and previous.get("label") else default_label
         responsibility = previous.get("responsibility") if isinstance(previous, dict) and previous.get("responsibility") else default_responsibility
+        related_roles = (
+            previous.get("related_roles")
+            if isinstance(previous, dict) and isinstance(previous.get("related_roles"), list)
+            else list(default_related_roles)
+        )
         assignments[role] = {
             "primary": primary,
             "primary_agent_id": identities.get(primary or "") if primary else None,
             "label": label,
             "responsibility": responsibility,
+            "related_roles": related_roles,
         }
 
     timestamp = isoformat_z(now or utc_now())
@@ -254,7 +262,7 @@ def interactive_assignments(root: Path) -> dict[str, str | None]:
         print(f"  {index}. {agent}")
     print("Enter an agent number/name, '-' for unassigned, or Enter to keep the shown default.\n")
     result: dict[str, str | None] = {}
-    for role, label, _responsibility in ROLE_CATALOG:
+    for role, label, _responsibility, _related_roles in ROLE_CATALOG:
         current = existing.get(role, {}).get("primary") if isinstance(existing, dict) else None
         default = current or "unassigned"
         answer = input(f"{label} [{default}]: ").strip()

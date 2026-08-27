@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 DECISION_MARKERS = ("resumen de ejecucion", "resumen de ejecución", "execution summary")
+CLOSING_MARKERS = ("pendiente de autorizacion de luis", "pendiente de autorización de luis")
 MESSAGE_RE = re.compile(
     r"(?m)^##\s+(?P<ts>\S+)\s+(?:--|—)\s+(?P<author>[a-zA-Z0-9_-]+)\s*\n"
     r"(?P<body>.*?)(?=^##\s+\S+\s+(?:--|—)\s+[a-zA-Z0-9_-]+\s*$|\Z)",
@@ -95,13 +96,23 @@ def find_decision(messages: list[dict[str, str]], after_ts: str) -> dict[str, st
     for message in messages:
         if message["ts"] <= after_ts:
             continue
-        # Prefer type: decision, but do not depend on an agent tagging it
-        # correctly -- the marker phrase is the real, explicit signal.
         if message["type"] not in ("decision", "review", "answer", "proposal"):
             continue
         lowered = message["body"].lower()
-        if any(marker in lowered for marker in DECISION_MARKERS):
-            return message
+        has_title = any(marker in lowered for marker in DECISION_MARKERS)
+        if not has_title:
+            continue
+        # type: decision is the deliberate, correctly-tagged signal -- the
+        # title marker alone is enough. Any other type is a real risk of a
+        # false positive: an ordinary message that merely *talks about*
+        # closing with a "RESUMEN DE EJECUCION" later (e.g. "dejo correr el
+        # debate antes de cerrar con RESUMEN DE EJECUCION") would otherwise
+        # be mistaken for the close itself. Require the literal closing
+        # authorization line too, since that combination is not something
+        # an agent would write in passing.
+        if message["type"] != "decision" and not any(marker in lowered for marker in CLOSING_MARKERS):
+            continue
+        return message
     return None
 
 

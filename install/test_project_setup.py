@@ -78,6 +78,12 @@ class TestProjectSetup(unittest.TestCase):
         self.assertFalse(codex["wake_policy"]["hidden_fallback_allowed"])
         self.assertEqual(codex["delivery"]["primary"], "visible-chat")
         self.assertFalse(codex["wake_policy"]["internal_first"])
+        # RESUMEN DE EJECUCION discussion-20260817-214951: codex never gets an
+        # automatic CLI fallback -- it silently disappeared from a live
+        # project's capabilities.json today because this generator never
+        # wrote the field at all, so any regeneration wiped it. Codex must
+        # stay False here; everyone else defaults to True.
+        self.assertFalse(codex["visible"]["cli_fallback"])
         opencode = next(item for item in capabilities["agents"] if item["agent"] == "opencode")
         self.assertEqual(opencode["delivery"]["primary"], "internal-inbox")
         self.assertEqual(opencode["delivery"]["fallback"], "visible-chat")
@@ -85,6 +91,7 @@ class TestProjectSetup(unittest.TestCase):
         self.assertEqual(opencode["vision"]["default_mode"], "observe")
         self.assertFalse(opencode["vision"]["observe_mode_is_blocking"])
         self.assertTrue(opencode["vision"]["strict_mode_is_blocking"])
+        self.assertTrue(opencode["visible"]["cli_fallback"])
 
     def test_agent_identity_is_stable_across_setup_reruns(self):
         self.setup()
@@ -190,6 +197,16 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("Development-team role contract:", agents_md)
         self.assertIn("Read the latest session logs in `.ai-collab/*.md` from other agents", agents_md)
         self.assertIn("Respect every `Do Not Touch (Avoid Conflicts)` section before analyzing, replying, or editing", agents_md)
+        # RESUMEN DE EJECUCION discussion-20260820-113730 (Luis's non-negotiable
+        # continuous-peer-autonomy mandate): every agent's own rule file must
+        # carry the proactive review, mandatory-audit-categories, drift-alert,
+        # and timeout-no-response rules, not just this project's own docs.
+        self.assertIn("Proactive peer review (non-negotiable", agents_md)
+        self.assertIn("related_roles", agents_md)
+        self.assertIn("mandatory only for security/auth/permissions, deployment/infrastructure", agents_md)
+        self.assertIn("Scope-drift correction: any peer may flag drift with `type: blocker`", agents_md)
+        self.assertIn("Timeout-no-response is non-negotiable", agents_md)
+        self.assertIn("converge on an implementation plan through", agents_md)
 
     def test_opencode_gets_agent_specific_rules_file(self):
         self.setup()

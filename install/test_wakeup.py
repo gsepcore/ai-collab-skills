@@ -37,6 +37,12 @@ run_ide_terminal_visible_adapter = _mod.run_ide_terminal_visible_adapter
 prepare_ide_terminal_visible_surface = _mod.prepare_ide_terminal_visible_surface
 prepare_antigravity_chat_surface = _mod.prepare_antigravity_chat_surface
 run_ide_native_chat_adapter = _mod.run_ide_native_chat_adapter
+load_roles = _mod.load_roles
+agent_roles_for = _mod.agent_roles_for
+related_role_owners = _mod.related_role_owners
+is_trivial_task = _mod.is_trivial_task
+has_review_request = _mod.has_review_request
+scan_missing_reviews = _mod.scan_missing_reviews
 
 
 SAMPLE_INBOX = """\
@@ -2341,6 +2347,224 @@ project: gsep
         self.assertEqual(events[0]["target_slug"], "opencode")
         self.assertEqual(events[0]["project_path"], str(self.root))
         self.assertEqual(events[0]["thread_path"], str(discussion))
+
+
+class TestScanMissingReviews(unittest.TestCase):
+    """Tests for the daemon safety-net review dispatch (scan_missing_reviews)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.collab = self.root / ".ai-collab"
+        self.live = self.collab / "live"
+        self.live.mkdir(parents=True)
+        self.events = self.root / "events.json"
+        self.state = self.root / "state.json"
+        self.log = self.root / "wakeup.log"
+        self.now = datetime(2026, 8, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+        # Write agents.json with a two-agent roster
+        (self.collab / "agents.json").write_text(
+            json.dumps({"agents": ["opencode", "claude-code"]}),
+            encoding="utf-8",
+        )
+
+        # Write roles.json with related_roles
+        (self.collab / "roles.json").write_text(
+            json.dumps({
+                "assignments": {
+                    "devops": {
+                        "primary": "opencode",
+                        "related_roles": ["security-review", "deployment", "backend"],
+                    },
+                    "security-review": {
+                        "primary": "opencode",
+                        "related_roles": ["backend"],
+                    },
+                    "deployment": {
+                        "primary": "opencode",
+                        "related_roles": ["devops"],
+                    },
+                    "senior-director": {
+                        "primary": "claude-code",
+                        "related_roles": [],
+                    },
+                    "backend": {
+                        "primary": "claude-code",
+                        "related_roles": ["database", "frontend", "security-review"],
+                    },
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        # Write events file
+        self.events.write_text("[]", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_live_state(self, agent: str, phase: str, updated: str, files: list[str], summary: str = "test work"):
+        state = {
+            "agent": agent,
+            "phase": phase,
+            "updated": updated,
+            "files_in_scope": files,
+            "summary": summary,
+        }
+        (self.live / f"{agent}.agent.json").write_text(
+            json.dumps(state), encoding="utf-8"
+        )
+
+    def test_nontrivial_task_dispatches_review(self):
+        """Non-trivial task (2 files, 2 roles) dispatches wake to related role owner."""
+        self._write_live_state(
+            "opencode", "done",
+            (self.now - timedelta(seconds=45)).isoformat(),
+            ["install/ai-collab-wakeup.py", "install/daemon.sh"],
+            "Implemented review safety-net",
+        )
+        os.environ["AI_COLLAB_WAKEUP_ADAPTER"] = "notify-only"
+        try:
+            results = scan_missing_reviews(
+                self.root,
+                now=self.now,
+                safety_net_seconds=30,
+                events_file=self.events,
+                state_file=self.state,
+                log_file=self.log,
+            )
+        finally:
+            del os.environ["AI_COLLAB_WAKEUP_ADAPTER"]
+
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertEqual(r["agent_slug"], "opencode")
+        self.assertEqual(r["action"], "review-dispatched")
+        self.assertGreater(len(r["dispatched"]), 0)
+        # claude-code owns backend (related to devops/security-review/deployment)
+        targets = [d["target_slug"] for d in r["dispatched"]]
+        self.assertIn("claude-code", targets)
+
+    def test_trivial_task_no_dispatch(self):
+        """Trivial task (1 config file) produces no review dispatch."""
+        self._write_live_state(
+            "opencode", "done",
+            (self.now - timedelta(seconds=45)).isoformat(),
+            ["CONTEXT.md"],
+            "Updated context",
+        )
+        os.environ["AI_COLLAB_WAKEUP_ADAPTER"] = "notify-only"
+        try:
+            results = scan_missing_reviews(
+                self.root,
+                now=self.now,
+                safety_net_seconds=30,
+                events_file=self.events,
+                state_file=self.state,
+                log_file=self.log,
+            )
+        finally:
+            del os.environ["AI_COLLAB_WAKEUP_ADAPTER"]
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["action"], "skipped")
+        self.assertEqual(results[0]["reason"], "trivial-task")
+
+    def test_single_file_capabilities_or_roles_change_is_never_trivial(self):
+        # Caught in review before sync: an earlier revision grouped
+        # capabilities.json/roles.json with genuinely trivial config
+        # (TEAM.md), which made a single-file edit to either file silently
+        # skip review -- exactly backwards, since these two files govern
+        # every agent's routing and wake behavior (RESUMEN DE EJECUCION
+        # discussion-20260820-113730: "cualquier archivo dentro de install/,
+        # capabilities.json, o roles.json" is always non-trivial).
+        self.assertFalse(is_trivial_task([".ai-collab/capabilities.json"]))
+        self.assertFalse(is_trivial_task([".ai-collab/roles.json"]))
+        self.assertFalse(is_trivial_task(["capabilities.json"]))
+        self.assertTrue(is_trivial_task([".ai-collab/TEAM.md"]))
+
+    def test_review_already_sent_deduped(self):
+        """If a review was already dispatched, it is not sent again."""
+        updated = (self.now - timedelta(seconds=45))
+        self._write_live_state(
+            "opencode", "done",
+            updated.isoformat(),
+            ["install/ai-collab-wakeup.py", "install/daemon.sh"],
+            "Implemented review safety-net",
+        )
+        # Pre-populate state with an existing review using the exact key format
+        # isoformat_z produces "Z" suffix; has_review_request builds "review:{agent}:{task_key}"
+        task_key = f"opencode:{updated.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')}"
+        state_data = {
+            f"review:opencode:{task_key}": {
+                "dispatched": True,
+                "dispatched_at": self.now.isoformat(),
+            }
+        }
+        self.state.write_text(json.dumps(state_data), encoding="utf-8")
+
+        os.environ["AI_COLLAB_WAKEUP_ADAPTER"] = "notify-only"
+        try:
+            results = scan_missing_reviews(
+                self.root,
+                now=self.now,
+                safety_net_seconds=30,
+                events_file=self.events,
+                state_file=self.state,
+                log_file=self.log,
+            )
+        finally:
+            del os.environ["AI_COLLAB_WAKEUP_ADAPTER"]
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["action"], "deduped")
+        self.assertEqual(results[0]["reason"], "review-already-sent")
+
+    def test_role_with_no_related_roles_no_dispatch(self):
+        """A role with empty related_roles dispatches nothing when no other roles have cross-agent related roles."""
+        self._write_live_state(
+            "opencode", "done",
+            (self.now - timedelta(seconds=45)).isoformat(),
+            ["install/ai-collab-wakeup.py", "install/daemon.sh"],
+            "Devops work",
+        )
+        # Rewrite roles so opencode's roles only relate to other opencode-owned roles
+        (self.collab / "roles.json").write_text(
+            json.dumps({
+                "assignments": {
+                    "devops": {
+                        "primary": "opencode",
+                        "related_roles": ["security-review", "deployment"],
+                    },
+                    "security-review": {
+                        "primary": "opencode",
+                        "related_roles": ["devops"],
+                    },
+                    "deployment": {
+                        "primary": "opencode",
+                        "related_roles": ["devops"],
+                    },
+                }
+            }),
+            encoding="utf-8",
+        )
+        os.environ["AI_COLLAB_WAKEUP_ADAPTER"] = "notify-only"
+        try:
+            results = scan_missing_reviews(
+                self.root,
+                now=self.now,
+                safety_net_seconds=30,
+                events_file=self.events,
+                state_file=self.state,
+                log_file=self.log,
+            )
+        finally:
+            del os.environ["AI_COLLAB_WAKEUP_ADAPTER"]
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["action"], "skipped")
+        self.assertEqual(results[0]["reason"], "no-related-roles")
 
 
 if __name__ == "__main__":

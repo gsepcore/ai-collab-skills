@@ -412,6 +412,292 @@ def emit_escalation_notice(project_root: Path, targets: list[str], source: Path,
         handle.write(json.dumps(notice, sort_keys=True) + "\n")
 
 
+# ---------------------------------------------------------------------------
+# Daemon safety-net for peer review awareness (point 1 of RESUMEN DE EJECUCION
+# in discussion-20260820-113730).  When an agent completes non-trivial work but
+# forgets to fire a review request to related-role owners, the daemon detects
+# this after a configurable delay and dispatches the review wake automatically.
+# ---------------------------------------------------------------------------
+
+DEFAULT_REVIEW_SAFETY_NET_SECONDS = 30
+TRIVIAL_CONFIG_PATTERNS = frozenset({"team.md"})
+# capabilities.json/roles.json govern every agent's routing and wake
+# behavior -- a change to either is always non-trivial regardless of file
+# count (RESUMEN DE EJECUCION discussion-20260820-113730). An earlier
+# revision of this file grouped them with genuinely trivial config (like
+# TEAM.md) by mistake, which made scan_missing_reviews silently skip review
+# for the two files that most need one; caught in review before sync.
+HIGH_IMPACT_BASENAMES = frozenset({"capabilities.json", "roles.json"})
+TRIVIAL_DIR_PREFIXES = ("install/",)
+
+
+def load_roles(project_root: Path) -> dict[str, Any]:
+    """Load .ai-collab/roles.json from *project_root*.
+
+    Returns the ``assignments`` dict mapping role names to their metadata
+    (including ``primary``, ``related_roles``, etc.) or an empty dict on any
+    read/parse error.
+    """
+    collab = project_root / ".ai-collab"
+    data = load_json(collab / "roles.json", {})
+    if not isinstance(data, dict):
+        return {}
+    return data.get("assignments", {}) if isinstance(data.get("assignments"), dict) else {}
+
+
+def agent_roles_for(assignments: dict[str, Any], agent_slug: str) -> list[str]:
+    """Return the list of role names where *agent_slug* is the ``primary`` owner."""
+    roles: list[str] = []
+    for role_name, meta in assignments.items():
+        if isinstance(meta, dict) and str(meta.get("primary", "")).lower() == agent_slug.lower():
+            roles.append(role_name)
+    return roles
+
+
+def related_role_owners(assignments: dict[str, Any], agent_roles: list[str]) -> dict[str, str]:
+    """Map ``related_role -> primary_owner`` for all roles related to *agent_roles*.
+
+    Excludes roles owned by the same agent (an agent should not review their own
+    work) and roles with no ``primary``.
+    """
+    self_owners = set()
+    for role_name in agent_roles:
+        meta = assignments.get(role_name)
+        if isinstance(meta, dict):
+            owner = str(meta.get("primary", "")).lower()
+            if owner:
+                self_owners.add(owner)
+    result: dict[str, str] = {}
+    for role_name in agent_roles:
+        meta = assignments.get(role_name)
+        if not isinstance(meta, dict):
+            continue
+        for related in meta.get("related_roles", []):
+            if not isinstance(related, str):
+                continue
+            related_meta = assignments.get(related, {})
+            if not isinstance(related_meta, dict):
+                continue
+            owner = str(related_meta.get("primary", "")).lower()
+            if owner and owner not in self_owners:
+                result[related] = owner
+    return result
+
+
+def is_trivial_task(files_in_scope: list[str]) -> bool:
+    """Return True if the completed task is considered trivial (no review needed).
+
+    A task is trivial when:
+    - ``files_in_scope`` is empty or has exactly one file **and** that file is
+      a known config-only file (e.g. session logs, CONTEXT.md) **and** it is
+      not inside ``install/`` or other high-impact directories.
+    """
+    if len(files_in_scope) == 0:
+        return True
+    if any(Path(f).name.lower() in HIGH_IMPACT_BASENAMES for f in files_in_scope):
+        return False
+    if len(files_in_scope) > 1:
+        return False
+    # Single file — check if it is in a trivial location
+    single = files_in_scope[0]
+    basename = Path(single).name.lower()
+    if basename in TRIVIAL_CONFIG_PATTERNS:
+        return True
+    for prefix in TRIVIAL_DIR_PREFIXES:
+        if single.startswith(prefix) or f"/{prefix}" in single:
+            return False
+    return True
+
+
+def has_review_request(project_root: Path, agent_slug: str, task_key: str, state_file: Path | None = None) -> bool:
+    """Check whether a review request was already sent for this agent + task.
+
+    Looks in both the dedup state file and the agent's session log to avoid
+    duplicate dispatches.
+    """
+    if state_file is None:
+        state_file = Path(os.environ.get("AI_COLLAB_WAKEUP_STATE_FILE", str(DEFAULT_STATE_FILE))).expanduser()
+    state = load_json(state_file, {})
+    if isinstance(state, dict):
+        review_key = f"review:{agent_slug}:{task_key}"
+        entry = state.get(review_key)
+        if isinstance(entry, dict) and (entry.get("dispatched") or entry.get("seen")):
+            return True
+        if isinstance(entry, str):
+            return True
+    return False
+
+
+def mark_review_dispatched(
+    project_root: Path,
+    agent_slug: str,
+    task_key: str,
+    state_file: Path | None = None,
+) -> None:
+    """Record that a review wake was dispatched so it is not repeated."""
+    if state_file is None:
+        state_file = Path(os.environ.get("AI_COLLAB_WAKEUP_STATE_FILE", str(DEFAULT_STATE_FILE))).expanduser()
+    state = load_json(state_file, {})
+    if not isinstance(state, dict):
+        state = {}
+    review_key = f"review:{agent_slug}:{task_key}"
+    state[review_key] = {"dispatched": True, "dispatched_at": isoformat_z(utc_now())}
+    # Cap state size
+    if len(state) > MAX_EVENTS:
+        keys = list(state.keys())
+        for old_key in keys[: len(state) - MAX_EVENTS]:
+            del state[old_key]
+    write_json(state_file, state)
+
+
+def scan_missing_reviews(
+    project_root: Path,
+    *,
+    now: datetime | None = None,
+    safety_net_seconds: int | None = None,
+    adapter_mode: str | None = None,
+    adapter_runner=subprocess.run,
+    events_file: Path | None = None,
+    state_file: Path | None = None,
+    log_file: Path = DEFAULT_LOG_FILE,
+) -> list[dict[str, Any]]:
+    """Scan all registered agents for completed non-trivial work missing a review.
+
+    For each agent whose live phase is ``done`` for at least
+    *safety_net_seconds* (default: ``AI_COLLAB_REVIEW_SAFETY_NET_SECONDS``
+    or 30), determine whether the task was non-trivial and whether a review
+    request was already dispatched.  If not, dispatch a wake to the owner of
+    each related role.
+
+    Returns a list of action dicts describing what was (or was not) done.
+    """
+    if now is None:
+        now = utc_now()
+    if safety_net_seconds is None:
+        safety_net_seconds = max(
+            0,
+            coerce_int(
+                os.environ.get("AI_COLLAB_REVIEW_SAFETY_NET_SECONDS"),
+                DEFAULT_REVIEW_SAFETY_NET_SECONDS,
+            ),
+        )
+    if events_file is None:
+        events_file = Path(os.environ.get("AI_COLLAB_WAKEUP_EVENTS_FILE", str(DEFAULT_EVENTS_FILE))).expanduser()
+
+    assignments = load_roles(project_root)
+    if not assignments:
+        return []
+
+    live = project_root / ".ai-collab" / "live"
+    collab = project_root / ".ai-collab"
+    agents = load_json(collab / "agents.json", {})
+    roster: list[str] = []
+    if isinstance(agents, dict):
+        raw = agents.get("agents", agents.get("roster", []))
+        if isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, str):
+                    roster.append(item.lower())
+                elif isinstance(item, dict):
+                    slug = str(item.get("agent") or item.get("slug") or "").lower()
+                    if slug:
+                        roster.append(slug)
+
+    results: list[dict[str, Any]] = []
+    for agent_slug in roster:
+        agent_roles = agent_roles_for(assignments, agent_slug)
+        if not agent_roles:
+            continue
+
+        # Read live state to check if agent just finished something
+        live_state: dict[str, Any] = {}
+        for path in (live / f"{agent_slug}.agent.json", live / f"{agent_slug}.json"):
+            loaded = load_json(path, {})
+            if isinstance(loaded, dict) and loaded:
+                live_state = loaded
+                break
+
+        if not live_state:
+            continue
+
+        phase = str(live_state.get("phase") or live_state.get("status") or "").lower()
+        if phase not in {"done", "idle"}:
+            continue
+
+        updated = parse_iso(str(live_state.get("updated") or ""))
+        if not updated:
+            continue
+        elapsed = (now - updated).total_seconds()
+        if elapsed < safety_net_seconds:
+            continue
+
+        files_in_scope = live_state.get("files_in_scope", [])
+        if not isinstance(files_in_scope, list):
+            files_in_scope = []
+        if is_trivial_task(files_in_scope):
+            results.append({"agent_slug": agent_slug, "action": "skipped", "reason": "trivial-task"})
+            continue
+
+        # Build a dedup key from agent + timestamp of completion
+        task_key = f"{agent_slug}:{isoformat_z(updated)}"
+
+        if has_review_request(project_root, agent_slug, task_key, state_file=state_file):
+            results.append({"agent_slug": agent_slug, "action": "deduped", "reason": "review-already-sent"})
+            continue
+
+        # Find related role owners to notify
+        owners = related_role_owners(assignments, agent_roles)
+        if not owners:
+            results.append({"agent_slug": agent_slug, "action": "skipped", "reason": "no-related-roles"})
+            continue
+
+        summary = live_state.get("summary", "unknown task")
+        file_list = ", ".join(str(f) for f in files_in_scope[:5])
+        dispatched: list[dict[str, str]] = []
+        for related_role, owner_slug in owners.items():
+            synthetic_prompt = (
+                f"@{owner_slug} cerro trabajo no trivial (archivos: {file_list}) "
+                f"relacionado con tu rol {related_role}. Revisalo y comenta en su "
+                f"hilo/log si corresponde. Contexto: {summary}"
+            )
+            wake_event = {
+                "task_id": task_key,
+                "project_path": str(project_root),
+                "target_slug": owner_slug,
+                "inbox_path": "",
+                "source_path": str(live / f"{agent_slug}.agent.json"),
+                "source_type": "daemon-review-safety-net",
+                "thread_path": "",
+                "synthetic_prompt": synthetic_prompt,
+            }
+            try:
+                adapter_result = dispatch_wake_event(
+                    wake_event,
+                    events_file=events_file,
+                    adapter_mode=adapter_mode,
+                    adapter_runner=adapter_runner,
+                )
+                dispatched.append({"target_slug": owner_slug, "related_role": related_role, "result": adapter_result})
+            except Exception as exc:
+                dispatched.append({"target_slug": owner_slug, "related_role": related_role, "error": str(exc)})
+
+        mark_review_dispatched(project_root, agent_slug, task_key, state_file=state_file)
+        results.append({
+            "agent_slug": agent_slug,
+            "action": "review-dispatched",
+            "files_in_scope": files_in_scope,
+            "dispatched": dispatched,
+        })
+        log(
+            f"REVIEW_SAFETY_NET agent={agent_slug} files={file_list} "
+            f"dispatched_to={[d['target_slug'] for d in dispatched]} "
+            f"project={project_root}",
+            log_file,
+        )
+
+    return results
+
+
 def latest_thread_message(body: str) -> dict[str, str] | None:
     matches = list(re.finditer(r"(?m)^##\s+(.+?)\s+(?:--|—)\s+([a-zA-Z0-9_-]+)\s*$", body))
     if not matches:
@@ -2921,10 +3207,16 @@ def main(argv: list[str]) -> int:
         )
         print(json.dumps({"action": "prepare-visible", "ok": ok, "results": results}, sort_keys=True))
         return 0 if ok else 1
+    if len(argv) >= 3 and argv[1] == "--scan-reviews":
+        project_root = Path(argv[2]).expanduser().resolve()
+        results = scan_missing_reviews(project_root)
+        print(json.dumps({"action": "scan-reviews", "results": results}, sort_keys=True))
+        return 0
     if len(argv) < 3:
         print(
             "Usage: ai-collab-wakeup.py <project> <inbox.md|thread.md> | "
-            "--prepare-visible <project-root> <agent,...>",
+            "--prepare-visible <project-root> <agent,...> | "
+            "--scan-reviews <project-root>",
             file=sys.stderr,
         )
         return 2

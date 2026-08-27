@@ -95,6 +95,35 @@ class TestTeamRoles(unittest.TestCase):
         self.assertIsNone(parsed["ui-ux-design"])
         self.assertEqual(parsed["database"], "claude-code")
 
+    def test_catalog_roles_get_default_related_roles(self):
+        # RESUMEN DE EJECUCION discussion-20260820-113730: proactive cross-role
+        # review needs explicit adjacency, not inferred, so every catalog role
+        # ships with a related_roles list out of the box.
+        profile = _mod.configure_team(
+            self.root,
+            {"backend": "claude-code", "frontend": "codex", "ui-ux-design": "codex"},
+            now=self.now,
+        )
+
+        self.assertEqual(profile["assignments"]["backend"]["related_roles"], ["database", "frontend", "security-review"])
+        self.assertEqual(profile["assignments"]["ui-ux-design"]["related_roles"], ["frontend"])
+        self.assertEqual(profile["assignments"]["senior-director"]["related_roles"], [])
+
+    def test_custom_role_defaults_to_no_related_roles(self):
+        profile = _mod.configure_team(self.root, {"product-research": "codex"}, now=self.now)
+
+        self.assertEqual(profile["assignments"]["product-research"]["related_roles"], [])
+
+    def test_related_roles_survive_partial_update(self):
+        _mod.configure_team(self.root, {"backend": "claude-code"}, now=self.now)
+        saved = json.loads((self.root / ".ai-collab/roles.json").read_text(encoding="utf-8"))
+        saved["assignments"]["backend"]["related_roles"] = ["database"]
+        (self.root / ".ai-collab/roles.json").write_text(json.dumps(saved), encoding="utf-8")
+
+        profile = _mod.configure_team(self.root, {"frontend": "codex"}, now=self.now)
+
+        self.assertEqual(profile["assignments"]["backend"]["related_roles"], ["database"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
