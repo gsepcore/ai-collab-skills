@@ -2082,6 +2082,26 @@ def run_antigravity_chat_adapter(
     guardrail = visible_guardrail(input_data, "antigravity-chat")
     if guardrail:
         return guardrail
+    # codex has no public API to target its visible panel -- `antigravity-ide
+    # chat --reuse-window` reuses "the last active window" (there is no way
+    # to address codex's pane specifically), and an automated retry that
+    # doesn't land can pop an entirely new, unwanted Antigravity IDE window
+    # instead (confirmed live 2026-08-27, no human watching to notice).
+    # The unattended daemon loop must never risk that; skip straight to a
+    # degraded/no-op result and let the thread's honest timeout-no-response
+    # note do its job. A human-invoked converse.py call (someone actually
+    # watching, e.g. a deliberate test) is unaffected -- it doesn't run in
+    # daemon context.
+    if truthy_env("AI_COLLAB_DAEMON_CONTEXT") and input_data["target_slug"] in {"codex", "antigravity"}:
+        return {
+            "status": "degraded",
+            "message": (
+                "codex has no addressable visible-chat API; automated background dispatch is "
+                "disabled to avoid spawning stray Antigravity IDE windows unattended. Requires "
+                "a human directly in Codex's window, or an explicit interactive converse.py call."
+            ),
+            "adapter_name": "antigravity-chat-daemon-skip",
+        }
     if input_data["target_slug"] not in {"codex", "antigravity"}:
         return {
             "status": "failed",

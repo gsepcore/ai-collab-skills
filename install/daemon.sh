@@ -16,6 +16,14 @@ UPDATE_INTERVAL_SECONDS="${AI_COLLAB_UPDATE_INTERVAL_SECONDS:-21600}"
 RECOVERY_INTERVAL_SECONDS="${AI_COLLAB_RECOVERY_INTERVAL_SECONDS:-300}"
 MAX_NOTIFICATIONS=50
 
+# Marks every wakeup.py invocation below as coming from the unattended
+# background loop (as opposed to a human/agent running converse.py directly
+# with someone watching). codex has no public API to target its visible
+# panel -- automated retries here don't just fail silently, they can pop a
+# new Antigravity window each time (2026-08-27). Skip codex's real dispatch
+# in this context; ai-collab-wakeup.py reads this to decide.
+export AI_COLLAB_DAEMON_CONTEXT=1
+
 log() { echo "[AI-COLLAB] $(date -u +"%Y-%m-%dT%H:%M:%SZ") $*" >> "$LOG_FILE"; }
 
 # Fix #3 (OpenCode) — trap crashes and log them

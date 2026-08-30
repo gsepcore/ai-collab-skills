@@ -1489,6 +1489,48 @@ class TestAdapters(unittest.TestCase):
         self.assertIn("--add-file", calls[0][0])
         self.assertEqual(calls[0][0][-1], "read visible inbox")
 
+    def test_antigravity_chat_adapter_skips_real_dispatch_in_daemon_context(self):
+        # codex has no addressable visible-chat API; --reuse-window can pop a
+        # stray new Antigravity IDE window instead of reusing one when the
+        # unattended background daemon retries a mention nobody is watching
+        # (confirmed live 2026-08-27). The daemon loop sets
+        # AI_COLLAB_DAEMON_CONTEXT=1; that must short-circuit before any
+        # subprocess is invoked, while a direct/interactive call (no env var)
+        # still dispatches for real.
+        os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
+        os.environ["AI_COLLAB_ANTIGRAVITY_BIN"] = "/usr/bin/antigravity"
+        os.environ["AI_COLLAB_DAEMON_CONTEXT"] = "1"
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append(command)
+
+            class Completed:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Completed()
+
+        try:
+            result = run_wakeup_adapter(
+                {
+                    "project_path": "/tmp/project",
+                    "target_slug": "codex",
+                    "inbox_path": "/tmp/project/.ai-collab/inbox-codex.md",
+                    "task_id": "task-123",
+                    "synthetic_prompt": "read visible inbox",
+                },
+                mode="antigravity-chat",
+                runner=fake_runner,
+            )
+        finally:
+            del os.environ["AI_COLLAB_DAEMON_CONTEXT"]
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["adapter_name"], "antigravity-chat-daemon-skip")
+        self.assertEqual(calls, [])
+
     def test_codex_acp_builds_protocol_messages(self):
         messages = _mod.build_codex_acp_messages(
             {
