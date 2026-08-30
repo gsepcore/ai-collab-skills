@@ -9,13 +9,13 @@ Identity:
 - agent_id: `agt_c80f2f2c6925073c`
 - session_id: generated uniquely at runtime; never reuse another session's code
 - role: `worker`
-- container: `unknown`
+- container: `terminal`
 - model: `unknown`
 
 Always-on activation contract:
 - The presence of `.ai-collab/agents.json` means collaboration is already enabled for every normal request in this project. Never wait for the user to say `collab`, name a feature, or repeat an agent-routing instruction.
 - At the beginning of every user or agent turn, run this once before unrelated work: `python3 ~/.claude/ai-collab-turn.py preflight --root <project-root> --agent opencode --prompt "<short faithful summary of the current request>"`. Treat its `required_actions` as mandatory. Reuse the returned runtime `session_id` only for this running session.
-- Infer the collaboration behavior from intent: team execution or multiple role owners -> orchestrate; debate/review/opinions -> convene a discussion; another role owner -> route to that owner; vacant role -> ask the user/director to assign it; direct mention/question -> converse in the existing thread; small single-owner work -> execute directly with shared live/log state.
+- Infer the collaboration behavior from intent: a request spanning 2+ role owners -> converge on an implementation plan through `ai-collab-debate.py` before anyone executes (non-negotiable default; only an explicit user override like "hazlo directo" skips straight to orchestrate); debate/review/opinions -> convene a discussion; another role owner -> route to that owner; vacant role -> ask the user/director to assign it; direct mention/question -> converse in the existing thread; small single-owner work -> execute directly with shared live/log state. Never bring the user a plan before the participating role owners have actually converged on it in that debate thread.
 - Unread inboxes and unanswered current-thread mentions take priority over unrelated work. Do not make the user ask you to check them.
 - Complete live updates, handoffs, and session logs automatically. Never tell the user to invoke a Collab feature that you can invoke yourself.
 - During onboarding or after a catalog change, preflight returns the complete `capability_catalog`; read and acknowledge it once. After acknowledgement, preflight returns only its digest and feature IDs so you retain awareness without rereading identical descriptions every turn.
@@ -23,7 +23,7 @@ Always-on activation contract:
 - If the helper is missing or reports inactive, fall back to the context checks below and report the installation/setup defect; do not silently behave as if Collab were absent.
 
 Context fallback only when the always-on helper is missing or returns `active: false`:
-0. If the always-on turn helper did not return an active session, register this exact runtime before doing work: `python3 ~/.claude/ai-collab-session.py register --root <project-root> --agent opencode --agent-id agt_c80f2f2c6925073c --container unknown`. Reuse the returned `session_id` only for this running session and include it in live reports, claims, messages, and logs.
+0. If the always-on turn helper did not return an active session, register this exact runtime before doing work: `python3 ~/.claude/ai-collab-session.py register --root <project-root> --agent opencode --agent-id agt_c80f2f2c6925073c --container terminal`. Reuse the returned `session_id` only for this running session and include it in live reports, claims, messages, and logs.
 1. Read `.ai-collab/CONTEXT.md` if it exists; otherwise read `.ai-collab/PROTOCOL.md`.
 2. Read `.ai-collab/TEAM.md` to know the registered agents, their containers, models, and rule files.
 3. Read `.ai-collab/capabilities.json`. Know your internal channels, visible adapter, wake policy, vision method, and every peer's supported routes before sending work. Never treat an unavailable route as successful.
@@ -41,6 +41,10 @@ Development-team role contract:
 - One agent may own several roles. A role with `primary: null` is vacant; ask the user/director before routing that work.
 - Never silently take work from another role owner. Use a task thread for cross-role questions and handoffs.
 - Explicit task ownership in an inbox or directed run is authoritative even when it differs from the default role profile.
+- Proactive peer review (non-negotiable, RESUMEN DE EJECUCION discussion-20260820-113730): when you close non-trivial work (2+ files affecting multiple roles, or any change to `install/`, `capabilities.json`, or `roles.json`), initiate a `review` request yourself to the nearest owner in that role's `related_roles` list via `ai-collab-converse.py` -- do not wait to be asked. Do not wait passively for someone else to notice your work; the daemon only exists as a 30s safety net if you forget.
+- Cross-role audit is mandatory only for security/auth/permissions, deployment/infrastructure, and changes to `capabilities.json` or `roles.json` -- get the related role owner's sign-off in the same thread before marking that work done. For everything else, proactive review is recommended but not blocking: if the related owner does not respond in the wait window, note that explicitly in the thread and proceed.
+- Scope-drift correction: any peer may flag drift with `type: blocker` at any time, non-blocking, and must state (a) what deviated, (b) the original agreed plan, (c) a proposed correction -- an alert missing those three is noise, not signal. Only the affected role's owner or the director may pause or revert work. Three or more drift alerts on the same task is a systemic pattern; escalate to the director explicitly rather than repeating the alert.
+- Timeout-no-response is non-negotiable: if a role owner does not answer a review request, audit request, or drift alert within the wait window, say so explicitly in the thread and keep moving -- never block in silence waiting for a peer. This applies in particular to native-chat-only agents (e.g. Codex) whose wake depends on an attended visible window.
 
 Inbox claim contract:
 - Change `status: unread` to `status: claimed`.
@@ -73,7 +77,7 @@ Required log frontmatter:
 ai: OpenCode (unknown model)
 agent: opencode
 agent_id: agt_c80f2f2c6925073c
-container: unknown
+container: terminal
 model: unknown
 session: {runtime session_id}
 session_id: {runtime session_id}
