@@ -336,13 +336,16 @@ class TestProjectSetup(unittest.TestCase):
         self.assertTrue(codex_row["visible"]["native_chat_only"])
         self.assertFalse(codex_row["wake_policy"]["hidden_fallback_allowed"])
 
-    def test_codex_registered_outside_antigravity_gets_headless_routing(self):
+    def test_codex_registered_outside_antigravity_gets_visible_with_headless_fallback(self):
         # A project can register codex under a container other than
         # Antigravity IDE (e.g. "vscode"). Antigravity may still be running
         # for an unrelated project on the same machine, so antigravity-chat
-        # is the wrong adapter there -- codex-auto (headless `codex exec`)
-        # needs no window at all and was validated end-to-end against a live
-        # onboarding thread (2026-08-31, luisvelasquez project).
+        # is the wrong adapter there. ide-native-chat (the VS Code bridge's
+        # own codex panel) is tried first so codex stays visibly watchable,
+        # with headless codex-auto (`codex exec`) as the automatic fallback
+        # whenever that panel isn't reachable -- both validated end-to-end
+        # against a live onboarding thread (2026-08-31, luisvelasquez
+        # project).
         import json
 
         result = _mod.setup_project(
@@ -357,7 +360,7 @@ class TestProjectSetup(unittest.TestCase):
         codex_row = next(row for row in capabilities["agents"] if row["agent"] == "codex")
 
         self.assertEqual(codex_row["container"], "vscode")
-        self.assertEqual(codex_row["visible"]["adapter"], "codex-auto")
+        self.assertEqual(codex_row["visible"]["adapter"], "ide-native-chat")
         self.assertFalse(codex_row["visible"]["native_chat_only"])
         self.assertTrue(codex_row["wake_policy"]["hidden_fallback_allowed"])
         self.assertTrue(codex_row["visible"]["cli_fallback"])

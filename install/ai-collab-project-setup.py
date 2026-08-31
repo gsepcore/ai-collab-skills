@@ -163,11 +163,14 @@ def visible_adapter_for(agent: str, container: str = "") -> str:
         # in Antigravity IDE. A project can register codex under a different
         # container (e.g. "vscode") while Antigravity runs unrelated to it on
         # the same machine -- targeting antigravity-chat there would reuse/pop
-        # the WRONG project's window. codex-auto (headless `codex exec`)
-        # needs no window at all and was validated end-to-end against a live
-        # onboarding thread (2026-08-31, luisvelasquez project).
+        # the WRONG project's window. ide-native-chat (the VS Code bridge's
+        # own codex panel) is tried first there so codex is visibly watchable
+        # like every other agent, with headless codex-auto as the automatic
+        # fallback whenever that panel isn't reachable -- both validated
+        # end-to-end against a live onboarding thread (2026-08-31,
+        # luisvelasquez project).
         if container and container != "antigravity":
-            return "codex-auto"
+            return "ide-native-chat"
         return "antigravity-chat"
     return "visible-adapter-required"
 

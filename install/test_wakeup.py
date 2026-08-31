@@ -1578,6 +1578,107 @@ class TestAdapters(unittest.TestCase):
         self.assertTrue(calls)
         self.assertIn("exec", calls[0])
 
+    def test_codex_tries_visible_vscode_panel_before_falling_back_to_auto(self):
+        # ide-native-chat (the VS Code bridge's chatgpt.openSidebar + paste)
+        # is genuinely different from the Antigravity `--reuse-window` hack:
+        # it fails closed with no side effect when the exact project bridge
+        # isn't reachable, so it is safe to try first even unattended.
+        # Luis (2026-08-31, luisvelasquez project): wants codex visible in
+        # its own panel whenever possible, headless codex-auto only as the
+        # safety net when the panel isn't reachable.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            collab = root / ".ai-collab"
+            collab.mkdir()
+            (collab / "agents.json").write_text(
+                json.dumps({"agents": [{"agent": "codex", "agent_id": "agt_codex", "container": "vscode"}]}),
+                encoding="utf-8",
+            )
+            os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = str(root)
+
+            original_native = _mod.run_ide_native_chat_adapter
+            visible_calls = []
+
+            def fake_visible(input_data, *, timeout, poster=None, registry_dir=None):
+                visible_calls.append(input_data["target_slug"])
+                return {
+                    "status": "success",
+                    "adapter_name": "ide-native-chat",
+                    "message": "prompt submitted to codex's exact native chat",
+                }
+
+            def fail_runner(cmd, **kwargs):
+                raise AssertionError("codex-auto must not run when the visible panel already succeeded")
+
+            _mod.run_ide_native_chat_adapter = fake_visible
+            try:
+                result = run_wakeup_adapter(
+                    {
+                        "project_path": str(root),
+                        "target_slug": "codex",
+                        "inbox_path": str(collab / "inbox-codex.md"),
+                        "task_id": "task-vis",
+                        "synthetic_prompt": "read visible inbox",
+                    },
+                    mode="antigravity-chat",
+                    runner=fail_runner,
+                )
+            finally:
+                _mod.run_ide_native_chat_adapter = original_native
+
+        self.assertEqual(visible_calls, ["codex"])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["adapter_name"], "ide-native-chat")
+        self.assertNotIn("fallback_from", result)
+
+    def test_codex_falls_back_to_auto_when_visible_panel_unreachable(self):
+        # Same setup, but the visible bridge genuinely isn't reachable (no
+        # VS Code window registered for this exact project yet, extension
+        # not reloaded, etc.) -- the wake must still succeed headlessly
+        # instead of silently doing nothing.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            collab = root / ".ai-collab"
+            collab.mkdir()
+            (collab / "agents.json").write_text(
+                json.dumps({"agents": [{"agent": "codex", "agent_id": "agt_codex", "container": "vscode"}]}),
+                encoding="utf-8",
+            )
+            os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = str(root)
+
+            original_native = _mod.run_ide_native_chat_adapter
+
+            def fake_visible(input_data, *, timeout, poster=None, registry_dir=None):
+                return {"status": "failed", "adapter_name": "ide-native-chat", "message": "no exact project IDE bridge"}
+
+            calls = []
+
+            def fake_runner(cmd, **kwargs):
+                calls.append(cmd)
+                return _mod.subprocess.CompletedProcess(cmd, 0, "done", "")
+
+            _mod.run_ide_native_chat_adapter = fake_visible
+            try:
+                result = run_wakeup_adapter(
+                    {
+                        "project_path": str(root),
+                        "target_slug": "codex",
+                        "inbox_path": str(collab / "inbox-codex.md"),
+                        "task_id": "task-vis-fail",
+                        "synthetic_prompt": "read visible inbox",
+                    },
+                    mode="antigravity-chat",
+                    runner=fake_runner,
+                )
+            finally:
+                _mod.run_ide_native_chat_adapter = original_native
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["adapter_name"], "cli")
+        self.assertEqual(result["fallback_from"], "antigravity-chat-wrong-container")
+        self.assertIn("visible_attempt", result)
+        self.assertTrue(calls)
+
     def test_codex_acp_builds_protocol_messages(self):
         messages = _mod.build_codex_acp_messages(
             {

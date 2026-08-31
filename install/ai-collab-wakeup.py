@@ -2083,6 +2083,37 @@ def build_antigravity_chat_command(input_data: dict[str, str]) -> list[str] | No
     return command
 
 
+def run_codex_visible_or_auto(
+    input_data: dict[str, str],
+    *,
+    timeout: int,
+    runner=subprocess.run,
+    fallback_label: str,
+) -> dict[str, str]:
+    """codex registered outside Antigravity: show it on screen, but never depend on that.
+
+    ide-native-chat (the VS Code bridge's chatgpt.openSidebar + paste) is
+    genuinely different from the Antigravity `--reuse-window` hack: it
+    requires an EXACT single project-matched bridge
+    (`ide_bridge_candidates`) and fails cleanly with no side effect when
+    that isn't available -- it cannot "pop a stray window" the way
+    Antigravity's CLI reuse-window guess could, so it is safe to attempt
+    even unattended. Try it first so Luis (and anyone else running this
+    skill) can watch codex work in its own panel; if the bridge isn't
+    reachable (no VS Code window registered for this exact project, wrong
+    focus, extension not reloaded yet, Accessibility permission missing,
+    etc.) fall back to codex-auto so the wake still succeeds headlessly
+    instead of silently doing nothing (2026-08-31, luisvelasquez project).
+    """
+    visible_result = run_ide_native_chat_adapter(input_data, timeout=min(timeout, 15))
+    if visible_result.get("status") == "success":
+        return visible_result
+    auto_result = run_wakeup_adapter(input_data, mode="codex-auto", timeout=timeout, runner=runner)
+    auto_result.setdefault("fallback_from", fallback_label)
+    auto_result.setdefault("visible_attempt", visible_result)
+    return auto_result
+
+
 def run_antigravity_chat_adapter(
     input_data: dict[str, str],
     *,
@@ -2096,15 +2127,16 @@ def run_antigravity_chat_adapter(
     # A project can register codex under a container other than Antigravity
     # (e.g. "vscode"). Antigravity IDE may still be running on the machine
     # for an unrelated project -- targeting it here would pop/reuse the
-    # WRONG project's window. codex-auto (ACP/`codex exec`) needs no window
-    # at all, so it is the correct substitute whenever codex isn't actually
-    # registered in Antigravity, in every context (2026-08-31, luisvelasquez
-    # project: codex registered container=vscode, Antigravity belongs to a
-    # different project on the same machine).
+    # WRONG project's window. Show codex in its own VS Code panel when
+    # reachable, falling back to headless codex-auto otherwise, whenever
+    # codex isn't actually registered in Antigravity, in every context
+    # (2026-08-31, luisvelasquez project: codex registered
+    # container=vscode, Antigravity belongs to a different project on the
+    # same machine).
     if target == "codex" and registered_container(Path(input_data["project_path"]), "codex") not in {"", "antigravity"}:
-        auto_result = run_wakeup_adapter(input_data, mode="codex-auto", timeout=timeout, runner=runner)
-        auto_result.setdefault("fallback_from", "antigravity-chat-wrong-container")
-        return auto_result
+        return run_codex_visible_or_auto(
+            input_data, timeout=timeout, runner=runner, fallback_label="antigravity-chat-wrong-container"
+        )
     # codex has no public API to target its visible panel -- `antigravity-ide
     # chat --reuse-window` reuses "the last active window" (there is no way
     # to address codex's pane specifically), and an automated retry that
@@ -2117,13 +2149,15 @@ def run_antigravity_chat_adapter(
     # daemon context.
     if truthy_env("AI_COLLAB_DAEMON_CONTEXT") and target in {"codex", "antigravity"}:
         if target == "codex":
-            # Unlike the Antigravity GUI injection above, codex-auto never
-            # touches a window/focus, so it carries none of the "stray
-            # window" risk that made the daemon skip codex here in the first
-            # place -- it is safe (and the whole point) to run it unattended.
-            auto_result = run_wakeup_adapter(input_data, mode="codex-auto", timeout=timeout, runner=runner)
-            auto_result.setdefault("fallback_from", "antigravity-chat-daemon-skip")
-            return auto_result
+            # Unlike the Antigravity GUI injection above, neither
+            # ide-native-chat (fails closed on a bridge mismatch) nor
+            # codex-auto (no window/focus at all) carries the "stray
+            # window" risk that made the daemon skip codex here in the
+            # first place -- it is safe (and the whole point) to run this
+            # unattended.
+            return run_codex_visible_or_auto(
+                input_data, timeout=timeout, runner=runner, fallback_label="antigravity-chat-daemon-skip"
+            )
         return {
             "status": "degraded",
             "message": (
