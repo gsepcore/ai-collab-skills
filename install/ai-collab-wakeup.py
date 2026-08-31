@@ -2041,6 +2041,16 @@ def run_kilo_visible_adapter(
     }
 
 
+def registered_container(project_root: Path, target_slug: str) -> str:
+    """Container an agent was registered with in agents.json (e.g. vscode, antigravity)."""
+    agents = load_json(project_root / ".ai-collab" / "agents.json", {})
+    rows = agents.get("agents") if isinstance(agents, dict) else []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and str(row.get("agent", "")).strip().lower() == target_slug.lower():
+            return str(row.get("container", "")).strip().lower()
+    return ""
+
+
 def antigravity_executable() -> str | None:
     configured = os.environ.get("AI_COLLAB_ANTIGRAVITY_BIN")
     if configured:
@@ -2082,6 +2092,19 @@ def run_antigravity_chat_adapter(
     guardrail = visible_guardrail(input_data, "antigravity-chat")
     if guardrail:
         return guardrail
+    target = input_data["target_slug"]
+    # A project can register codex under a container other than Antigravity
+    # (e.g. "vscode"). Antigravity IDE may still be running on the machine
+    # for an unrelated project -- targeting it here would pop/reuse the
+    # WRONG project's window. codex-auto (ACP/`codex exec`) needs no window
+    # at all, so it is the correct substitute whenever codex isn't actually
+    # registered in Antigravity, in every context (2026-08-31, luisvelasquez
+    # project: codex registered container=vscode, Antigravity belongs to a
+    # different project on the same machine).
+    if target == "codex" and registered_container(Path(input_data["project_path"]), "codex") not in {"", "antigravity"}:
+        auto_result = run_wakeup_adapter(input_data, mode="codex-auto", timeout=timeout, runner=runner)
+        auto_result.setdefault("fallback_from", "antigravity-chat-wrong-container")
+        return auto_result
     # codex has no public API to target its visible panel -- `antigravity-ide
     # chat --reuse-window` reuses "the last active window" (there is no way
     # to address codex's pane specifically), and an automated retry that
@@ -2092,13 +2115,22 @@ def run_antigravity_chat_adapter(
     # note do its job. A human-invoked converse.py call (someone actually
     # watching, e.g. a deliberate test) is unaffected -- it doesn't run in
     # daemon context.
-    if truthy_env("AI_COLLAB_DAEMON_CONTEXT") and input_data["target_slug"] in {"codex", "antigravity"}:
+    if truthy_env("AI_COLLAB_DAEMON_CONTEXT") and target in {"codex", "antigravity"}:
+        if target == "codex":
+            # Unlike the Antigravity GUI injection above, codex-auto never
+            # touches a window/focus, so it carries none of the "stray
+            # window" risk that made the daemon skip codex here in the first
+            # place -- it is safe (and the whole point) to run it unattended.
+            auto_result = run_wakeup_adapter(input_data, mode="codex-auto", timeout=timeout, runner=runner)
+            auto_result.setdefault("fallback_from", "antigravity-chat-daemon-skip")
+            return auto_result
         return {
             "status": "degraded",
             "message": (
-                "codex has no addressable visible-chat API; automated background dispatch is "
-                "disabled to avoid spawning stray Antigravity IDE windows unattended. Requires "
-                "a human directly in Codex's window, or an explicit interactive converse.py call."
+                "antigravity has no addressable visible-chat API and no headless fallback; "
+                "automated background dispatch is disabled to avoid spawning stray Antigravity "
+                "IDE windows unattended. Requires a human directly in its window, or an explicit "
+                "interactive converse.py call."
             ),
             "adapter_name": "antigravity-chat-daemon-skip",
         }
@@ -2159,6 +2191,22 @@ def codex_acp_command() -> list[str]:
 
     npx = executable_for("npx") or "npx"
     return [npx, "-y", "@zed-industries/codex-acp@latest"]
+
+
+def codex_acp_available_locally() -> bool:
+    """True only when codex-acp can start without a cold npm/npx fetch.
+
+    The npx fallback (`npx -y @zed-industries/codex-acp@latest`) can burn an
+    entire adapter timeout on package resolution before ever producing a
+    response, which starves codex-auto's CLI-exec fallback of its own budget
+    (observed live 2026-08-31: both attempts timed out back-to-back on a real
+    onboarding thread). Skip ACP outright when there is no explicit override
+    and no locally installed codex-acp binary, instead of paying for its
+    failure every time.
+    """
+    if os.environ.get("AI_COLLAB_CODEX_ACP_COMMAND"):
+        return True
+    return bool(executable_for("codex-acp"))
 
 
 def acp_command_for(target_slug: str) -> list[str] | None:
@@ -2554,6 +2602,7 @@ def run_cli_adapter(
             command,
             cwd=input_data["project_path"],
             text=True,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
@@ -2611,18 +2660,35 @@ def run_wakeup_adapter(
     if mode == "codex-filesystem":
         return run_codex_filesystem_adapter(input_data)
     if mode == "codex-auto":
-        acp_result = run_codex_acp_adapter(input_data, timeout=timeout)
-        if acp_result.get("status") == "success":
-            return acp_result
+        # CLI exec (real, authenticated `codex exec --sandbox workspace-write`)
+        # is tried first: it needs only the codex binary already bundled with
+        # the extension, while codex-acp falls back to `npx -y
+        # @zed-industries/codex-acp@latest`, which can burn most of the
+        # adapter timeout on a cold/failed npm fetch before ever reaching the
+        # CLI fallback. Validated end-to-end against a live thread on
+        # 2026-08-31 (luisvelasquez project) -- CLI exec alone reliably
+        # produces a real, agent-authored file edit in well under the
+        # default timeout. ACP stays as a secondary attempt for setups that
+        # do have a working codex-acp install.
         cli_result = run_cli_adapter(input_data, timeout=timeout, runner=runner)
         if cli_result.get("status") == "success":
-            cli_result["fallback_from"] = acp_result.get("adapter_name", "codex-acp")
-            cli_result["fallback_reason"] = acp_result.get("message", "")
             return cli_result
+        if codex_acp_available_locally():
+            acp_result = run_codex_acp_adapter(input_data, timeout=timeout)
+            if acp_result.get("status") == "success":
+                acp_result["fallback_from"] = cli_result.get("adapter_name", "cli")
+                acp_result["fallback_reason"] = cli_result.get("message", "")
+                return acp_result
+        else:
+            acp_result = {
+                "status": "failed",
+                "message": "codex-acp skipped: no local codex-acp binary or AI_COLLAB_CODEX_ACP_COMMAND override configured",
+                "adapter_name": "codex-acp-unavailable",
+            }
         filesystem_result = run_codex_filesystem_adapter(input_data)
-        filesystem_result["fallback_from"] = cli_result.get("adapter_name", "cli")
-        filesystem_result["fallback_reason"] = cli_result.get("message", "")
-        filesystem_result["primary_failure"] = acp_result.get("message", "")
+        filesystem_result["fallback_from"] = acp_result.get("adapter_name", "codex-acp")
+        filesystem_result["fallback_reason"] = acp_result.get("message", "")
+        filesystem_result["primary_failure"] = cli_result.get("message", "")
         return filesystem_result
     if mode == "kilo-visible":
         return run_kilo_visible_adapter(input_data, timeout=timeout, runner=runner)

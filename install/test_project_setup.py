@@ -322,6 +322,47 @@ class TestProjectSetup(unittest.TestCase):
         self.assertIn("AI-COLLAB-START agent=claude-code", claude_md)
         self.assertNotIn("AI-COLLAB-START agent=claude-code-ide", claude_md)
 
+    def test_codex_registered_in_antigravity_keeps_visible_only_routing(self):
+        # Default fixture container is "antigravity" -- this preserves the
+        # original behavior: codex stays visible-only, no hidden fallback.
+        import json
+
+        self.setup(agents=("opencode", "codex"), models={"codex": "openai/gpt-5.5"})
+        capabilities = json.loads((self.root / ".ai-collab" / "capabilities.json").read_text(encoding="utf-8"))
+        codex_row = next(row for row in capabilities["agents"] if row["agent"] == "codex")
+
+        self.assertEqual(codex_row["container"], "antigravity")
+        self.assertEqual(codex_row["visible"]["adapter"], "antigravity-chat")
+        self.assertTrue(codex_row["visible"]["native_chat_only"])
+        self.assertFalse(codex_row["wake_policy"]["hidden_fallback_allowed"])
+
+    def test_codex_registered_outside_antigravity_gets_headless_routing(self):
+        # A project can register codex under a container other than
+        # Antigravity IDE (e.g. "vscode"). Antigravity may still be running
+        # for an unrelated project on the same machine, so antigravity-chat
+        # is the wrong adapter there -- codex-auto (headless `codex exec`)
+        # needs no window at all and was validated end-to-end against a live
+        # onboarding thread (2026-08-31, luisvelasquez project).
+        import json
+
+        result = _mod.setup_project(
+            self.root,
+            ["opencode", "codex"],
+            "vscode",
+            {"codex": "openai/gpt-5.5"},
+            now=self.now,
+        )
+        self.assertEqual(result["gitignore"], "updated")
+        capabilities = json.loads((self.root / ".ai-collab" / "capabilities.json").read_text(encoding="utf-8"))
+        codex_row = next(row for row in capabilities["agents"] if row["agent"] == "codex")
+
+        self.assertEqual(codex_row["container"], "vscode")
+        self.assertEqual(codex_row["visible"]["adapter"], "codex-auto")
+        self.assertFalse(codex_row["visible"]["native_chat_only"])
+        self.assertTrue(codex_row["wake_policy"]["hidden_fallback_allowed"])
+        self.assertTrue(codex_row["visible"]["cli_fallback"])
+        self.assertEqual(codex_row["delivery"]["primary"], "internal-inbox")
+
     def test_native_claude_migration_removes_stale_shared_rule_block(self):
         collab = self.root / ".ai-collab"
         collab.mkdir()

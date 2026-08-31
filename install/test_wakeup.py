@@ -1494,9 +1494,11 @@ class TestAdapters(unittest.TestCase):
         # stray new Antigravity IDE window instead of reusing one when the
         # unattended background daemon retries a mention nobody is watching
         # (confirmed live 2026-08-27). The daemon loop sets
-        # AI_COLLAB_DAEMON_CONTEXT=1; that must short-circuit before any
-        # subprocess is invoked, while a direct/interactive call (no env var)
-        # still dispatches for real.
+        # AI_COLLAB_DAEMON_CONTEXT=1. codex-auto (ACP/`codex exec`) carries
+        # none of that "stray window" risk -- it touches no window/focus at
+        # all -- so since 2026-08-31 the daemon-context branch routes codex
+        # there instead of giving up silently, and this now dispatches for
+        # real (validated end-to-end against a live onboarding thread).
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
         os.environ["AI_COLLAB_ANTIGRAVITY_BIN"] = "/usr/bin/antigravity"
         os.environ["AI_COLLAB_DAEMON_CONTEXT"] = "1"
@@ -1504,13 +1506,7 @@ class TestAdapters(unittest.TestCase):
 
         def fake_runner(command, **kwargs):
             calls.append(command)
-
-            class Completed:
-                returncode = 0
-                stdout = ""
-                stderr = ""
-
-            return Completed()
+            return _mod.subprocess.CompletedProcess(command, 0, "done", "")
 
         try:
             result = run_wakeup_adapter(
@@ -1527,9 +1523,60 @@ class TestAdapters(unittest.TestCase):
         finally:
             del os.environ["AI_COLLAB_DAEMON_CONTEXT"]
 
-        self.assertEqual(result["status"], "degraded")
-        self.assertEqual(result["adapter_name"], "antigravity-chat-daemon-skip")
-        self.assertEqual(calls, [])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["adapter_name"], "cli")
+        self.assertEqual(result["fallback_from"], "antigravity-chat-daemon-skip")
+        self.assertTrue(calls)
+        self.assertIn("exec", calls[0])
+
+    def test_antigravity_chat_adapter_routes_codex_to_auto_when_registered_elsewhere(self):
+        # A project can register codex under a non-Antigravity container
+        # (e.g. "vscode"). Antigravity IDE may still be running for a
+        # completely different project on the same machine -- targeting it
+        # here would reuse/pop the WRONG project's window. This must route
+        # straight to codex-auto, in an interactive call too (no daemon
+        # context needed), because antigravity-chat is simply the wrong
+        # adapter for this agent's registered surface (2026-08-31,
+        # luisvelasquez project: codex registered container=vscode).
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            collab = root / ".ai-collab"
+            collab.mkdir()
+            (collab / "agents.json").write_text(
+                json.dumps(
+                    {
+                        "agents": [
+                            {"agent": "codex", "agent_id": "agt_codex", "container": "vscode"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = str(root)
+            os.environ["AI_COLLAB_ANTIGRAVITY_BIN"] = "/usr/bin/antigravity"
+            calls = []
+
+            def fake_runner(command, **kwargs):
+                calls.append(command)
+                return _mod.subprocess.CompletedProcess(command, 0, "done", "")
+
+            result = run_wakeup_adapter(
+                {
+                    "project_path": str(root),
+                    "target_slug": "codex",
+                    "inbox_path": str(collab / "inbox-codex.md"),
+                    "task_id": "task-123",
+                    "synthetic_prompt": "read visible inbox",
+                },
+                mode="antigravity-chat",
+                runner=fake_runner,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["adapter_name"], "cli")
+        self.assertEqual(result["fallback_from"], "antigravity-chat-wrong-container")
+        self.assertTrue(calls)
+        self.assertIn("exec", calls[0])
 
     def test_codex_acp_builds_protocol_messages(self):
         messages = _mod.build_codex_acp_messages(
@@ -1666,7 +1713,13 @@ to: codex
             self.assertTrue((collab / "live" / "codex.agent.json").exists())
             self.assertTrue(list(collab.glob("codex-20260619-135500.md")))
 
-    def test_codex_auto_runs_cli_exec_when_acp_fails(self):
+    def test_codex_auto_tries_cli_exec_before_acp(self):
+        # CLI exec only needs the codex binary already bundled with the
+        # extension; codex-acp falls back to `npx -y
+        # @zed-industries/codex-acp@latest`, which can burn most of the
+        # adapter timeout on a cold/failed npm fetch. Since 2026-08-31
+        # codex-auto tries CLI exec first and never even reaches ACP when
+        # CLI already succeeds (validated end-to-end against a live thread).
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             collab = root / ".ai-collab"
@@ -1705,7 +1758,7 @@ to: codex
 
             self.assertEqual(result["status"], "success")
             self.assertEqual(result["adapter_name"], "cli")
-            self.assertEqual(result["fallback_from"], "codex-acp")
+            self.assertNotIn("fallback_from", result)
             self.assertTrue(calls)
             self.assertIn("exec", calls[0][0])
 
@@ -1746,7 +1799,7 @@ to: codex
 
             self.assertEqual(result["status"], "degraded")
             self.assertEqual(result["adapter_name"], "codex-filesystem")
-            self.assertEqual(result["fallback_from"], "cli")
+            self.assertEqual(result["fallback_from"], "codex-acp")
             self.assertIn("Codex filesystem wake receipt was recorded", thread.read_text(encoding="utf-8"))
 
     def test_generic_acp_adapter_processes_kimi_mock_agent(self):

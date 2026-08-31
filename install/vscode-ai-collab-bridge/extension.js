@@ -43,6 +43,16 @@ function nativeConfig(target) {
   if (['cursor-native', 'windsurf-native', 'copilot-chat'].includes(target)) {
     return { open: 'workbench.action.chat.open', focus: 'workbench.action.chat.open' };
   }
+  if (target === 'codex') {
+    // openai.chatgpt does not register a standard VS Code chat participant
+    // (no @codex in a shared chat view) -- it exposes its own commands
+    // instead. chatgpt.openSidebar is the closest analog to
+    // claude-vscode.focus: it brings up Codex's own panel specifically,
+    // via the real extension API, not a guess at "the last active window"
+    // (2026-08-30, investigating whether VS Code fares better than
+    // Antigravity IDE for reaching codex unattended).
+    return { open: 'chatgpt.openSidebar', focus: 'chatgpt.openSidebar' };
+  }
   return null;
 }
 
@@ -52,6 +62,7 @@ function nativeTargetAvailable(target) {
   if (target === 'windsurf-native') return appName.includes('windsurf');
   if (target === 'copilot-chat') return Boolean(vscode.extensions.getExtension('github.copilot-chat'));
   if (target === 'claude-code-ide') return Boolean(vscode.extensions.getExtension('anthropic.claude-code'));
+  if (target === 'codex') return Boolean(vscode.extensions.getExtension('openai.chatgpt'));
   return false;
 }
 

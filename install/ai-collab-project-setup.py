@@ -153,12 +153,21 @@ def capability_catalog() -> dict[str, Any]:
     }
 
 
-def visible_adapter_for(agent: str) -> str:
+def visible_adapter_for(agent: str, container: str = "") -> str:
     if agent in {"claude-code", "opencode", "aider", "hermes", "kimi", "kilo", "generic"}:
         return "ide-terminal-visible"
     if agent in {"claude-code-ide", "cursor-native", "windsurf-native", "copilot-chat"}:
         return "ide-native-chat"
     if agent == "codex":
+        # antigravity-chat only makes sense when codex is actually registered
+        # in Antigravity IDE. A project can register codex under a different
+        # container (e.g. "vscode") while Antigravity runs unrelated to it on
+        # the same machine -- targeting antigravity-chat there would reuse/pop
+        # the WRONG project's window. codex-auto (headless `codex exec`)
+        # needs no window at all and was validated end-to-end against a live
+        # onboarding thread (2026-08-31, luisvelasquez project).
+        if container and container != "antigravity":
+            return "codex-auto"
         return "antigravity-chat"
     return "visible-adapter-required"
 
@@ -535,17 +544,22 @@ def write_capabilities_json(root: Path, manifest: dict[str, Any], container: str
     manifest_rows = {str(row.get("agent")): row for row in manifest.get("agents", []) if isinstance(row, dict)}
     for agent in sorted(manifest_rows):
         row = manifest_rows[agent]
-        native_chat = agent == "codex" or agent.endswith("-ide") or agent in {"cursor-native", "windsurf-native", "copilot-chat"}
-        primary_delivery = "visible-chat" if agent == "codex" else "internal-inbox"
+        agent_container = str(row.get("container") or container or "unknown")
+        codex_headless = agent == "codex" and agent_container not in {"antigravity", "unknown", ""}
+        native_chat = (
+            agent.endswith("-ide") or agent in {"cursor-native", "windsurf-native", "copilot-chat"}
+            or (agent == "codex" and not codex_headless)
+        )
+        primary_delivery = "visible-chat" if agent == "codex" and not codex_headless else "internal-inbox"
         rows.append(
             {
                 "agent": agent,
                 "agent_id": row.get("agent_id"),
-                "container": row.get("container") or container or "unknown",
+                "container": agent_container,
                 "model": models.get(agent, "unknown"),
                 "internal_channels": ["direct-inbox", "task-thread", "discussion", "session-log"],
                 "visible": {
-                    "adapter": visible_adapter_for(agent),
+                    "adapter": visible_adapter_for(agent, agent_container),
                     "project_match_required": True,
                     "required_when_internal_timeout": True,
                     "required_when_sleeping": True,
@@ -554,10 +568,13 @@ def write_capabilities_json(root: Path, manifest: dict[str, Any], container: str
                     "delivery_is_not_response": True,
                     # RESUMEN DE EJECUCION discussion-20260817-214951: real
                     # headless CLI fallback when a visible dispatch never
-                    # produces a real reply. Never for codex (or any
-                    # native-chat-only agent) -- forcing a second execution
-                    # path behind its back was explicitly rejected; codex
-                    # stays visible-only.
+                    # produces a real reply. Never for codex registered in
+                    # Antigravity (or any other native-chat-only agent) --
+                    # forcing a second execution path behind its back was
+                    # explicitly rejected there. codex registered outside
+                    # Antigravity (e.g. container=vscode) already routes
+                    # natively through codex-auto above, so this flag simply
+                    # follows the same native_chat_only computation.
                     "cli_fallback": not native_chat,
                 },
                 "delivery": {
@@ -579,7 +596,11 @@ def write_capabilities_json(root: Path, manifest: dict[str, Any], container: str
                     "internal_grace_seconds": DEFAULT_INTERNAL_GRACE_SECONDS,
                     "sleep_threshold_seconds": DEFAULT_SLEEP_THRESHOLD_SECONDS,
                     "notify_before_visible_escalation": True,
-                    "hidden_fallback_allowed": False,
+                    # codex-auto (headless codex exec/ACP) carries none of the
+                    # "stray window" risk that keeps hidden fallback banned for
+                    # a real visible-chat agent, so it is allowed precisely
+                    # when codex itself is the one running headless here.
+                    "hidden_fallback_allowed": codex_headless,
                 },
             }
         )
