@@ -46,6 +46,38 @@ ROLES_START = "<!-- AI-COLLAB-ROLES-START -->"
 ROLES_END = "<!-- AI-COLLAB-ROLES-END -->"
 UNASSIGNED = {"", "-", "none", "null", "unassigned", "vacant"}
 
+# Repo-wide default (Luis, 2026-08-31, luisvelasquez project): when a
+# project's registered roster is exactly claude-code + opencode + codex,
+# apply this split automatically instead of demanding manual --assign
+# flags or leaving every role unassigned. claude-code keeps the
+# orchestrating/cross-cutting roles as director; codex (validated for
+# strong autonomous reasoning and real file edits via codex-auto) takes
+# backend + review-style roles; opencode takes the remaining hands-on
+# implementation roles. This stops applying the moment a fourth agent
+# joins the roster -- it is a default for exactly this trio, not a
+# general heuristic.
+CANONICAL_TRIO = frozenset({"claude-code", "opencode", "codex"})
+CANONICAL_TRIO_ASSIGNMENTS: dict[str, str] = {
+    "senior-director": "claude-code",
+    "architecture-review": "claude-code",
+    "devops": "claude-code",
+    "deployment": "claude-code",
+    "backend": "codex",
+    "security-review": "codex",
+    "qa": "codex",
+    "frontend": "opencode",
+    "database": "opencode",
+    "ui-ux-design": "opencode",
+    "functional-review": "opencode",
+}
+
+
+def default_assignments_for_roster(roster: list[str]) -> dict[str, str] | None:
+    """Canonical role split for the exact claude-code+opencode+codex trio, else None."""
+    if frozenset(roster) == CANONICAL_TRIO:
+        return dict(CANONICAL_TRIO_ASSIGNMENTS)
+    return None
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -291,7 +323,11 @@ def cmd_configure(args: argparse.Namespace) -> int:
         requested.update(interactive_assignments(root))
     elif not requested:
         if not load_profile(root).get("assignments"):
-            raise SystemExit("Non-interactive configuration requires at least one --assign role=agent value.")
+            default = default_assignments_for_roster(registered_agents(root))
+            if default is None:
+                raise SystemExit("Non-interactive configuration requires at least one --assign role=agent value.")
+            print("[AI-COLLAB] Applying canonical claude-code/opencode/codex role split (repo default).")
+            requested = default
     profile = configure_team(root, requested, replace=args.replace)
     print("[AI-COLLAB] Development-team roles saved")
     print_profile(profile)

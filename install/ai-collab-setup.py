@@ -287,6 +287,14 @@ def run_role_onboarding(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     elif not getattr(args, "non_interactive", False) and sys.stdin.isatty():
         command = [sys.executable, str(helper), "--root", str(root), "configure"]
     else:
+        # ai-collab-team.py applies its canonical claude-code/opencode/codex
+        # default automatically when the registered roster matches exactly
+        # (see default_assignments_for_roster) -- try a plain non-interactive
+        # configure before giving up and demanding manual --assign flags.
+        command = [sys.executable, str(helper), "--root", str(root), "configure", "--non-interactive"]
+        returncode = run_visible(command, cwd=root)
+        if returncode == 0:
+            return {"status": "configured", "returncode": returncode, "command": command}
         manifest = read_json(root / ".ai-collab" / "agents.json")
         pending = {
             "schema": "ai-collab.role-onboarding.v1",

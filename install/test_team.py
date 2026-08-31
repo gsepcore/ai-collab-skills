@@ -124,6 +124,46 @@ class TestTeamRoles(unittest.TestCase):
 
         self.assertEqual(profile["assignments"]["backend"]["related_roles"], ["database"])
 
+    def test_default_assignments_for_canonical_trio(self):
+        default = _mod.default_assignments_for_roster(["codex", "claude-code", "opencode"])
+
+        self.assertIsNotNone(default)
+        self.assertEqual(default["senior-director"], "claude-code")
+        self.assertEqual(default["backend"], "codex")
+        self.assertEqual(default["security-review"], "codex")
+        self.assertEqual(default["qa"], "codex")
+        self.assertEqual(default["frontend"], "opencode")
+        self.assertEqual(set(default), {role for role, *_ in _mod.ROLE_CATALOG})
+
+    def test_default_assignments_none_for_other_rosters(self):
+        self.assertIsNone(_mod.default_assignments_for_roster(["codex"]))
+        self.assertIsNone(_mod.default_assignments_for_roster(["claude-code", "opencode", "codex", "aider"]))
+        self.assertIsNone(_mod.default_assignments_for_roster(["claude-code", "opencode"]))
+
+    def test_noninteractive_configure_applies_canonical_default_for_trio(self):
+        import argparse
+
+        args = argparse.Namespace(root=str(self.root), assign=[], non_interactive=True, replace=False)
+        exit_code = _mod.cmd_configure(args)
+
+        self.assertEqual(exit_code, 0)
+        profile = _mod.load_profile(self.root)
+        self.assertEqual(profile["assignments"]["senior-director"]["primary"], "claude-code")
+        self.assertEqual(profile["assignments"]["backend"]["primary"], "codex")
+        self.assertEqual(profile["assignments"]["frontend"]["primary"], "opencode")
+
+    def test_noninteractive_configure_still_requires_assign_for_other_rosters(self):
+        import argparse
+
+        (self.root / ".ai-collab" / "agents.json").write_text(
+            json.dumps({"agents": [{"agent": "codex", "agent_id": "agt_codex"}]}), encoding="utf-8"
+        )
+        (self.root / ".ai-collab" / "TEAM.md").write_text("## Roster\n\n- codex\n", encoding="utf-8")
+        args = argparse.Namespace(root=str(self.root), assign=[], non_interactive=True, replace=False)
+
+        with self.assertRaises(SystemExit):
+            _mod.cmd_configure(args)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
