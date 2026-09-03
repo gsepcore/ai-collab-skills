@@ -708,6 +708,69 @@ to: opencode
         self.assertEqual(len(calls), 1)
         self.assertTrue(Path(first["screenshot"]["path"]).exists())
 
+    def _write_bridge(self, pid, ide="Antigravity IDE", project_paths=None):
+        bridge_dir = Path(os.environ["AI_COLLAB_IDE_BRIDGE_DIR"])
+        bridge_dir.mkdir(parents=True, exist_ok=True)
+        path = bridge_dir / f"{pid}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "ai-collab.ide-bridge.v1",
+                    "pid": pid,
+                    "port": 54321,
+                    "token": "t",
+                    "project_paths": project_paths if project_paths is not None else [str(self.root)],
+                    "ide": ide,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_activate_project_ide_prunes_dead_pid_registration(self):
+        # A session that registered a bridge can die without ever cleaning up
+        # its ide-bridges/*.json file. Trusting that stale entry would launch
+        # (not just focus) an unrelated IDE forever every time this project's
+        # window isn't visible -- confirmed live with a dead-PID registration
+        # relaunching Antigravity IDE. It must be pruned instead of used.
+        import subprocess as _subprocess
+
+        proc = _subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        dead_pid = proc.pid
+        bridge_path = self._write_bridge(dead_pid)
+
+        calls = []
+
+        def runner(command, **kwargs):
+            if command[:2] == ["osascript", "-e"]:
+                calls.append(command)
+            return Completed()
+
+        activated = _mod.activate_project_ide(self.root, runner=runner)
+
+        self.assertFalse(activated)
+        self.assertEqual(calls, [])
+        self.assertFalse(bridge_path.exists())
+
+    def test_activate_project_ide_uses_live_pid_registration(self):
+        live_pid = os.getpid()
+        self._write_bridge(live_pid, ide="Antigravity IDE")
+
+        calls = []
+
+        def runner(command, **kwargs):
+            if command[:2] == ["osascript", "-e"]:
+                calls.append(command)
+                return Completed(returncode=0)
+            return Completed()
+
+        activated = _mod.activate_project_ide(self.root, runner=runner)
+
+        self.assertTrue(activated)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("Antigravity IDE", calls[0][2])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1221,6 +1221,25 @@ def activate_project_ide(root: Path, runner: Runner = subprocess.run) -> bool:
         item = load_json(path, {})
         if not isinstance(item, dict):
             continue
+        try:
+            pid = int(item.get("pid") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pid <= 0:
+            continue
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            # The session that registered this bridge is long gone. Trusting
+            # a stale entry here means "activate" -- launch, not just focus --
+            # an unrelated IDE every time this project's window isn't visible
+            # (confirmed live: relaunched Antigravity IDE from a dead-PID
+            # registration left over from a closed session). Only prune on a
+            # confirmed-dead PID; a permission error below is not evidence.
+            path.unlink(missing_ok=True)
+            continue
+        except OSError:
+            continue
         projects = item.get("project_paths") or []
         app = str(item.get("ide") or "")
         if not isinstance(projects, list) or not any(path_matches_root(value, root) for value in projects):
