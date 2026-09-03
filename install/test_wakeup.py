@@ -570,6 +570,72 @@ class TestAdapters(unittest.TestCase):
                 _mod.FALLBACK_BIN_DIRS = old_dirs
                 _mod.FALLBACK_BIN_GLOBS = old_globs
 
+    def test_adapter_timeout_gives_codex_a_longer_unconfigured_default(self):
+        # A real codex-auto turn legitimately runs for several minutes;
+        # every other adapter keeps the shorter general default.
+        os.environ.pop("AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT", None)
+        self.assertEqual(_mod.adapter_timeout_from_env("codex"), _mod.CODEX_DEFAULT_ADAPTER_TIMEOUT_SECONDS)
+        self.assertEqual(_mod.adapter_timeout_from_env("opencode"), _mod.DEFAULT_ADAPTER_TIMEOUT_SECONDS)
+        self.assertGreater(_mod.CODEX_DEFAULT_ADAPTER_TIMEOUT_SECONDS, _mod.DEFAULT_ADAPTER_TIMEOUT_SECONDS)
+
+    def test_adapter_timeout_env_override_still_wins_for_codex(self):
+        os.environ["AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT"] = "30"
+        try:
+            self.assertEqual(_mod.adapter_timeout_from_env("codex"), 30)
+        finally:
+            del os.environ["AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT"]
+
+    def test_codex_executable_prefers_registered_containers_extension(self):
+        # A machine can have both the VS Code and Antigravity IDE copies of
+        # the codex extension installed at once, each at its own
+        # version-numbered path. codex_executable_for() must pick the one
+        # matching THIS project's registered container, not whichever glob
+        # happens to match first (2026-09-03, luisvelasquez project: had
+        # both installed, generic executable_for() silently preferred the
+        # wrong one).
+        import unittest.mock
+
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            root = home / "project"
+            (root / ".ai-collab").mkdir(parents=True)
+            (root / ".ai-collab" / "agents.json").write_text(
+                json.dumps({"agents": [{"agent": "codex", "agent_id": "agt_codex", "container": "vscode"}]}),
+                encoding="utf-8",
+            )
+            vscode_codex = home / ".vscode" / "extensions" / "openai.chatgpt-1.2.3" / "bin" / "x64" / "codex"
+            vscode_codex.parent.mkdir(parents=True)
+            vscode_codex.write_text("#!/bin/sh\n", encoding="utf-8")
+            vscode_codex.chmod(0o755)
+            antigravity_codex = (
+                home / ".antigravity-ide" / "extensions" / "openai.chatgpt-9.9.9" / "bin" / "x64" / "codex"
+            )
+            antigravity_codex.parent.mkdir(parents=True)
+            antigravity_codex.write_text("#!/bin/sh\n", encoding="utf-8")
+            antigravity_codex.chmod(0o755)
+
+            with unittest.mock.patch.object(_mod.Path, "home", return_value=home):
+                resolved = _mod.codex_executable_for(str(root))
+
+        self.assertEqual(resolved, str(vscode_codex))
+
+    def test_codex_executable_falls_back_when_no_container_match(self):
+        import unittest.mock
+
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            root = home / "project"
+            (root / ".ai-collab").mkdir(parents=True)
+            old_which = _mod.shutil.which
+            try:
+                _mod.shutil.which = lambda name: "/usr/local/bin/codex" if name == "codex" else None
+                with unittest.mock.patch.object(_mod.Path, "home", return_value=home):
+                    resolved = _mod.codex_executable_for(str(root))
+            finally:
+                _mod.shutil.which = old_which
+
+        self.assertEqual(resolved, "/usr/local/bin/codex")
+
     def test_cli_adapter_success_uses_runner(self):
         os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = "/tmp/project"
         calls = []

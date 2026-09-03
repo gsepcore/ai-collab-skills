@@ -41,6 +41,7 @@ DEFAULT_LOG_FILE = Path("/tmp/ai-collab-wakeup.log")
 DEFAULT_NOTIFICATIONS_FILE = Path.home() / ".ai-collab-notifications.json"
 DEFAULT_ADAPTER = "visible"
 DEFAULT_ADAPTER_TIMEOUT_SECONDS = 120
+CODEX_DEFAULT_ADAPTER_TIMEOUT_SECONDS = 480
 DEFAULT_REPLY_WAIT_SECONDS = 90
 DEFAULT_CLI_TARGETS = ("codex", "opencode", "claude", "claude-code", "hermes", "kimi", "kilo")
 DEFAULT_VISIBLE_TARGETS = (
@@ -66,6 +67,22 @@ FALLBACK_BIN_GLOBS = (
     ".antigravity-ide/extensions/*/bin",
     ".antigravity-ide/extensions/*/bin/*",
 )
+
+# codex's own extension bundles its CLI at a version-numbered path that
+# changes on every auto-update (e.g.
+# ~/.vscode/extensions/openai.chatgpt-<version>/bin/<arch>/codex), and a
+# machine can have both the VS Code and Antigravity IDE copies installed at
+# once for unrelated projects. codex_executable_for() resolves by this
+# project's registered container instead of FALLBACK_BIN_GLOBS's fixed
+# antigravity-only search order, so the correct extension's binary is used
+# even when both are present (2026-09-03, luisvelasquez project).
+CODEX_BIN_GLOBS_BY_CONTAINER: dict[str, tuple[str, ...]] = {
+    "vscode": (".vscode/extensions/openai.chatgpt-*/bin/*/codex",),
+    "antigravity": (
+        ".antigravity-ide/extensions/openai.chatgpt-*/bin/*/codex",
+        ".antigravity/extensions/openai.chatgpt-*/bin/*/codex",
+    ),
+}
 
 
 def utc_now() -> datetime:
@@ -983,8 +1000,15 @@ def adapter_mode_from_env() -> str:
     return os.environ.get("AI_COLLAB_WAKEUP_ADAPTER", DEFAULT_ADAPTER).strip() or DEFAULT_ADAPTER
 
 
-def adapter_timeout_from_env() -> int:
-    return max(1, coerce_int(os.environ.get("AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT"), DEFAULT_ADAPTER_TIMEOUT_SECONDS))
+def adapter_timeout_from_env(target_slug: str = "") -> int:
+    # A real codex-auto turn (`codex exec`, no window, agentic file edits)
+    # legitimately runs for several minutes -- the general 120s default
+    # cut it off mid-turn every time in testing (2026-09-03, luisvelasquez
+    # project). AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT still overrides this for
+    # every target when set; this only raises codex's own unconfigured
+    # default so other, faster adapters aren't forced to wait longer too.
+    default = CODEX_DEFAULT_ADAPTER_TIMEOUT_SECONDS if target_slug == "codex" else DEFAULT_ADAPTER_TIMEOUT_SECONDS
+    return max(1, coerce_int(os.environ.get("AI_COLLAB_WAKEUP_ADAPTER_TIMEOUT"), default))
 
 
 def truthy_env(name: str) -> bool:
@@ -1100,9 +1124,33 @@ def executable_for(target_slug: str) -> str | None:
     return None
 
 
+def codex_executable_for(project_path: str) -> str | None:
+    """Resolve the codex CLI binary for this project's registered container.
+
+    AI_COLLAB_CODEX_BIN still wins when set (explicit override, e.g. a
+    version-bump-proof resolver script). Otherwise pick the extension whose
+    IDE matches how codex is actually registered here, newest match first,
+    falling back to the generic executable_for() search when the container
+    is unknown or neither glob matches anything.
+    """
+    configured = os.environ.get("AI_COLLAB_CODEX_BIN")
+    if configured:
+        return configured
+    container = registered_container(Path(project_path), "codex")
+    for pattern in CODEX_BIN_GLOBS_BY_CONTAINER.get(container, ()):
+        matches = sorted(
+            (path for path in Path.home().glob(pattern) if path.is_file() and os.access(path, os.X_OK)),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if matches:
+            return str(matches[0])
+    return executable_for("codex")
+
+
 def build_cli_command(input_data: dict[str, str]) -> list[str] | None:
     target = input_data["target_slug"]
-    exe = executable_for(target)
+    exe = codex_executable_for(input_data["project_path"]) if target == "codex" else executable_for(target)
     if not exe:
         return None
 
@@ -2667,7 +2715,7 @@ def run_wakeup_adapter(
     runner=subprocess.run,
 ) -> dict[str, str]:
     mode = mode or adapter_mode_from_env()
-    timeout = timeout or adapter_timeout_from_env()
+    timeout = timeout or adapter_timeout_from_env(input_data.get("target_slug", ""))
 
     if mode == "mock-success":
         return {"status": "success", "message": "mock adapter accepted task", "adapter_name": "mock-success"}

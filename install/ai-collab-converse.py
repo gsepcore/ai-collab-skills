@@ -638,7 +638,13 @@ def dispatch_visible(path: Path, root: Path, targets: list[str] | None = None) -
             env=env,
             text=True,
             capture_output=True,
-            timeout=max(15, int(os.environ.get("AI_COLLAB_CONVERSE_DISPATCH_TIMEOUT", "45"))),
+            # This wraps the actual wake dispatch (unlike prepare_visible_surfaces
+            # below, which only focuses a surface). A real headless codex-auto
+            # turn (`codex exec`) can legitimately run for several minutes --
+            # 45s cut it off mid-turn every time in testing (2026-09-03,
+            # luisvelasquez project). Give it enough room by default; a caller
+            # that genuinely wants a fast timeout can still lower this env var.
+            timeout=max(15, int(os.environ.get("AI_COLLAB_CONVERSE_DISPATCH_TIMEOUT", "500"))),
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
