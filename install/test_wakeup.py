@@ -2532,6 +2532,47 @@ project: gsep
         self.assertEqual(result["reason"], "closed")
         self.assertFalse(self.events.exists())
 
+    def test_authorization_marker_permanently_closes_the_thread(self):
+        # The literal control line the debate protocol mandates for a
+        # closing round. Unlike a message `type` label (agents keep
+        # inventing new ones -- decision, decision-support, acknowledgement,
+        # correction...), this phrase is deliberate and should close the
+        # thread for real, not just skip one dispatch.
+        self.append(
+            author="claude-code",
+            message=(
+                "type: correction\nto: codex, opencode\n\n"
+                "RESUMEN DE EJECUCION\n@codex implementa, @opencode revisa.\n"
+                "PENDIENTE DE AUTORIZACION DE LUIS -- no implementar hasta que el confirme."
+            ),
+        )
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "ignored")
+        self.assertEqual(result["reason"], "closed-by-authorization-marker")
+        self.assertFalse(self.events.exists())
+
+        meta, _body = parse_frontmatter(self.thread.read_text(encoding="utf-8"))
+        self.assertEqual(meta.get("status"), "closed")
+
+        second_result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+        self.assertEqual(second_result, {"action": "ignored", "reason": "closed"})
+
     def test_decision_message_mentioning_participants_does_not_wake_them(self):
         # A closing RESUMEN DE EJECUCION naturally says things like "@codex
         # implementa, @opencode revisa" to describe who does what -- that is

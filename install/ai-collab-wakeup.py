@@ -2984,6 +2984,24 @@ def process_thread(
     if not message:
         return {"action": "ignored", "reason": "no-message"}
 
+    # The debate/decision protocol (CLAUDE.md, ai-collab-debate.py) mandates
+    # this exact literal control line on the message that closes a round:
+    # "PENDIENTE DE AUTORIZACION DE LUIS -- no implementar hasta que el
+    # confirme." Unlike a message's freely-chosen `type` label (agents
+    # invented "decision-support", "correction", etc. on top of "decision"
+    # and "acknowledgement", each slipping past a type-based check), this
+    # phrase is deliberate and rare -- it only appears when a round has
+    # actually concluded. Persist status=closed right here instead of only
+    # skipping this one dispatch, so the thread stops for good (matching the
+    # `status == "closed"` short-circuit above) instead of relying on every
+    # future message happening to use a recognized closing type. Confirmed
+    # live: a thread with no closing marker kept cycling through ever-new
+    # ad-hoc type labels every few minutes, each restarting the wake loop.
+    if re.search(r"pendiente\s+de\s+autorizaci[oó]n", message["content"], re.IGNORECASE):
+        meta["status"] = "closed"
+        thread_path.write_text(render_frontmatter(meta, body), encoding="utf-8")
+        return {"action": "ignored", "reason": "closed-by-authorization-marker"}
+
     # `decision` and `acknowledgement` are closing message types (the natural
     # conversation contract: "record accepted choices with decision"). They
     # routinely @mention every participant to describe who does what next --
