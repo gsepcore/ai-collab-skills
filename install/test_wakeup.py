@@ -378,9 +378,19 @@ class TestAdapters(unittest.TestCase):
             "AI_COLLAB_ANTIGRAVITY_BIN": os.environ.get("AI_COLLAB_ANTIGRAVITY_BIN"),
             "AI_COLLAB_ANTIGRAVITY_MODE": os.environ.get("AI_COLLAB_ANTIGRAVITY_MODE"),
             "AI_COLLAB_CODEX_ACP_COMMAND": os.environ.get("AI_COLLAB_CODEX_ACP_COMMAND"),
+            "AI_COLLAB_ANTIGRAVITY_LAUNCH_COOLDOWN_SECONDS": os.environ.get("AI_COLLAB_ANTIGRAVITY_LAUNCH_COOLDOWN_SECONDS"),
         }
         for key in self._env:
             os.environ.pop(key, None)
+        # Tests in this class reuse the fixed path "/tmp/project" with no
+        # per-test cleanup. The launch cooldown persists state on disk keyed
+        # by that same path, so leaving it at its real default here would
+        # make an unrelated test's pass/fail depend on whether some other
+        # test happened to run against "/tmp/project" moments earlier.
+        # Cooldown behavior itself is covered separately, in its own
+        # isolated tempdir.
+        os.environ["AI_COLLAB_ANTIGRAVITY_LAUNCH_COOLDOWN_SECONDS"] = "0"
+        Path("/tmp/project/.ai-collab/live/antigravity-launch-attempts.json").unlink(missing_ok=True)
 
     def tearDown(self):
         for key, value in self._env.items():
@@ -1643,6 +1653,83 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(result["fallback_from"], "antigravity-chat-wrong-container")
         self.assertTrue(calls)
         self.assertIn("exec", calls[0])
+
+    def test_antigravity_chat_refuses_to_relaunch_within_cooldown(self):
+        # `--reuse-window` is a third-party binary's own heuristic, not
+        # something this codebase controls -- it can pop a brand new window
+        # instead of reusing one on any single call. Confirmed live: an
+        # attended session retried this twice a few minutes apart against a
+        # target with no live agent behind it at all, and got two stray
+        # windows instead of one degraded result. The second attempt within
+        # the cooldown window must not launch anything.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / ".ai-collab").mkdir()
+            os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = str(root)
+            os.environ["AI_COLLAB_ANTIGRAVITY_BIN"] = "/usr/bin/antigravity"
+            os.environ["AI_COLLAB_ANTIGRAVITY_LAUNCH_COOLDOWN_SECONDS"] = "300"
+            calls = []
+
+            def fake_runner(command, **kwargs):
+                calls.append(command)
+
+                class Completed:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+
+                return Completed()
+
+            input_data = {
+                "project_path": str(root),
+                "target_slug": "codex",
+                "inbox_path": str(root / ".ai-collab" / "inbox-codex.md"),
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            }
+
+            first = run_wakeup_adapter(input_data, mode="antigravity-chat", runner=fake_runner)
+            second = run_wakeup_adapter(input_data, mode="antigravity-chat", runner=fake_runner)
+
+        self.assertEqual(first["status"], "success")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(second["status"], "degraded")
+        self.assertEqual(second["adapter_name"], "antigravity-chat-cooldown")
+        self.assertEqual(len(calls), 1)
+
+    def test_antigravity_chat_cooldown_of_zero_disables_the_check(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / ".ai-collab").mkdir()
+            os.environ["AI_COLLAB_WAKEUP_CLI_PROJECTS"] = str(root)
+            os.environ["AI_COLLAB_ANTIGRAVITY_BIN"] = "/usr/bin/antigravity"
+            os.environ["AI_COLLAB_ANTIGRAVITY_LAUNCH_COOLDOWN_SECONDS"] = "0"
+            calls = []
+
+            def fake_runner(command, **kwargs):
+                calls.append(command)
+
+                class Completed:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+
+                return Completed()
+
+            input_data = {
+                "project_path": str(root),
+                "target_slug": "codex",
+                "inbox_path": str(root / ".ai-collab" / "inbox-codex.md"),
+                "task_id": "task-123",
+                "synthetic_prompt": "read visible inbox",
+            }
+
+            first = run_wakeup_adapter(input_data, mode="antigravity-chat", runner=fake_runner)
+            second = run_wakeup_adapter(input_data, mode="antigravity-chat", runner=fake_runner)
+
+        self.assertEqual(first["status"], "success")
+        self.assertEqual(second["status"], "success")
+        self.assertEqual(len(calls), 2)
 
     def test_codex_tries_visible_vscode_panel_before_falling_back_to_auto(self):
         # ide-native-chat (the VS Code bridge's chatgpt.openSidebar + paste)

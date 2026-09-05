@@ -2162,6 +2162,53 @@ def run_codex_visible_or_auto(
     return auto_result
 
 
+def antigravity_launch_cooldown_seconds() -> int:
+    # `antigravity-ide chat --reuse-window` is a third-party binary's own
+    # window-matching heuristic, not something this codebase controls; it
+    # can pop a brand new window instead of reusing an existing one on any
+    # single call, for reasons outside our code (confirmed live: it did
+    # exactly that on both of two attempts a few minutes apart, from an
+    # attended session that had already diagnosed the target as having no
+    # live agent behind it at all). The daemon-context guard above only
+    # covers the unattended background loop; an attended caller (a human,
+    # or another live agent session acting for them) can and does retry
+    # this directly. Refuse to launch again for the same project+target
+    # within this window instead of trusting every caller to remember not
+    # to retry a dead end.
+    return max(0, coerce_int(os.environ.get("AI_COLLAB_ANTIGRAVITY_LAUNCH_COOLDOWN_SECONDS"), 300))
+
+
+def antigravity_launch_state_path(project_path: str) -> Path:
+    return Path(project_path) / ".ai-collab" / "live" / "antigravity-launch-attempts.json"
+
+
+def check_antigravity_launch_cooldown(project_path: str, target: str, *, now: datetime) -> dict[str, Any] | None:
+    """Return a degraded result if `target` was launched too recently; else None and record this attempt."""
+    cooldown = antigravity_launch_cooldown_seconds()
+    if cooldown <= 0:
+        return None
+    state_path = antigravity_launch_state_path(project_path)
+    state = load_json(state_path, {})
+    if not isinstance(state, dict):
+        state = {}
+    last_attempt = parse_iso(str(state.get(target, "")))
+    if last_attempt and (now - last_attempt).total_seconds() < cooldown:
+        remaining = int(cooldown - (now - last_attempt).total_seconds())
+        return {
+            "status": "degraded",
+            "message": (
+                f"antigravity-chat for '{target}' was already attempted {int((now - last_attempt).total_seconds())}s "
+                f"ago and did not confirm a real reply; refusing to relaunch for {remaining}s more to avoid popping "
+                "another stray window against what looks like a dead end. Open Antigravity IDE for this project "
+                "yourself if you want to reach this agent right now."
+            ),
+            "adapter_name": "antigravity-chat-cooldown",
+        }
+    state[target] = isoformat_z(now)
+    atomic_write(state_path, json.dumps(state, indent=2) + "\n")
+    return None
+
+
 def run_antigravity_chat_adapter(
     input_data: dict[str, str],
     *,
@@ -2222,6 +2269,10 @@ def run_antigravity_chat_adapter(
             "message": "antigravity-chat adapter supports target codex/antigravity",
             "adapter_name": "antigravity-chat",
         }
+
+    cooldown_result = check_antigravity_launch_cooldown(input_data["project_path"], target, now=utc_now())
+    if cooldown_result:
+        return cooldown_result
 
     command = build_antigravity_chat_command(input_data)
     if not command:
