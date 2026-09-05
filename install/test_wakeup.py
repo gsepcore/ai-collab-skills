@@ -2831,13 +2831,29 @@ class TestCapabilityOnboardingCompletion(unittest.TestCase):
     def append(self, author, message):
         append_thread_message(
             self.thread,
-            task_id="capability-onboarding-cap_test",
+            task_id="discussion-capability-onboarding-cap_test",
             project="gsep",
             inbox_name="",
             author_slug=author,
             message=message,
             now=self.now,
         )
+
+    def test_digest_extraction_matches_the_real_discussion_id_prefix(self):
+        # ai-collab-converse.py start --discussion-id capability-onboarding-X
+        # actually creates a thread whose frontmatter `thread:` value is
+        # "discussion-capability-onboarding-X" (it prefixes "discussion-"
+        # onto the given id). A prefix-anchored match against the bare id
+        # missed every real onboarding thread.
+        self.assertEqual(
+            _mod.capability_onboarding_digest_from_thread_id("discussion-capability-onboarding-cap_abc123"),
+            "cap_abc123",
+        )
+        self.assertEqual(
+            _mod.capability_onboarding_digest_from_thread_id("capability-onboarding-cap_abc123"),
+            "cap_abc123",
+        )
+        self.assertEqual(_mod.capability_onboarding_digest_from_thread_id("thread-task-123"), "")
 
     def test_onboarding_thread_closes_once_everyone_acknowledged_regardless_of_latest_message_shape(self):
         self.append("claude-code", "capability_ack: cap_test\nagent_id: agt_1\nsession_id: ses_1\n")

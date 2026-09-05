@@ -309,7 +309,15 @@ def all_registered_agents(project_root: Path) -> list[str]:
 
 
 def capability_onboarding_digest_from_thread_id(thread_id: str) -> str:
-    match = re.match(r"^capability-onboarding-(.+)$", thread_id)
+    # `ai-collab-converse.py start --discussion-id capability-onboarding-<digest>`
+    # is what actually creates these threads, and it prefixes "discussion-"
+    # onto whatever discussion-id it's given -- so the real frontmatter
+    # `thread:` value is "discussion-capability-onboarding-<digest>", not
+    # "capability-onboarding-<digest>" on its own. A prefix-anchored match
+    # against the bare id missed every real onboarding thread and, when
+    # tested directly against a live project to confirm this fix, triggered
+    # exactly the unwanted redispatch it was meant to prevent.
+    match = re.search(r"capability-onboarding-(.+)$", thread_id)
     return match.group(1) if match else ""
 
 
