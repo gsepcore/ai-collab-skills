@@ -134,7 +134,15 @@ async function pasteNative(prompt) {
     // (Cursor, Windsurf, Antigravity).
     const candidates = [...new Set([appName, 'Code', 'Visual Studio Code'])].filter(Boolean);
     const nameList = candidates.map((name) => `"${name}"`).join(', ');
-    const script = `tell application "System Events"\nrepeat with candidateName in {${nameList}}\nif exists (first process whose name is candidateName) then\nset frontmost of (first process whose name is candidateName) to true\nexit repeat\nend if\nend repeat\nend tell\ndelay 0.2\ntell application "System Events"\nkeystroke "v" using command down\ndelay 0.1\nkey code 36\nend tell`;
+    // A fixed 0.1s between Cmd+V and Return was long enough for a short test
+    // prompt but not for a real multi-paragraph message: the webview chat
+    // input hadn't finished absorbing/re-rendering the pasted text yet, so
+    // Return landed too early and the whole thing sat unsent in the box
+    // (confirmed live with a ~1500-char debate prompt -- it pasted but never
+    // submitted). Scale the settle time with prompt length instead of
+    // guessing a single constant.
+    const pasteSettleSeconds = Math.min(0.3 + prompt.length / 2000, 1.5).toFixed(2);
+    const script = `tell application "System Events"\nrepeat with candidateName in {${nameList}}\nif exists (first process whose name is candidateName) then\nset frontmost of (first process whose name is candidateName) to true\nexit repeat\nend if\nend repeat\nend tell\ndelay 0.2\ntell application "System Events"\nkeystroke "v" using command down\ndelay ${pasteSettleSeconds}\nkey code 36\nend tell`;
     await runStrict('/usr/bin/osascript', ['-e', script]);
     await delay(150);
   } finally {
