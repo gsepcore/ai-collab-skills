@@ -2,7 +2,7 @@
   "name": "ai-collab-visible-bridge",
   "displayName": "AI Collab Visible Bridge",
   "description": "Delivers AI Collab messages to exact registered terminal and native-chat sessions in the current workspace.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "gsepcore",
   "engines": {
     "vscode": "^1.90.0"

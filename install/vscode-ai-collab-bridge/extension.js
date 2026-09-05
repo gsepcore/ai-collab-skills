@@ -123,7 +123,18 @@ async function pasteNative(prompt) {
   await vscode.env.clipboard.writeText(prompt);
   try {
     const appName = String(vscode.env.appName || '').replace(/"/g, '');
-    const script = `tell application "System Events"\nset frontmost of first process whose name contains "${appName}" to true\ndelay 0.2\nkeystroke "v" using command down\ndelay 0.1\nkey code 36\nend tell`;
+    // vscode.env.appName is the product display name ("Visual Studio Code"),
+    // not the macOS process name System Events matches against ("Code") --
+    // `whose name contains "Visual Studio Code"` never matches a process
+    // actually named "Code", so this step silently failed for every regular
+    // VS Code install (confirmed live: paste/submit never reached the
+    // panel). Try the real process names the ai-collab observer already
+    // knows work for this IDE family, exact-matched, before falling back to
+    // the raw appName for IDEs where display name and process name agree
+    // (Cursor, Windsurf, Antigravity).
+    const candidates = [...new Set([appName, 'Code', 'Visual Studio Code'])].filter(Boolean);
+    const nameList = candidates.map((name) => `"${name}"`).join(', ');
+    const script = `tell application "System Events"\nrepeat with candidateName in {${nameList}}\nif exists (first process whose name is candidateName) then\nset frontmost of (first process whose name is candidateName) to true\nexit repeat\nend if\nend repeat\nend tell\ndelay 0.2\ntell application "System Events"\nkeystroke "v" using command down\ndelay 0.1\nkey code 36\nend tell`;
     await runStrict('/usr/bin/osascript', ['-e', script]);
     await delay(150);
   } finally {
