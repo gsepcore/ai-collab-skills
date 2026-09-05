@@ -3045,27 +3045,23 @@ class TestScanMissingReviews(unittest.TestCase):
 
     def test_review_already_sent_deduped(self):
         """If a review was already dispatched, it is not sent again."""
-        updated = (self.now - timedelta(seconds=45))
         self._write_live_state(
             "opencode", "done",
-            updated.isoformat(),
+            (self.now - timedelta(seconds=45)).isoformat(),
             ["install/ai-collab-wakeup.py", "install/daemon.sh"],
             "Implemented review safety-net",
         )
-        # Pre-populate state with an existing review using the exact key format
-        # isoformat_z produces "Z" suffix; has_review_request builds "review:{agent}:{task_key}"
-        task_key = f"opencode:{updated.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')}"
-        state_data = {
-            f"review:opencode:{task_key}": {
-                "dispatched": True,
-                "dispatched_at": self.now.isoformat(),
-            }
-        }
-        self.state.write_text(json.dumps(state_data), encoding="utf-8")
-
         os.environ["AI_COLLAB_WAKEUP_ADAPTER"] = "notify-only"
         try:
-            results = scan_missing_reviews(
+            first = scan_missing_reviews(
+                self.root,
+                now=self.now,
+                safety_net_seconds=30,
+                events_file=self.events,
+                state_file=self.state,
+                log_file=self.log,
+            )
+            second = scan_missing_reviews(
                 self.root,
                 now=self.now,
                 safety_net_seconds=30,
@@ -3076,9 +3072,42 @@ class TestScanMissingReviews(unittest.TestCase):
         finally:
             del os.environ["AI_COLLAB_WAKEUP_ADAPTER"]
 
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["action"], "deduped")
-        self.assertEqual(results[0]["reason"], "review-already-sent")
+        self.assertEqual(first[0]["action"], "review-dispatched")
+        self.assertEqual(len(second), 1)
+        self.assertEqual(second[0]["action"], "deduped")
+        self.assertEqual(second[0]["reason"], "review-already-sent")
+
+    def test_reconfirmed_live_state_with_same_files_is_not_a_new_review(self):
+        # A "done" live state can get rewritten with a fresh `updated`
+        # timestamp for reasons that have nothing to do with new work -- a
+        # heartbeat, a recovery turn re-registering the same runtime session
+        # -- while `files_in_scope` stays exactly the same. Confirmed live:
+        # a session repeatedly "re-confirming" its already-reviewed state
+        # kept re-triggering review requests to every related role, because
+        # the dedup key used to be built from the timestamp alone.
+        files = ["thread-recover-opencode-ui-20260905.md", "live/opencode.agent.json"]
+        self._write_live_state("opencode", "done", (self.now - timedelta(seconds=45)).isoformat(), files, "Recovery turn 1")
+        os.environ["AI_COLLAB_WAKEUP_ADAPTER"] = "notify-only"
+        try:
+            first = scan_missing_reviews(
+                self.root, now=self.now, safety_net_seconds=30,
+                events_file=self.events, state_file=self.state, log_file=self.log,
+            )
+            # Same files, later timestamp -- e.g. a heartbeat re-confirming
+            # the same completed work, not new work.
+            later = self.now + timedelta(minutes=2)
+            self._write_live_state("opencode", "done", (later - timedelta(seconds=45)).isoformat(), files, "Recovery turn 2")
+            second = scan_missing_reviews(
+                self.root, now=later, safety_net_seconds=30,
+                events_file=self.events, state_file=self.state, log_file=self.log,
+            )
+        finally:
+            del os.environ["AI_COLLAB_WAKEUP_ADAPTER"]
+
+        self.assertEqual(first[0]["action"], "review-dispatched")
+        self.assertEqual(len(second), 1)
+        self.assertEqual(second[0]["action"], "deduped")
+        self.assertEqual(second[0]["reason"], "review-already-sent")
 
     def test_role_with_no_related_roles_no_dispatch(self):
         """A role with empty related_roles dispatches nothing when no other roles have cross-agent related roles."""

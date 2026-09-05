@@ -715,8 +715,20 @@ def scan_missing_reviews(
             results.append({"agent_slug": agent_slug, "action": "skipped", "reason": "trivial-task"})
             continue
 
-        # Build a dedup key from agent + timestamp of completion
-        task_key = f"{agent_slug}:{isoformat_z(updated)}"
+        # Build a dedup key from agent + the actual files touched, not the
+        # live state's timestamp. A "done" live state can get re-written
+        # with a fresh `updated` timestamp for reasons that have nothing to
+        # do with new work -- a heartbeat, a recovery turn re-registering
+        # the same runtime session -- while `files_in_scope` stays exactly
+        # the same. Keying on the timestamp treated every one of those
+        # touches as a brand-new completed task and re-dispatched a review
+        # to every related role each time (confirmed live: a session
+        # repeatedly "re-confirming" its already-done state kept
+        # re-triggering review requests for the same unchanged work).
+        # Hashing the actual files means only genuinely different completed
+        # work produces a new key.
+        files_key = "|".join(sorted(str(f) for f in files_in_scope))
+        task_key = f"{agent_slug}:{hashlib.sha256(files_key.encode('utf-8')).hexdigest()[:16]}"
 
         if has_review_request(project_root, agent_slug, task_key, state_file=state_file):
             results.append({"agent_slug": agent_slug, "action": "deduped", "reason": "review-already-sent"})
