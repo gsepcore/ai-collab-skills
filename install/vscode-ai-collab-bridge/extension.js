@@ -142,7 +142,17 @@ async function pasteNative(prompt) {
     // submitted). Scale the settle time with prompt length instead of
     // guessing a single constant.
     const pasteSettleSeconds = Math.min(0.3 + prompt.length / 2000, 1.5).toFixed(2);
-    const script = `tell application "System Events"\nrepeat with candidateName in {${nameList}}\nif exists (first process whose name is candidateName) then\nset frontmost of (first process whose name is candidateName) to true\nexit repeat\nend if\nend repeat\nend tell\ndelay 0.2\ntell application "System Events"\nkeystroke "v" using command down\ndelay ${pasteSettleSeconds}\nkey code 36\nend tell`;
+    // Plain Return submits a short, single-line paste, but a real
+    // multi-paragraph prompt (the normal case: a spec, a debate kickoff with
+    // numbered rules) pastes as literal multi-line text -- confirmed live,
+    // by direct visual confirmation, that Return then just left the text
+    // sitting in the box with its Send button still enabled instead of
+    // submitting it. Cmd+Return is the conventional "force submit" chord for
+    // multi-line chat inputs (mirrors ChatGPT's own web UI). Send both: if
+    // plain Return already submitted and cleared the box, Cmd+Return on an
+    // idle/empty input is a harmless no-op; if Return only inserted a
+    // newline, Cmd+Return is what actually dispatches it.
+    const script = `tell application "System Events"\nrepeat with candidateName in {${nameList}}\nif exists (first process whose name is candidateName) then\nset frontmost of (first process whose name is candidateName) to true\nexit repeat\nend if\nend repeat\nend tell\ndelay 0.2\ntell application "System Events"\nkeystroke "v" using command down\ndelay ${pasteSettleSeconds}\nkey code 36\ndelay 0.2\nkey code 36 using {command down}\nend tell`;
     await runStrict('/usr/bin/osascript', ['-e', script]);
     await delay(150);
   } finally {
