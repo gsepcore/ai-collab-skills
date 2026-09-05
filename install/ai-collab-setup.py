@@ -464,15 +464,30 @@ def run_capability_onboarding(root: Path, expected_agents: list[str], args: argp
         "--visual-mode",
         "observe",
     ]
-    queue_only = os.environ.get("AI_COLLAB_SETUP_ONBOARDING_QUEUE_ONLY", "").strip().lower() in {
+    # Default to queue-only unconditionally. The old logic only forced
+    # queue-only when there was nothing to wake (`not wake_targets`) -- the
+    # one case that's a safe no-op either way -- and dispatched for real
+    # exactly when there WAS someone to wake, which is the case that matters.
+    # For an agent whose only registered route is visible chat (e.g. Codex
+    # under container=antigravity), "dispatch for real" means launching that
+    # IDE from scratch if it isn't already open. Confirmed live: running
+    # `/collab setup` on a project with antigravity-only agents popped a new
+    # Antigravity window as a pure side effect of onboarding, with no human
+    # asking for or watching that window. The installed daemon already
+    # delivers queued onboarding messages safely (daemon-context guards
+    # already prevent it from popping windows); setup itself should never
+    # need to force a live visible wake as a side effect of running a CLI
+    # command. AI_COLLAB_SETUP_ONBOARDING_IMMEDIATE_WAKE is the explicit,
+    # opt-in escape hatch for a caller that really does want it.
+    immediate_wake = os.environ.get("AI_COLLAB_SETUP_ONBOARDING_IMMEDIATE_WAKE", "").strip().lower() in {
         "1", "true", "yes", "on",
     }
-    if queue_only or not wake_targets:
+    if not immediate_wake:
         command.append("--queue-only")
     returncode = run_visible(command, cwd=root)
     after = capability_ack_status(root, expected_agents)
     after["dispatch"] = (
-        "queued-for-daemon" if (queue_only or not wake_targets) and returncode == 0
+        "queued-for-daemon" if not immediate_wake and returncode == 0
         else "started" if returncode == 0
         else "partially-failed"
     )

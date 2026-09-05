@@ -209,6 +209,53 @@ class TestUnifiedSetup(unittest.TestCase):
         self.assertEqual(result["queued_agents"], ["opencode"])
         run_visible.assert_not_called()
 
+    def test_capability_onboarding_defaults_to_queue_only_even_with_real_wake_targets(self):
+        # Confirmed live: without this default, running /collab setup on a
+        # project with a visible-chat-only agent (codex under
+        # container=antigravity) launched that IDE from scratch as a pure
+        # side effect of onboarding -- nobody asked for or was watching for
+        # that window. Queue-only must be the default whenever there is a
+        # real wake target, not only when there is nothing to wake (the
+        # previous logic forced it in exactly the case that didn't matter).
+        digest = "cap_test"
+        (self.collab / "agents.json").write_text(json.dumps({
+            "project_id": "prj_test",
+            "agents": [{"agent": "codex", "agent_id": "agt_codex"}, {"agent": "opencode", "agent_id": "agt_opencode"}],
+        }), encoding="utf-8")
+        (self.collab / "capabilities.json").write_text(json.dumps({
+            "capability_catalog": {"digest": digest, "features": [{"id": "shared-conversations"}]},
+            "capability_onboarding": {"thread": ".ai-collab/discussions/discussion-capability-onboarding-cap_test.md"},
+        }), encoding="utf-8")
+        args = argparse.Namespace(actor="claude-code", installer_source=None, retry_capability_onboarding=False)
+
+        with mock.patch.object(_mod, "run_visible", return_value=0) as run_visible:
+            result = _mod.run_capability_onboarding(self.root, ["codex", "opencode"], args)
+
+        run_visible.assert_called_once()
+        command = run_visible.call_args[0][0]
+        self.assertIn("--queue-only", command)
+        self.assertEqual(result["dispatch"], "queued-for-daemon")
+
+    def test_capability_onboarding_immediate_wake_is_an_explicit_opt_in(self):
+        digest = "cap_test"
+        (self.collab / "agents.json").write_text(json.dumps({
+            "project_id": "prj_test",
+            "agents": [{"agent": "codex", "agent_id": "agt_codex"}, {"agent": "opencode", "agent_id": "agt_opencode"}],
+        }), encoding="utf-8")
+        (self.collab / "capabilities.json").write_text(json.dumps({
+            "capability_catalog": {"digest": digest, "features": [{"id": "shared-conversations"}]},
+            "capability_onboarding": {"thread": ".ai-collab/discussions/discussion-capability-onboarding-cap_test.md"},
+        }), encoding="utf-8")
+        args = argparse.Namespace(actor="claude-code", installer_source=None, retry_capability_onboarding=False)
+
+        with mock.patch.dict(os.environ, {"AI_COLLAB_SETUP_ONBOARDING_IMMEDIATE_WAKE": "1"}):
+            with mock.patch.object(_mod, "run_visible", return_value=0) as run_visible:
+                result = _mod.run_capability_onboarding(self.root, ["codex", "opencode"], args)
+
+        command = run_visible.call_args[0][0]
+        self.assertNotIn("--queue-only", command)
+        self.assertEqual(result["dispatch"], "started")
+
     def test_global_reinstall_suppresses_recursive_project_setup(self):
         installer = self.root / "install.sh"
         installer.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
