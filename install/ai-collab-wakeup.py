@@ -291,6 +291,58 @@ def find_mentions(message: str) -> list[str]:
     return sorted(dict.fromkeys(match.group(1).lower() for match in MENTION_RE.finditer(message)))
 
 
+def all_registered_agents(project_root: Path) -> list[str]:
+    agents = load_json(project_root / ".ai-collab" / "agents.json", {})
+    if not isinstance(agents, dict):
+        return []
+    roster = agents.get("agents", agents.get("roster", []))
+    result: list[str] = []
+    if isinstance(roster, list):
+        for item in roster:
+            if isinstance(item, str) and item.strip():
+                result.append(item.strip().lower())
+            elif isinstance(item, dict):
+                slug = str(item.get("agent") or item.get("slug") or "").strip().lower()
+                if slug:
+                    result.append(slug)
+    return result
+
+
+def capability_onboarding_digest_from_thread_id(thread_id: str) -> str:
+    match = re.match(r"^capability-onboarding-(.+)$", thread_id)
+    return match.group(1) if match else ""
+
+
+def capability_onboarding_is_complete(project_root: Path, body: str, digest: str) -> bool:
+    """Whether every registered agent has already posted its own capability_ack for `digest`.
+
+    A capability-onboarding thread has one clear, objective completion
+    condition -- unlike a general discussion, there's no need to guess intent
+    from a message's `type` label or wording. Checking that condition
+    directly (instead of only skipping known closing message shapes)
+    survives whatever type or phrasing future messages in the thread happen
+    to use. Confirmed live: this same thread kept getting re-treated as
+    needing a fresh wake for hours after every agent had already
+    acknowledged, because its last message was type "opinion" -- a shape
+    neither the decision/acknowledgement type check nor the authorization
+    marker anticipated -- and merely mentioned "@codex" while summarizing
+    that onboarding was already done.
+    """
+    if not digest:
+        return False
+    expected = set(all_registered_agents(project_root))
+    if not expected:
+        return False
+    acknowledged: set[str] = set()
+    sections = re.split(r"(?m)^## [^\n]+ -- ([\w-]+)\s*$", body)
+    for index in range(1, len(sections), 2):
+        author = sections[index].strip().lower()
+        section_body = sections[index + 1] if index + 1 < len(sections) else ""
+        if re.search(rf"(?mi)^capability_ack:\s*{re.escape(digest)}\s*$", section_body):
+            acknowledged.add(author)
+    return expected.issubset(acknowledged)
+
+
 def capability_for(project_root: Path, target_slug: str) -> dict[str, Any]:
     payload = load_json(project_root / ".ai-collab" / "capabilities.json", {})
     rows = payload.get("agents") if isinstance(payload, dict) else []
@@ -3030,6 +3082,15 @@ def process_thread(
                 "last_activity": isoformat_z(last_activity),
                 "stale_days": stale_days,
             }
+
+    thread_id = str(meta.get("thread") or thread_id_from_path(thread_path))
+    onboarding_digest = capability_onboarding_digest_from_thread_id(thread_id)
+    if onboarding_digest and capability_onboarding_is_complete(
+        project_root_for_path(thread_path), body, onboarding_digest
+    ):
+        meta["status"] = "closed"
+        thread_path.write_text(render_frontmatter(meta, body), encoding="utf-8")
+        return {"action": "ignored", "reason": "onboarding-complete", "digest": onboarding_digest}
 
     message = latest_thread_message(body)
     if not message:

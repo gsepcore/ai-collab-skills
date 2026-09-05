@@ -2800,6 +2800,98 @@ project: gsep
         self.assertEqual(events[0]["thread_path"], str(discussion))
 
 
+class TestCapabilityOnboardingCompletion(unittest.TestCase):
+    # Confirmed live: a capability-onboarding thread kept getting re-treated
+    # as needing a fresh wake for hours after every registered agent had
+    # already posted its own capability_ack -- because the thread's LAST
+    # message happened to be type "opinion" (a shape the decision/
+    # acknowledgement type check and the authorization-marker check both
+    # miss) and merely mentioned "@codex" while summarizing that onboarding
+    # was already done. Unlike a general discussion, a capability-onboarding
+    # thread has one objective completion condition -- check that directly
+    # instead of trying to enumerate every message shape that means "done".
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.collab = self.root / ".ai-collab"
+        (self.collab / "discussions").mkdir(parents=True)
+        (self.collab / "agents.json").write_text(
+            json.dumps({"agents": [{"agent": "claude-code"}, {"agent": "codex"}, {"agent": "opencode"}]}),
+            encoding="utf-8",
+        )
+        self.thread = self.collab / "discussions" / "discussion-capability-onboarding-cap_test.md"
+        self.events = self.root / "events.json"
+        self.state = self.root / "state.json"
+        self.log = self.root / "wakeup.log"
+        self.now = datetime(2026, 5, 12, 12, 0, 0, tzinfo=timezone.utc)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def append(self, author, message):
+        append_thread_message(
+            self.thread,
+            task_id="capability-onboarding-cap_test",
+            project="gsep",
+            inbox_name="",
+            author_slug=author,
+            message=message,
+            now=self.now,
+        )
+
+    def test_onboarding_thread_closes_once_everyone_acknowledged_regardless_of_latest_message_shape(self):
+        self.append("claude-code", "capability_ack: cap_test\nagent_id: agt_1\nsession_id: ses_1\n")
+        self.append("opencode", "capability_ack: cap_test\nagent_id: agt_2\nsession_id: ses_2\n")
+        self.append("codex", "capability_ack: cap_test\nagent_id: agt_3\nsession_id: ses_3\n")
+        self.append("opencode", "type: opinion\n\nOnboarding is complete. I agree with @codex's conditions.")
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "ignored")
+        self.assertEqual(result["reason"], "onboarding-complete")
+        self.assertEqual(result["digest"], "cap_test")
+        meta, _body = parse_frontmatter(self.thread.read_text(encoding="utf-8"))
+        self.assertEqual(meta.get("status"), "closed")
+        self.assertFalse(self.events.exists())
+
+        # And it stays closed / inert on a later scan, same as any other
+        # closed thread.
+        second = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+        self.assertEqual(second, {"action": "ignored", "reason": "closed"})
+
+    def test_onboarding_thread_stays_open_and_wakes_until_everyone_has_acknowledged(self):
+        self.append("claude-code", "capability_ack: cap_test\nagent_id: agt_1\nsession_id: ses_1\n")
+        self.append("opencode", "capability_ack: cap_test\nagent_id: agt_2\nsession_id: ses_2\n")
+        self.append("opencode", "@codex please post your capability_ack here.")
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "thread-mentions")
+        meta, _body = parse_frontmatter(self.thread.read_text(encoding="utf-8"))
+        self.assertNotEqual(meta.get("status"), "closed")
+
+
 class TestScanMissingReviews(unittest.TestCase):
     """Tests for the daemon safety-net review dispatch (scan_missing_reviews)."""
 
