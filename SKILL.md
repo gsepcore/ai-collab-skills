@@ -1,6 +1,6 @@
 ---
 name: collab
-description: Enable always-on collaboration and directed implementation between multiple AI coding agents (Claude Code, OpenCode, Codex, Aider, Hermes, Cursor, Windsurf, Copilot Chat, etc.) in one project. Use whenever a project contains `.ai-collab/agents.json` or the user asks for implementation, review, debate, delegation, agent opinions, role-based work, shared context, conflict avoidance, team setup, or multi-agent execution. In an onboarded project, activate automatically for ordinary requests without requiring the user to say "collab" or name a feature. Also triggers on /collab, /collab team, /collab orchestrate, "assign roles", "reparte las tareas", "equipo", "agentes", "comparte contexto", or "Codex como director".
+description: Enable always-on collaboration and directed implementation between multiple AI coding agents (Claude Code, OpenCode, Codex, Aider, Hermes, Cursor, Windsurf, Copilot Chat, etc.) in one project. Use whenever a project contains `.ai-collab/agents.json` or the user asks for implementation, review, debate, delegation, agent opinions, role-based work, shared context, conflict avoidance, team setup, spec-driven implementation, or multi-agent execution. In an onboarded project, activate automatically for ordinary requests without requiring the user to say "collab" or name a feature. Also triggers on /collab, /collab team, /collab orchestrate, /collab spec, "assign roles", "reparte las tareas", "equipo", "agentes", "comparte contexto", "debate mi spec", or "Codex como director".
 ---
 
 # AI Collab Skill
@@ -519,6 +519,64 @@ python3 ~/.claude/ai-collab-orchestrate.py finalize --run-id "$RUN_ID" --actor "
 - Ports and logs are corroborating evidence, never substitutes for sight. The visual roster must map agent ↔ project ↔ visible surface ↔ PID/TTY ↔ agent-owned port, and label IDE-bridge ports as routing infrastructure rather than pretending they belong to an agent.
 - Evidence depends on surface type: terminals require one exact project process/PID/TTY and any agent-owned port; native IDE chats intentionally share the outer IDE host. Require that host PID to be an ancestor of the exact project bridge, then bind the agent with `registered-shared-project-host+position-bound-top-band-label` plus actual pane pixels. Never invent a child process or port.
 - Strict visual audit mode fails closed if the screenshot is missing/stale, OCR cannot identify a required surface, process/project identity is ambiguous, an agent cannot inspect the image, or pre/post evidence disagrees. Default observe mode preserves those findings as warnings and continues normal collaboration.
+
+---
+
+## Command: /collab spec [path-to-spec-file]
+
+The standard entry point right after onboarding for a project that starts from a written spec — the normal case this skill is built for: a user (or student) sets up collab, then brings their own spec. Runs the full lifecycle end to end: debate and analyze the spec, converge on one plan with agents proposing improvements from their own roles, get explicit human authorization, then implement autonomously.
+
+**Steps:**
+
+1. Locate the spec file. Default to `SPEC.md` at the project root if no path is given. If it doesn't exist, ask the user for the file path or to paste the spec content into a new `SPEC.md`; do not proceed without one.
+2. Preflight: confirm `.ai-collab/agents.json` exists (`/collab setup` already ran) and `.ai-collab/roles.json` exists (`/collab team` already ran). Run whichever is missing first.
+3. Determine the director and participants using the same director-selection rules as `/collab orchestrate`. Every other registered agent in `agents.json` is a participant.
+4. Launch the spec debate with the deterministic helper, feeding it the full spec text inline in `--message`:
+
+```bash
+python3 ~/.claude/ai-collab-debate.py run \
+  --topic "Spec review: $(basename "$SPEC_FILE")" \
+  --author "$DIRECTOR" \
+  --participants "$AGENTS" \
+  --rounds 4 \
+  --wait-seconds 240 \
+  --message "MODO DEBATE DE SPEC. Este es el spec del proyecto -- leelo completo antes de opinar:
+
+---SPEC START---
+$SPEC_CONTENTS
+---SPEC END---
+
+Reglas:
+1) Cada agente confirma su(s) rol(es) real(es) desde roles.json y nombra a los demas participantes por su agent_id exacto -- prueba de que realmente se ven, no de que responden en el vacio.
+2) Analicen el spec: ambiguedades, riesgos tecnicos, huecos de seguridad, dependencias externas o supuestos no declarados. Cada agente propone al menos una mejora concreta desde su propio rol (no repita lo que ya dijo otro).
+3) Troceen la implementacion en tareas discretas -- nunca un solo bloque monolitico, incluso si el spec es pequeno. Cada tarea necesita: id, rol/owner, archivos o alcance permitido, descripcion de una linea, y un criterio de validacion concreto. Formato exacto, una linea por tarea:
+   TASK: <task-id> | ROLE: <role> | FILES: <archivos permitidos, separados por coma> | DESC: <una linea> | VALIDATION: <comando o chequeo>
+4) Converjan en UN solo plan, no una lista de opciones. Quien lo vea mas nitido cierra la ronda con un mensaje type: decision titulado 'RESUMEN DE EJECUCION SPEC' que incluya el enfoque acordado, la lista completa de tareas en el formato de arriba, y los riesgos que quedan abiertos.
+5) La linea de cierre debe ser literalmente: 'PENDIENTE DE AUTORIZACION -- no implementar hasta que el usuario confirme.'
+6) Nadie escribe codigo del spec hasta esa autorizacion explicita."
+```
+
+5. The thread closes itself once the authorization line lands (the wakeup daemon's closing-marker detection sets `status: closed`). Read that final `type: decision` message in full.
+6. Parse its `TASK: ... | ROLE: ... | FILES: ... | DESC: ... | VALIDATION: ...` lines into a task list. If the debate did not converge on a single plan within the round cap, stop here and report the disagreement to the user — do not assemble a plan out of unconverged opinions.
+7. Present the complete RESUMEN DE EJECUCION (analysis, risks, proposed improvements, and the parsed task list) to the user verbatim, and ask for explicit authorization to implement. Proceed only on an explicit yes; an unanswered prompt or an ambiguous reply is not authorization.
+8. On authorization, start an orchestrate run with the same director/participants and feed it the parsed tasks directly, then follow `/collab orchestrate`'s own steps and safety rules from here on:
+
+```bash
+python3 ~/.claude/ai-collab-orchestrate.py init --goal "Implement spec: $SPEC_FILE" --director "$DIRECTOR" --agents "$AGENTS" --title "Spec implementation"
+# for each parsed TASK line:
+python3 ~/.claude/ai-collab-orchestrate.py add-task --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK_ID" --title "$DESC" --role "$ROLE" --allowed-files "$FILES" --description "$DESC" --validation "$VALIDATION"
+python3 ~/.claude/ai-collab-orchestrate.py assign --run-id "$RUN_ID" --actor "$DIRECTOR" --task-id "$TASK_ID"
+```
+
+9. Let the run proceed autonomously to completion: no further permission prompts for individual tasks. Only stop and return to the user if a task is genuinely blocked (a missing external credential, an ambiguity the spec itself doesn't resolve, a validation that keeps failing) — record the blocker explicitly in that task's thread instead of guessing past it.
+10. For a large or multi-phase spec, group tasks into phases (e.g. foundation/backend, then frontend, then integration) and run/finalize one phase at a time rather than forcing a single giant run. The single authorization gate at step 7 covers the whole plan; only return to the user for fresh authorization if execution reveals the plan needs to change materially from what was authorized.
+11. Finalize the same way `/collab orchestrate` does: only when every task is `done` or explicitly `failed`, validation evidence exists for each, and `final-summary.md` is written.
+
+**Safety rules:**
+- Never skip the debate step, even for a spec that looks trivial — analysis before implementation is the whole point of this command.
+- Never begin implementation before the explicit authorization in step 7 is recorded; a `type: decision` message alone is the team's proposal, not the user's approval.
+- If mid-implementation the team discovers the spec needs a materially different approach than what was authorized, stop and reopen the debate/authorization steps for that change instead of silently improvising around an authorized plan.
+- Everything in `/collab orchestrate`'s safety rules applies unchanged: no editing outside a task's allowed files without approval, no marking a task done without real completion evidence, no silent headless fallback for a visible team conversation, truthful evidence vocabulary throughout.
 
 ---
 
