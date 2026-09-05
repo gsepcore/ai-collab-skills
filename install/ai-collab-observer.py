@@ -1200,17 +1200,28 @@ tell application "System Events"
   return output
 end tell
 '''
-    try:
-        completed = run_command(["osascript", "-e", script], root, runner=runner, timeout=8)
-    except (OSError, subprocess.TimeoutExpired):
-        return None, {}
-    if completed.returncode != 0:
-        return None, {}
     signals = project_signals(root)
-    for window in parse_window_rows(completed.stdout):
-        haystack = f"{window['app']} {window['title']}".lower()
-        if any(signal in haystack for signal in signals):
-            return window["rect"], window
+    # System Events window enumeration is flaky in practice -- a window mid
+    # animation/repaint, a transient Accessibility hiccup, or a slow Electron
+    # process can make a real, currently-visible window come back empty for
+    # one query and then answer normally moments later (confirmed live: the
+    # same project window was found at one tick and missed four minutes
+    # later with nothing about the window actually changing). One retry
+    # after a short pause absorbs that class of blip without materially
+    # slowing down the common case where the first query already succeeds.
+    attempts = 2
+    for attempt in range(attempts):
+        try:
+            completed = run_command(["osascript", "-e", script], root, runner=runner, timeout=8)
+        except (OSError, subprocess.TimeoutExpired):
+            completed = None
+        if completed is not None and completed.returncode == 0:
+            for window in parse_window_rows(completed.stdout):
+                haystack = f"{window['app']} {window['title']}".lower()
+                if any(signal in haystack for signal in signals):
+                    return window["rect"], window
+        if attempt < attempts - 1:
+            time.sleep(0.4)
     return None, {}
 
 

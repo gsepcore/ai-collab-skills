@@ -375,6 +375,42 @@ to: opencode
         self.assertEqual(summary["screenshot"]["fallback"], "screen-after-project-window-match")
         self.assertEqual(len(calls), 2)
 
+    def test_project_window_rect_retries_a_transient_empty_query(self):
+        # System Events can answer empty once (window mid-repaint, a slow
+        # Electron process, an Accessibility blip) and then find the same,
+        # still-open window normally moments later. project_window_rect must
+        # not give up after a single empty query.
+        osascript_calls = []
+
+        def runner(command, **kwargs):
+            if command[:2] == ["osascript", "-e"]:
+                osascript_calls.append(command)
+                if len(osascript_calls) == 1:
+                    return Completed(stdout="")
+                return Completed(stdout=f"Code\t{self.root.name}\t10,20,800,600\n")
+            return self.fake_runner(command, **kwargs)
+
+        rect, window = _mod.project_window_rect(self.root, runner)
+
+        self.assertEqual(rect, "10,20,800,600")
+        self.assertEqual(window["app"], "Code")
+        self.assertEqual(len(osascript_calls), 2)
+
+    def test_project_window_rect_gives_up_after_repeated_empty_queries(self):
+        osascript_calls = []
+
+        def runner(command, **kwargs):
+            if command[:2] == ["osascript", "-e"]:
+                osascript_calls.append(command)
+                return Completed(stdout="")
+            return self.fake_runner(command, **kwargs)
+
+        rect, window = _mod.project_window_rect(self.root, runner)
+
+        self.assertIsNone(rect)
+        self.assertEqual(window, {})
+        self.assertEqual(len(osascript_calls), 2)
+
     def test_screenshot_failure_updates_last_marker(self):
         calls = []
 
