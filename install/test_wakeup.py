@@ -2532,6 +2532,67 @@ project: gsep
         self.assertEqual(result["reason"], "closed")
         self.assertFalse(self.events.exists())
 
+    def test_decision_message_mentioning_participants_does_not_wake_them(self):
+        # A closing RESUMEN DE EJECUCION naturally says things like "@codex
+        # implementa, @opencode revisa" to describe who does what -- that is
+        # descriptive, not a new actionable request. Confirmed live: this
+        # kept re-triggering visible wakeups for an already-converged round.
+        self.append(
+            author="claude-code",
+            message="type: decision\nto: codex, opencode\n\nRESUMEN DE EJECUCION\n@codex implementa, @opencode revisa.",
+        )
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "ignored")
+        self.assertEqual(result["reason"], "closing-message-type")
+        self.assertEqual(result["message_type"], "decision")
+        self.assertFalse(self.events.exists())
+
+    def test_acknowledgement_message_mentioning_participants_does_not_wake_them(self):
+        self.append(
+            author="opencode",
+            message="type: acknowledgement\nto: claude-code, codex\n\nConfirmo cierre, @claude-code @codex.",
+        )
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "ignored")
+        self.assertEqual(result["reason"], "closing-message-type")
+        self.assertFalse(self.events.exists())
+
+    def test_proposal_message_still_wakes_mentioned_participants(self):
+        # Guard the fix's scope: only decision/acknowledgement are treated as
+        # closing. A live, actionable message type must keep waking targets.
+        self.append(author="claude-code", message="type: proposal\nto: codex\n\n@codex please look at this.")
+
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+        )
+
+        self.assertEqual(result["action"], "thread-mentions")
+        self.assertEqual(result["results"][0]["target_slug"], "codex")
+        self.assertIn(result["results"][0]["action"], {"dispatched", "notified"})
+
     def test_stale_open_thread_is_ignored_without_being_closed(self):
         self.append()
 

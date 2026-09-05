@@ -2984,6 +2984,20 @@ def process_thread(
     if not message:
         return {"action": "ignored", "reason": "no-message"}
 
+    # `decision` and `acknowledgement` are closing message types (the natural
+    # conversation contract: "record accepted choices with decision"). They
+    # routinely @mention every participant to describe who does what next --
+    # e.g. a RESUMEN DE EJECUCION saying "@codex implementa, @opencode
+    # revisa" -- which is descriptive, not a new actionable request. Waking
+    # everyone back up on every closing message created a self-perpetuating
+    # loop: confirmed live, a debate's own closing decision re-triggered
+    # visible wakeups for a round that had already converged, which then
+    # produced more closing replies mentioning the same participants, ad
+    # infinitum.
+    type_match = re.search(r"(?m)^type:\s*(\S+)\s*$", message["content"])
+    if type_match and type_match.group(1).strip().lower() in {"decision", "acknowledgement"}:
+        return {"action": "ignored", "reason": "closing-message-type", "message_type": type_match.group(1).strip().lower()}
+
     author_slug = message["author_slug"]
     targets = [slug for slug in find_mentions(message["content"]) if slug != author_slug]
     target_filter = set(csv_env("AI_COLLAB_WAKE_TARGETS"))
