@@ -29,7 +29,11 @@ from pathlib import Path
 from typing import Any
 
 DECISION_MARKERS = ("resumen de ejecucion", "resumen de ejecución", "execution summary")
-CLOSING_MARKERS = ("pendiente de autorizacion de luis", "pendiente de autorización de luis")
+# Generic on purpose: this skill runs in many different people's projects
+# (not just one person's), so the closing line this tool teaches agents to
+# write -- and the marker it looks for to know a round actually closed --
+# must not hardcode any one person's name.
+CLOSING_MARKERS = ("pendiente de autorizacion", "pendiente de autorización")
 MESSAGE_RE = re.compile(
     r"(?m)^##\s+(?P<ts>\S+)\s+(?:--|—)\s+(?P<author>[a-zA-Z0-9_-]+)\s*\n"
     r"(?P<body>.*?)(?=^##\s+\S+\s+(?:--|—)\s+[a-zA-Z0-9_-]+\s*$|\Z)",
@@ -133,8 +137,8 @@ KICKOFF_PREAMBLE = (
     "3) En cuanto haya un camino de implementacion claro, quien lo vea mas nitido debe "
     "cerrar la ronda con un mensaje `type: decision` titulado 'RESUMEN DE EJECUCION' que "
     "incluya: el enfoque acordado, archivos/alcance afectado, riesgos abiertos, y la linea "
-    "literal 'PENDIENTE DE AUTORIZACION DE LUIS -- no implementar hasta que el confirme.'\n"
-    "4) Nadie escribe codigo de este tema hasta que Luis autorice ese resumen explicitamente.\n\n"
+    "literal 'PENDIENTE DE AUTORIZACION -- no implementar hasta que el usuario confirme.'\n"
+    "4) Nadie escribe codigo de este tema hasta que el usuario autorice ese resumen explicitamente.\n\n"
 )
 
 
@@ -279,7 +283,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"Thread: {thread_path}")
     if decision:
         print(f"Decision reached by @{decision['author']} at {decision['ts']}.")
-        print("PENDIENTE DE AUTORIZACION DE LUIS antes de implementar.\n")
+        print("PENDIENTE DE AUTORIZACION DEL USUARIO antes de implementar.\n")
         print(decision["body"])
         return 0
     used_summary = ", ".join(f"@{p}={per_agent_used[p]}/{total_rounds}" for p in participants)

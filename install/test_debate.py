@@ -143,6 +143,25 @@ class TestFindDecision(unittest.TestCase):
 
         self.assertIsNotNone(decision)
 
+    def test_fallback_type_detects_closing_line_for_any_user_not_just_luis(self):
+        # This skill runs in many different students' projects, not just one
+        # person's -- the closing line/marker must not be hardcoded to one
+        # name (confirmed: it used to require the literal text "de luis").
+        text = self._thread(
+            self._message(
+                "2026-08-20T12:00:00Z",
+                "opencode",
+                "review",
+                "RESUMEN DE EJECUCION -- esto es un cierre real.\n"
+                "PENDIENTE DE AUTORIZACION -- no implementar hasta que el usuario confirme.",
+            )
+        )
+        messages = _mod.parse_messages(text)
+
+        decision = _mod.find_decision(messages, "2026-08-20T11:00:00Z")
+
+        self.assertIsNotNone(decision)
+
     def test_fallback_type_with_only_title_is_not_a_decision(self):
         text = self._thread(
             self._message(
