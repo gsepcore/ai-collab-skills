@@ -23,7 +23,8 @@
 #   17. Codex bridge API         → ~/.claude/ai-collab-codex-bridge.py
 #   18. Visible IDE bridge       → VS Code/Antigravity/Cursor/Windsurf extension
 #   19. OCR engine               → tesseract auto-install when possible
-#   20. Background daemon        → launchd (macOS) / cron (Linux)
+#   20. Background daemon        → launchd (macOS) / cron (Linux) -- OFF by default,
+#                                   set AI_COLLAB_ENABLE_DAEMON=1 to opt in
 #   21. Claude Code hooks        → ~/.claude/settings.json  (global, all projects)
 #
 #  Usage (from cloned repo):
@@ -47,7 +48,22 @@ PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 BRIDGE_PLIST_LABEL="com.gsepcore.ai-collab-codex-bridge"
 BRIDGE_PLIST_PATH="$HOME/Library/LaunchAgents/${BRIDGE_PLIST_LABEL}.plist"
 YES="${AI_COLLAB_YES:-}"          # set to 1 to skip confirmations
-SKIP_DAEMON="${AI_COLLAB_NO_DAEMON:-}"  # set to 1 to skip daemon
+# The background daemon defaults to OFF. It watches every .ai-collab/ project
+# on the machine and can autonomously escalate to a visible IDE chat window
+# for any of them -- confirmed live: this repeatedly interrupted active work
+# in an unrelated window/project the user was actively typing in, popped
+# stray app windows, and re-notified about already-finished work. Attended
+# collaboration (the user or an agent explicitly running /collab commands)
+# does not depend on the daemon at all and is unaffected by it being off.
+# Set AI_COLLAB_ENABLE_DAEMON=1 to opt into the old always-on background
+# behavior; AI_COLLAB_NO_DAEMON=1 is still honored for backward compatibility.
+SKIP_DAEMON=1
+if [[ "${AI_COLLAB_ENABLE_DAEMON:-}" = "1" ]]; then
+  SKIP_DAEMON=""
+fi
+if [[ "${AI_COLLAB_NO_DAEMON:-}" = "1" ]]; then
+  SKIP_DAEMON=1
+fi
 SKIP_CODEX_BRIDGE="${AI_COLLAB_NO_CODEX_BRIDGE:-}"  # set to 1 to skip Codex bridge API
 INSTALL_OCR="${AI_COLLAB_INSTALL_OCR:-1}"  # set to 0 to skip OCR engine install
 SKIP_IDE_BRIDGE="${AI_COLLAB_NO_IDE_BRIDGE:-}"  # set to 1 to skip visible integrated-terminal bridge
@@ -318,12 +334,30 @@ echo ""
 bold "Step 3/6 — Installing semantic vision OCR"
 install_ocr_engine
 
-# ── 4. Start background daemon ───────────────────────────────────────────────
+# ── 4. Start background daemon (opt-in, off by default) ─────────────────────
 echo ""
-bold "Step 4/6 — Starting background daemon"
+bold "Step 4/6 — Background daemon (off by default)"
 
 if [[ -n "$SKIP_DAEMON" ]]; then
-  yellow "Daemon skipped (AI_COLLAB_NO_DAEMON=1)"
+  info "Not installed. Collaboration runs attended: it happens when you or an agent"
+  info "explicitly runs a /collab command, not from an unattended background watcher."
+  info "Set AI_COLLAB_ENABLE_DAEMON=1 before installing if you want the old always-on"
+  info "background behavior (watches every project, can proactively re-notify and"
+  info "escalate to a visible IDE window on its own)."
+
+  # Migration: earlier installs turned this daemon on unconditionally. Tear
+  # down any instance left running from before so re-running the installer
+  # (e.g. via the update flow) actually applies the new off-by-default.
+  if [[ "$OSTYPE" == "darwin"* && -f "$PLIST_PATH" ]]; then
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    rm -f "$PLIST_PATH"
+    info "Removed a previously-installed background daemon (it defaulted to on before)."
+  fi
+  if command -v crontab &>/dev/null && crontab -l 2>/dev/null | grep -q "ai-collab-daemon"; then
+    crontab -l 2>/dev/null | grep -v "ai-collab-daemon" | crontab -
+    info "Removed a previously-installed cron daemon entry."
+  fi
+  rm -f "$CLAUDE_DIR/.ai-collab-daemon-enabled" 2>/dev/null || true
 
 elif [[ "$OSTYPE" == "darwin"* ]]; then
   # macOS — launchd
@@ -454,8 +488,28 @@ PLIST
   green "launchd daemon loaded → auto-starts on login, survives sleep"
   info  "Logs: /tmp/ai-collab-daemon.log"
   info  "Stop: launchctl unload ~/Library/LaunchAgents/${PLIST_LABEL}.plist"
+  touch "$CLAUDE_DIR/.ai-collab-daemon-enabled"
 
+elif command -v crontab &>/dev/null; then
+  # Linux / WSL — cron fallback
+  CRON_CMD="*/1 * * * * /bin/bash $CLAUDE_DIR/ai-collab-daemon.sh"
+  ( crontab -l 2>/dev/null | grep -v "ai-collab-daemon"; echo "$CRON_CMD" ) | crontab -
+  green "Cron job installed (checks every minute)"
+  yellow "Note: cron does not survive sleep on laptops. launchd (macOS) is recommended."
+  touch "$CLAUDE_DIR/.ai-collab-daemon-enabled"
+else
+  yellow "No daemon started — launchd and cron not available."
+  info  "Start manually: bash $CLAUDE_DIR/ai-collab-daemon.sh &"
+fi
+
+# ── Codex visible-chat bridge (independent of the background daemon) ────────
+# This is a passive, on-demand localhost facade: it only answers a request an
+# agent makes on your explicit instruction (e.g. "wake codex"). It never scans
+# projects and never triggers anything by itself, so unlike the daemon above
+# it is safe to keep on by default even while the daemon is off.
+if [[ "$OSTYPE" == "darwin"* ]]; then
   if [[ -z "$SKIP_CODEX_BRIDGE" ]]; then
+    mkdir -p "$HOME/Library/LaunchAgents"
     BRIDGE_ENV_ITEMS=""
     add_bridge_env() {
       local key="$1" value="$2"
@@ -515,16 +569,6 @@ PLIST
   else
     yellow "Codex bridge skipped (AI_COLLAB_NO_CODEX_BRIDGE=1)"
   fi
-
-elif command -v crontab &>/dev/null; then
-  # Linux / WSL — cron fallback
-  CRON_CMD="*/1 * * * * /bin/bash $CLAUDE_DIR/ai-collab-daemon.sh"
-  ( crontab -l 2>/dev/null | grep -v "ai-collab-daemon"; echo "$CRON_CMD" ) | crontab -
-  green "Cron job installed (checks every minute)"
-  yellow "Note: cron does not survive sleep on laptops. launchd (macOS) is recommended."
-else
-  yellow "No daemon started — launchd and cron not available."
-  info  "Start manually: bash $CLAUDE_DIR/ai-collab-daemon.sh &"
 fi
 
 # ── 5. Install global Claude Code hooks ─────────────────────────────────────
@@ -708,19 +752,29 @@ echo ""
 bold "✅ AI Collab Skill installed!"
 echo ""
 echo "  What's running:"
-echo "    🔄 Background daemon   — watches .ai-collab/ across all projects"
+if [[ -z "$SKIP_DAEMON" ]]; then
+  echo "    🔄 Background daemon   — watches .ai-collab/ across all projects"
+  echo "    📨 Wakeup detector     — detects unread inbox tasks"
+  echo "    🧭 Auto-onboard        — registers new agents after their first log"
+  echo "    👁️  Live observer       — writes .ai-collab/live semantic state snapshots"
+  echo "    🧭 Reboot recovery     — restores CONTEXT.md + wakeup retries after restart"
+else
+  echo "    ⏸️  Background daemon   — off by default (AI_COLLAB_ENABLE_DAEMON=1 to enable)"
+  echo "       Wakeup detection, auto-onboard, the live observer, and reboot recovery"
+  echo "       all run as part of that daemon, so they're off too. Collaboration still"
+  echo "       works fully attended: when you or an agent runs a /collab command."
+fi
+if [[ "$OSTYPE" == "darwin"* && -z "$SKIP_CODEX_BRIDGE" ]]; then
+  echo "    🔌 Codex bridge        — on-demand only, answers requests but never scans on its own"
+fi
 echo "    🪝 SessionStart hook   — auto-loads context on every Claude session"
 echo "    🪝 UserPromptSubmit    — shows notifications before each message"
 echo "    🪝 Stop hook           — auto-generates CONTEXT.md after each response"
-echo "    📨 Wakeup detector     — detects unread inbox tasks"
-echo "    🧭 Auto-onboard        — registers new agents after their first log"
 echo "    🧩 Unified setup       — updates globals, migrates the project, verifies health"
 echo "    🎛️  Run orchestrator    — director-selected multi-agent implementation runs"
 echo "    💬 Conversation helper — natural agent questions, proposals, decisions"
-echo "    👁️  Live observer       — writes .ai-collab/live semantic state snapshots"
 echo "    🔎 OCR engine          — powers screenshot text reading when available"
 echo "    🩺 Doctor script       — verifies install health"
-echo "    🧭 Reboot recovery     — restores CONTEXT.md + wakeup retries after restart"
 echo "    📚 /collab skill       — collaboration commands available in Claude Code"
 echo ""
 echo "  Try it now — open Claude Code and type:"

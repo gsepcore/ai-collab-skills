@@ -203,7 +203,7 @@ That's it. The installer sets up the complete runtime automatically:
 | 📚 Claude Code skill | `/collab` commands available in all sessions | `~/.claude/skills/collab/` |
 | 📚 Codex skill | The same current `/collab` workflow is discoverable by Codex | `~/.codex/skills/collab/` |
 | 🧩 Unified setup | Reinstalls globals, migrates one project safely, verifies preservation and health | `~/.claude/ai-collab-setup.py` |
-| 🔄 Background daemon | Watches every `.ai-collab/` directory 24/7 | launchd (macOS) / cron (Linux) |
+| 🔄 Background daemon | **Off by default** — opt in with `AI_COLLAB_ENABLE_DAEMON=1` if you want it watching every `.ai-collab/` directory 24/7 | launchd (macOS) / cron (Linux) |
 | 📨 Wakeup detector | Detects unread inbox tasks and dispatches the configured adapter | `~/.claude/ai-collab-wakeup.py` |
 | 🧭 Auto-onboard | Detects a new agent's first log and appends its rules snippet + TEAM entry | `~/.claude/ai-collab-auto-onboard.py` |
 | 🧩 Project onboarding | Registers agents, IDE/container, model, TEAM, inbox, and rules files | `~/.claude/ai-collab-project-setup.py` |
@@ -223,17 +223,17 @@ The hooks are installed **globally** (`~/.claude/settings.json`) so they work in
 
 ### Operational status
 
-AI Collab is designed to be fully operational out of the box: the installer sets up the skill, daemon, hooks, conversation helper, project observer, automatic screenshots, OCR support, self-updates, and health checks. The observer remains project-scoped, so multiple Antigravity/OpenCode/Codex workspaces can be open without mixing screenshots, processes, conversations, or live status between repos.
+AI Collab is designed to be fully operational out of the box, fully attended: the installer sets up the skill, hooks, conversation helper, project onboarding, and health checks, and collaboration happens whenever you or an agent runs a `/collab` command — no background watcher required. The background daemon (self-update, reboot recovery, project observer/screenshots, proactive OS notifications) is **off by default**; set `AI_COLLAB_ENABLE_DAEMON=1` before installing if you want that always-on layer instead. Everything it would do can also be run on demand (see below), and the observer stays project-scoped when enabled, so multiple Antigravity/OpenCode/Codex workspaces can be open without mixing screenshots, processes, conversations, or live status between repos.
 
-New installs always pull from the current `main` branch. Existing installs become self-updating after they run the current installer once: the daemon periodically refreshes `~/.claude` scripts/skill files and re-applies managed `AI-COLLAB-START` / `AI-COLLAB-END` snippets in projects that already have `.ai-collab/`. Generated `PROTOCOL.md` files are refreshed with a timestamped backup. Disable this with `AI_COLLAB_AUTO_UPDATE=0`, or force it immediately with:
+New installs always pull from the current `main` branch. With the daemon enabled, existing installs become self-updating after they run the current installer once: it periodically refreshes `~/.claude` scripts/skill files and re-applies managed `AI-COLLAB-START` / `AI-COLLAB-END` snippets in projects that already have `.ai-collab/`. Generated `PROTOCOL.md` files are refreshed with a timestamped backup. Tune the interval with `AI_COLLAB_UPDATE_INTERVAL_SECONDS`, or — daemon on or off — force a refresh immediately any time with:
 
-When the installer is run from a local clone, it pins `AI_COLLAB_UPDATE_LOCAL_SOURCE` to that clone so the daemon follows the checked-out development version instead of overwriting it with public `main`.
+When the installer is run from a local clone, it pins `AI_COLLAB_UPDATE_LOCAL_SOURCE` to that clone so updates (daemon-driven or manual) follow the checked-out development version instead of overwriting it with public `main`.
 
 ```bash
 python3 ~/.claude/ai-collab-update.py --project "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ```
 
-The daemon also runs recovery every few minutes and after reboot/login. Recovery does not erase project memory. It refreshes stale or missing `.ai-collab/CONTEXT.md`, writes `.ai-collab/live/recovery.json`, and removes stale wakeup dedupe entries for unfinished inbox tasks so a task queued before shutdown can be attempted again.
+With the daemon enabled, it also runs recovery every few minutes and after reboot/login; without it, run `~/.claude/ai-collab-recover.py` yourself after a restart if you want the same refresh. Recovery does not erase project memory. It refreshes stale or missing `.ai-collab/CONTEXT.md`, writes `.ai-collab/live/recovery.json`, and removes stale wakeup dedupe entries for unfinished inbox tasks so a task queued before shutdown can be attempted again.
 
 The only degraded states are external to the skill and are reported explicitly instead of failing silently:
 

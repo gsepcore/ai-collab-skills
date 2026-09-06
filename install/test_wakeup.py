@@ -2286,6 +2286,25 @@ for line in sys.stdin:
             self.assertEqual(meta["attempts"], "0")
 
 
+def _inert_adapter_runner(command, **kwargs):
+    # process_thread()'s adapter_runner defaults to the real subprocess.run --
+    # correct for production (the daemon/manual invocation genuinely needs to
+    # launch the target's CLI/IDE), but lethal in a test that doesn't care
+    # about the dispatch outcome: on a dev machine that actually has
+    # Antigravity/OpenCode/Codex installed, an unmocked call reaches the real
+    # binary and pops a real window. Confirmed live -- a test run here really
+    # did launch a real Antigravity chat window pointed at a tmp test
+    # project. Any test whose scenario reaches real dispatch (i.e. is not
+    # short-circuited earlier by closed/no-mentions/agent-not-in-project/
+    # stale/closing-message-type) must pass this explicitly.
+    class _Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    return _Completed()
+
+
 class TestProcessThread(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -2407,6 +2426,7 @@ project: gsep
             events_file=self.events,
             state_file=self.state,
             log_file=self.log,
+            adapter_runner=_inert_adapter_runner,
         )
 
         self.assertEqual(result["action"], "thread-mentions")
@@ -2715,6 +2735,7 @@ project: gsep
             events_file=self.events,
             state_file=self.state,
             log_file=self.log,
+            adapter_runner=_inert_adapter_runner,
         )
 
         self.assertEqual(result["action"], "thread-mentions")
@@ -2749,6 +2770,7 @@ project: gsep
             events_file=self.events,
             state_file=self.state,
             log_file=self.log,
+            adapter_runner=_inert_adapter_runner,
         )
 
         self.assertNotEqual(result.get("reason"), "stale")
@@ -2764,6 +2786,7 @@ project: gsep
                 events_file=self.events,
                 state_file=self.state,
                 log_file=self.log,
+                adapter_runner=_inert_adapter_runner,
             )
         finally:
             del os.environ["AI_COLLAB_THREAD_STALE_DAYS"]
@@ -2791,6 +2814,7 @@ project: gsep
             events_file=self.events,
             state_file=self.state,
             log_file=self.log,
+            adapter_runner=_inert_adapter_runner,
         )
 
         self.assertEqual(result["action"], "thread-mentions")
@@ -2901,6 +2925,7 @@ class TestCapabilityOnboardingCompletion(unittest.TestCase):
             events_file=self.events,
             state_file=self.state,
             log_file=self.log,
+            adapter_runner=_inert_adapter_runner,
         )
 
         self.assertEqual(result["action"], "thread-mentions")

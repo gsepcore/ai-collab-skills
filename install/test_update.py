@@ -5,6 +5,7 @@ Run with: python3 install/test_update.py
 """
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -100,6 +101,81 @@ class TestUpdate(unittest.TestCase):
                 _mod.fetch("../outside", 1)
         finally:
             _mod.LOCAL_SOURCE = previous
+
+    def test_disable_legacy_daemon_removes_leftover_plist_by_default(self):
+        plist = self.home / "LaunchAgents" / "com.gsepcore.ai-collab.plist"
+        plist.parent.mkdir(parents=True)
+        plist.write_text("<plist/>", encoding="utf-8")
+        marker = self.home / ".ai-collab-daemon-enabled"
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        result = _mod.disable_legacy_daemon(
+            dry_run=False,
+            plist_path=plist,
+            marker_path=marker,
+            has_crontab=lambda: False,
+            runner=fake_run,
+        )
+
+        self.assertEqual(result["status"], "removed")
+        self.assertFalse(plist.exists())
+        self.assertTrue(any(cmd[:2] == ["launchctl", "unload"] for cmd in calls))
+
+    def test_disable_legacy_daemon_keeps_explicit_opt_in(self):
+        plist = self.home / "LaunchAgents" / "com.gsepcore.ai-collab.plist"
+        plist.parent.mkdir(parents=True)
+        plist.write_text("<plist/>", encoding="utf-8")
+        marker = self.home / ".ai-collab-daemon-enabled"
+        marker.write_text("", encoding="utf-8")
+
+        def fail_run(cmd, **kwargs):
+            self.fail(f"should not touch launchd/cron when opted in: {cmd}")
+
+        result = _mod.disable_legacy_daemon(
+            dry_run=False,
+            plist_path=plist,
+            marker_path=marker,
+            has_crontab=lambda: True,
+            runner=fail_run,
+        )
+
+        self.assertEqual(result["status"], "kept")
+        self.assertTrue(plist.exists())
+
+    def test_disable_legacy_daemon_is_noop_when_nothing_installed(self):
+        plist = self.home / "LaunchAgents" / "com.gsepcore.ai-collab.plist"
+        marker = self.home / ".ai-collab-daemon-enabled"
+
+        result = _mod.disable_legacy_daemon(
+            dry_run=False,
+            plist_path=plist,
+            marker_path=marker,
+            has_crontab=lambda: False,
+            runner=lambda *a, **k: self.fail("should not run any command"),
+        )
+
+        self.assertEqual(result["status"], "noop")
+
+    def test_disable_legacy_daemon_dry_run_does_not_delete(self):
+        plist = self.home / "LaunchAgents" / "com.gsepcore.ai-collab.plist"
+        plist.parent.mkdir(parents=True)
+        plist.write_text("<plist/>", encoding="utf-8")
+        marker = self.home / ".ai-collab-daemon-enabled"
+
+        result = _mod.disable_legacy_daemon(
+            dry_run=True,
+            plist_path=plist,
+            marker_path=marker,
+            has_crontab=lambda: False,
+            runner=lambda *a, **k: self.fail("dry-run should not execute commands"),
+        )
+
+        self.assertEqual(result["status"], "dry-run")
+        self.assertTrue(plist.exists())
 
 
 if __name__ == "__main__":

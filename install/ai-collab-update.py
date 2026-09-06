@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 RAW_BASE = os.environ.get(
@@ -38,6 +38,10 @@ CODEX_SKILL_DIR = CODEX_DIR / "skills" / "collab"
 STATE_FILE = CLAUDE_DIR / "ai-collab-update-state.json"
 IDE_BRIDGE_SOURCE = CLAUDE_DIR / "ai-collab-vscode-bridge"
 IDE_BRIDGE_VSIX = CLAUDE_DIR / "ai-collab-visible-bridge.vsix"
+
+DAEMON_PLIST_LABEL = "com.gsepcore.ai-collab"
+DAEMON_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{DAEMON_PLIST_LABEL}.plist"
+DAEMON_ENABLED_MARKER = CLAUDE_DIR / ".ai-collab-daemon-enabled"
 
 GLOBAL_FILES: list[tuple[str, Path, bool]] = [
     ("SKILL.md", SKILL_DIR / "SKILL.md", False),
@@ -164,6 +168,63 @@ def refresh_visible_bridge(dry_run: bool) -> dict[str, Any]:
     if len(commands) == 1:
         return {"status": "failed", "reason": "no supported IDE CLI found", "results": results}
     return {"status": "updated", "results": results, "restart_required": True}
+
+
+def disable_legacy_daemon(
+    dry_run: bool,
+    plist_path: Path | None = None,
+    marker_path: Path | None = None,
+    has_crontab: Callable[[], bool] | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> dict[str, Any]:
+    """One-time-per-machine migration: the background daemon used to install
+    on by default. It watched every .ai-collab/ project and could escalate to
+    a visible IDE window unattended -- confirmed in practice to interrupt
+    active work in unrelated windows and re-notify about already-finished
+    work. It is now opt-in only (AI_COLLAB_ENABLE_DAEMON=1 at install time,
+    which writes DAEMON_ENABLED_MARKER). Anyone who never opted back in gets
+    any leftover instance from an older install torn down here, since the
+    periodic self-update is the only thing guaranteed to reach an existing
+    install -- it never re-runs install.sh or touches launchd itself
+    otherwise.
+    """
+    plist_path = plist_path if plist_path is not None else DAEMON_PLIST_PATH
+    marker_path = marker_path if marker_path is not None else DAEMON_ENABLED_MARKER
+    has_crontab = has_crontab if has_crontab is not None else (lambda: shutil.which("crontab") is not None)
+    run = runner if runner is not None else subprocess.run
+
+    if marker_path.exists():
+        return {"status": "kept", "reason": "explicitly enabled (AI_COLLAB_ENABLE_DAEMON=1)"}
+
+    actions: list[str] = []
+    if plist_path.exists():
+        if dry_run:
+            actions.append(f"would unload+remove {plist_path}")
+        else:
+            run(["launchctl", "unload", str(plist_path)], capture_output=True, text=True, check=False)
+            try:
+                plist_path.unlink()
+            except OSError:
+                pass
+            actions.append(f"unloaded+removed {plist_path}")
+
+    if has_crontab():
+        listing = run(["crontab", "-l"], capture_output=True, text=True, check=False)
+        lines = listing.stdout.splitlines() if listing.returncode == 0 else []
+        kept = [line for line in lines if "ai-collab-daemon" not in line]
+        if len(kept) != len(lines):
+            if dry_run:
+                actions.append("would remove ai-collab-daemon crontab entry")
+            else:
+                run(
+                    ["crontab", "-"], input="\n".join(kept) + ("\n" if kept else ""),
+                    capture_output=True, text=True, check=False,
+                )
+                actions.append("removed ai-collab-daemon crontab entry")
+
+    if not actions:
+        return {"status": "noop"}
+    return {"status": "dry-run" if dry_run else "removed", "actions": actions}
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -295,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
 
     exit_code = 0
     if not args.projects_only:
+        state["daemon_migration"] = disable_legacy_daemon(args.dry_run)
         state["global"] = update_global(args.timeout, args.dry_run)
         if state["global"].get("errors"):
             exit_code = 1
