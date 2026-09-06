@@ -80,7 +80,7 @@ def installed_helper(name: str) -> Path | None:
     return None
 
 
-def resolve_participants(root: Path, explicit: str) -> list[str]:
+def resolve_participants(root: Path, explicit: str, author: str = "") -> list[str]:
     parsed = [p.strip() for p in explicit.split(",") if p.strip()]
     if parsed:
         return parsed
@@ -97,8 +97,15 @@ def resolve_participants(root: Path, explicit: str) -> list[str]:
         for item in agents
         if isinstance(item, dict) and str(item.get("agent")).strip()
     ] if isinstance(agents, list) else []
+    # Match orchestrate.py cmd_convene()'s established convention: the
+    # convening author runs the debate synchronously, so it cannot answer its
+    # own nudge -- including it in the default roster wastes the full
+    # wait_seconds every cycle (the author's own round-robin turn nudges
+    # itself through converse.py and never gets a reply).
+    if author:
+        slugs = [slug for slug in slugs if slug != author]
     if not slugs:
-        raise SystemExit("--participants is required (or .ai-collab/agents.json must list registered agents)")
+        raise SystemExit("--participants is required (or .ai-collab/agents.json must list registered agents other than --author)")
     return slugs
 
 
@@ -170,7 +177,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not converse:
         raise SystemExit("ai-collab-converse.py is not installed")
 
-    participants = resolve_participants(root, args.participants)
+    participants = resolve_participants(root, args.participants, args.author)
 
     thread_path: Path
     if args.thread:

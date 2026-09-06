@@ -109,17 +109,43 @@ class TestResolveParticipants(unittest.TestCase):
             encoding="utf-8",
         )
         try:
-            result = _mod.resolve_participants(root, "")
+            result = _mod.resolve_participants(root, "", author="opencode")
         finally:
             tmp.cleanup()
 
-        self.assertEqual(result, ["claude-code", "codex", "opencode"])
+        # The author must NOT be in the default roster: it runs the debate
+        # synchronously and cannot answer its own nudge (see
+        # resolve_participants / orchestrate.py cmd_convene() convention).
+        self.assertEqual(result, ["claude-code", "codex"])
+        self.assertNotIn("opencode", result)
+
+    def test_default_with_author_excluded_raises_when_roster_empty(self):
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / ".ai-collab").mkdir(parents=True)
+        (root / ".ai-collab" / "agents.json").write_text(
+            json.dumps(
+                {
+                    "schema": "ai-collab.agents.v2",
+                    "project_id": "prj_test",
+                    "agents": [
+                        {"agent": "opencode", "agent_id": "agt_3", "container": "vscode"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        try:
+            with self.assertRaises(SystemExit):
+                _mod.resolve_participants(root, "", author="opencode")
+        finally:
+            tmp.cleanup()
 
     def test_missing_agents_file_requires_explicit_participants(self):
         tmp = tempfile.TemporaryDirectory()
         try:
             with self.assertRaises(SystemExit):
-                _mod.resolve_participants(Path(tmp.name), "")
+                _mod.resolve_participants(Path(tmp.name), "", author="codex")
         finally:
             tmp.cleanup()
 
