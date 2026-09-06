@@ -17,6 +17,7 @@ Run with: python3 -m pytest install/test_debate.py -v
 import contextlib
 import importlib.util
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -81,6 +82,46 @@ class FakeConverse:
 
         self._append(thread_path, to, f"type: answer\n\n@{author} respuesta real de {to}.")
         return subprocess.CompletedProcess(args, 0, stdout="[AI-COLLAB] Verified real thread replies from: " + to, stderr="")
+
+
+class TestResolveParticipants(unittest.TestCase):
+    def test_explicit_participants_are_used_verbatim(self):
+        result = _mod.resolve_participants(Path("/any"), " codex , opencode ")
+
+        self.assertEqual(result, ["codex", "opencode"])
+
+    def test_default_resolves_to_every_registered_agent(self):
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / ".ai-collab").mkdir(parents=True)
+        (root / ".ai-collab" / "agents.json").write_text(
+            json.dumps(
+                {
+                    "schema": "ai-collab.agents.v2",
+                    "project_id": "prj_test",
+                    "agents": [
+                        {"agent": "claude-code", "agent_id": "agt_1", "container": "vscode"},
+                        {"agent": "codex", "agent_id": "agt_2", "container": "vscode"},
+                        {"agent": "opencode", "agent_id": "agt_3", "container": "vscode"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        try:
+            result = _mod.resolve_participants(root, "")
+        finally:
+            tmp.cleanup()
+
+        self.assertEqual(result, ["claude-code", "codex", "opencode"])
+
+    def test_missing_agents_file_requires_explicit_participants(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            with self.assertRaises(SystemExit):
+                _mod.resolve_participants(Path(tmp.name), "")
+        finally:
+            tmp.cleanup()
 
 
 class TestFindDecision(unittest.TestCase):

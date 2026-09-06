@@ -87,7 +87,22 @@ class TestTurnPreflight(unittest.TestCase):
         self.assertEqual(packet["intent"]["action"], "auto-debate")
         self.assertEqual(packet["intent"]["owners"], ["codex", "opencode"])
         self.assertEqual(packet["intent"]["debate_mode"], "full")
-        self.assertIn("ai-collab-debate.py run --rounds 3 --wait-seconds 600", packet["required_actions"][-1])
+        command = packet["required_actions"][-1]
+        self.assertIn("ai-collab-debate.py run --rounds 3 --wait-seconds 600", command)
+        # The debate must convene EVERY registered agent, not just the matched
+        # role owners (Luis's requirement: the whole team debates).
+        self.assertIn("--participants codex, opencode", command)
+
+    def test_debate_request_convenes_every_registered_agent(self):
+        # Luis: "cuando les especifique que deben hacer un debate de un tema los
+        # tres se activen" -- an explicit debate request must expand to all
+        # registered agents, not just matched role owners.
+        packet = self.packet(prompt="Hagan un debate de este tema antes de decidir")
+
+        self.assertEqual(packet["intent"]["action"], "convene-discussion")
+        command = packet["required_actions"][-1]
+        self.assertIn("ai-collab-debate.py run", command)
+        self.assertIn("--participants codex, opencode", command)
 
     def test_explicit_direct_override_skips_debate(self):
         packet = self.packet(prompt="Que el equipo implemente backend y frontend, hazlo directo")

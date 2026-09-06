@@ -375,14 +375,20 @@ def direct_mentions(
     return result
 
 
-def action_commands(action: str, debate_mode: str | None = None) -> list[str]:
+def action_commands(action: str, debate_mode: str | None = None, registered: list[str] | None = None) -> list[str]:
+    participanti = ", ".join(registered) if registered else "all registered agents from agents.json"
     if action == "convene-discussion":
-        return ["Use ai-collab-orchestrate.py convene or ai-collab-converse.py before answering for peers."]
+        return [
+            f"Convene an open multi-agent debate now: run ai-collab-debate.py run --rounds 3 --wait-seconds 600 "
+            f"--participants {participanti} with the user's topic before answering for peers. "
+            "Almost everyone must actually reply in the thread before you summarize for the user."
+        ]
     if action == "auto-debate":
         params = "--rounds 1 --wait-seconds 30" if debate_mode == "quick" else "--rounds 3 --wait-seconds 600"
         return [
-            f"Run ai-collab-debate.py run {params} with the matched role owners before executing anything. "
-            "Only bring the user a converged RESUMEN DE EJECUCION for authorization -- never before that."
+            f"Run ai-collab-debate.py run {params} --participants {participanti} "
+            "before executing anything. Only bring the user a converged RESUMEN DE EJECUCION "
+            "for authorization -- never before that."
         ]
     if action == "orchestrate":
         return ["Initialize/convene a directed run and route tasks through roles.json automatically."]
@@ -445,7 +451,7 @@ def build_packet(root: Path, slug: str, prompt: str = "", surface_kind: str = "p
             )
         else:
             required.append("capability-onboarding-thread-is-missing; report-setup-incomplete-and-repair-collab-setup")
-    required.extend(action_commands(intent["action"], intent.get("debate_mode")))
+    required.extend(action_commands(intent["action"], intent.get("debate_mode"), registered))
     if mentions:
         required.append(
             "continue-recent-direct-mentions-in-their-existing-threads-without-creating-duplicates; "

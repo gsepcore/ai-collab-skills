@@ -202,22 +202,43 @@ def emit_escalation_notice(root: Path, targets: list[str], source: Path, grace_s
         "type": "visible-escalation",
         "targets": targets,
     }
-    notification_path = Path(os.environ.get("AI_COLLAB_NOTIFICATIONS_FILE", str(Path.home() / ".ai-collab-notifications.json"))).expanduser()
-    lock_file = with_lock(notification_path)
-    try:
-        rows = load_json_file(notification_path)
-        if not isinstance(rows, list):
-            rows = []
-        rows.append(notice)
-        atomic_write(notification_path, json.dumps(rows[-50:], indent=2, sort_keys=False) + "\n")
-    finally:
-        if fcntl is not None:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-        lock_file.close()
     events = collab_dir(root) / "live" / "delivery-escalations.jsonl"
-    events.parent.mkdir(parents=True, exist_ok=True)
-    with events.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(notice, sort_keys=True) + "\n")
+    try:
+        events.parent.mkdir(parents=True, exist_ok=True)
+        with events.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(notice, sort_keys=True) + "\n")
+    except OSError as exc:
+        print(
+            f"[AI-COLLAB] WARNING: could not write in-project escalation event "
+            f"to {events} ({exc}); continuing.",
+            file=sys.stderr,
+        )
+    notification_path = Path(os.environ.get("AI_COLLAB_NOTIFICATIONS_FILE", str(Path.home() / ".ai-collab-notifications.json"))).expanduser()
+    # The global notifications file lives outside the project workspace. Under
+    # a sandboxed IDE (VS Code extension bridge), opening it throws a
+    # permission error, which previously killed the whole visible escalation
+    # before the adapter could run. Escalation must never be held hostage by
+    # an optional notification sink: write best-effort, keep the in-project
+    # escalation event as the durable record, and keep moving regardless.
+    try:
+        lock_file = with_lock(notification_path)
+        try:
+            rows = load_json_file(notification_path)
+            if not isinstance(rows, list):
+                rows = []
+            rows.append(notice)
+            atomic_write(notification_path, json.dumps(rows[-50:], indent=2, sort_keys=False) + "\n")
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+    except OSError as exc:
+        print(
+            f"[AI-COLLAB] WARNING: global notifications file is not writable "
+            f"({notification_path}, {exc}); visible escalation proceeds with "
+            "project-local evidence only.",
+            file=sys.stderr,
+        )
 
 
 def atomic_write(path: Path, content: str) -> None:

@@ -80,6 +80,28 @@ def installed_helper(name: str) -> Path | None:
     return None
 
 
+def resolve_participants(root: Path, explicit: str) -> list[str]:
+    parsed = [p.strip() for p in explicit.split(",") if p.strip()]
+    if parsed:
+        return parsed
+    manifest_path = root / ".ai-collab" / "agents.json"
+    try:
+        import json
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        manifest = {}
+    agents = manifest.get("agents") if isinstance(manifest, dict) else None
+    slugs = [
+        str(item.get("agent")).strip()
+        for item in agents
+        if isinstance(item, dict) and str(item.get("agent")).strip()
+    ] if isinstance(agents, list) else []
+    if not slugs:
+        raise SystemExit("--participants is required (or .ai-collab/agents.json must list registered agents)")
+    return slugs
+
+
 def parse_messages(text: str) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     for match in MESSAGE_RE.finditer(text):
@@ -148,9 +170,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not converse:
         raise SystemExit("ai-collab-converse.py is not installed")
 
-    participants = [p.strip() for p in args.participants.split(",") if p.strip()]
-    if not participants:
-        raise SystemExit("--participants is required (comma-separated agent slugs)")
+    participants = resolve_participants(root, args.participants)
 
     thread_path: Path
     if args.thread:
@@ -316,7 +336,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--topic", required=True)
     run.add_argument("--message", default="", help="The technical question to debate.")
     run.add_argument("--author", required=True, help="Agent slug convening the debate (usually the director).")
-    run.add_argument("--participants", required=True, help="Comma-separated agent slugs, e.g. codex,opencode")
+    run.add_argument("--participants", default="", help="Comma-separated agent slugs, e.g. codex,opencode. Defaults to every registered agent in .ai-collab/agents.json.")
     run.add_argument("--rounds", type=int, default=3, help="Max turns per participant (default 3).")
     run.add_argument("--wait-seconds", type=int, default=240, help="Real-reply wait per turn (default 240s).")
     run.add_argument("--thread", default=None, help="Resume an existing thread file instead of starting a new one.")
