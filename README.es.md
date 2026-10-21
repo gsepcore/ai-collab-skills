@@ -459,7 +459,7 @@ curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/inst
 **Paso 2 — Registrar el servicio launchd:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gsepcore/ai-collab-skills/main/install/com.gsepcore.ai-collab.plist \
-  -o ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
+  | sed "s#__HOME__#$HOME#g" > ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
 launchctl load ~/Library/LaunchAgents/com.gsepcore.ai-collab.plist
 ```
 
