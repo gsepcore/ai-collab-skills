@@ -19,6 +19,8 @@ Treat `.ai-collab/agents.json` as the activation switch. In an onboarded project
 python3 ~/.claude/ai-collab-turn.py preflight --root "$ROOT" --agent "$AGENT" --prompt "$SHORT_REQUEST_SUMMARY"
 ```
 
+If a visible adapter woke you with an `AI Collab exact identity: ... session_id=ses_...` line, add `--session-id <that id>` so preflight reuses that chat's identity instead of registering a second session. A prompt that names an existing `discussion-*`/`thread-*` file yields `continue-thread`: reply there, never open a new debate.
+
 Execute its `required_actions`. Infer the correct behavior automatically:
 
 - Team execution or multiple configured role owners: orchestrate.

@@ -101,6 +101,7 @@ function nativeBootstrap(projectPath, target, session) {
     `AI Collab exact identity: agent=${target}; project_id=${session.project_id}; agent_id=${session.agent_id}; session_id=${session.session_id}; surface_id=${session.surface_id}.`,
     rules ? `Read your identity-specific rules at ${rules}.` : 'Read your registered AI Collab rules.',
     'Do not adopt another agent block with a different agent_id or session_id.',
+    `When you run ai-collab-turn.py preflight, pass --session-id ${session.session_id} so it reuses this chat's identity.`,
   ].join(' ');
 }
 

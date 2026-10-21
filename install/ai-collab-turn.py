@@ -135,12 +135,53 @@ def agent_row(manifest: dict[str, Any], slug: str) -> dict[str, Any]:
     return {}
 
 
-def register_session(root: Path, slug: str, row: dict[str, Any], surface_kind: str) -> dict[str, Any]:
+EXACT_IDENTITY_RE = re.compile(r"agent=([\w-]+);[^\n]*?session_id=(ses_[A-Za-z0-9_]+)")
+
+
+def prompt_session_id(prompt: str, slug: str) -> str:
+    """Return the session_id a visible adapter handed this agent in its prompt.
+
+    IDE-native chats receive "AI Collab exact identity: agent=...; session_id=..."
+    from the bridge. Adopting it keeps the chat and its preflight on one identity.
+    """
+    for agent, session_id in EXACT_IDENTITY_RE.findall(prompt or ""):
+        if agent == slug:
+            return session_id
+    return ""
+
+
+def adopt_session(root: Path, slug: str, row: dict[str, Any], session_id: str, helper: Path) -> dict[str, Any] | None:
+    path = root / ".ai-collab" / "live" / "sessions" / f"{session_id}.json"
+    existing = read_json(path)
+    if existing.get("agent") != slug or existing.get("agent_id") != row.get("agent_id"):
+        return None
+    command = [sys.executable, str(helper), "heartbeat", "--root", str(root), "--session-id", session_id]
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        return None
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def register_session(
+    root: Path,
+    slug: str,
+    row: dict[str, Any],
+    surface_kind: str,
+    session_id: str = "",
+) -> dict[str, Any]:
     local = Path(__file__).with_name("ai-collab-session.py")
     installed = Path.home() / ".claude" / "ai-collab-session.py"
     helper = local if local.is_file() else installed
     if not helper.is_file() or not row.get("agent_id"):
         return {}
+    if session_id:
+        adopted = adopt_session(root, slug, row, session_id, helper)
+        if adopted is not None:
+            return adopted
     command = [
         sys.executable,
         str(helper),
@@ -197,8 +238,31 @@ def contains_signal(normalized: str, signal: str) -> bool:
     return value in normalized
 
 
-def classify_intent(prompt: str, slug: str, owners: dict[str, str | None], registered: list[str]) -> dict[str, Any]:
+THREAD_REF_RE = re.compile(r"(?<![\w-])((?:discussion|thread)-[\w-]+?)(?:\.md)?(?![\w-])")
+
+
+def referenced_thread(root: Path | None, prompt: str) -> str:
+    for name in THREAD_REF_RE.findall(prompt or ""):
+        if root is None:
+            return name
+        for candidate in (
+            root / ".ai-collab" / "discussions" / f"{name}.md",
+            root / ".ai-collab" / f"{name}.md",
+        ):
+            if candidate.is_file():
+                return str(candidate.relative_to(root))
+    return ""
+
+
+def classify_intent(
+    prompt: str,
+    slug: str,
+    owners: dict[str, str | None],
+    registered: list[str],
+    root: Path | None = None,
+) -> dict[str, Any]:
     normalized = f" {prompt.casefold()} "
+    thread = referenced_thread(root, prompt)
     roles = detect_roles(prompt, owners)
     matched_owners = sorted({owners[role] for role in roles if owners.get(role)})
     vacant_roles = sorted(role for role in roles if not owners.get(role))
@@ -209,7 +273,13 @@ def classify_intent(prompt: str, slug: str, owners: dict[str, str | None], regis
     multi_owner = len(matched_owners) > 1 or (asks_team and len(registered) > 1)
 
     debate_mode: str | None = None
-    if asks_discussion or (asks_team and mentioned_agents):
+    if thread:
+        # A wake prompt or reply that names an existing thread is a turn in that
+        # conversation; generic words like "team" or "opinion" inside it must not
+        # convene a fresh multi-agent debate.
+        action = "continue-thread"
+        reason = "The request references an existing collaboration thread; reply there."
+    elif asks_discussion or (asks_team and mentioned_agents):
         action = "convene-discussion"
         reason = "The request asks for multiple agents' judgement or debate."
     elif vacant_roles:
@@ -243,6 +313,8 @@ def classify_intent(prompt: str, slug: str, owners: dict[str, str | None], regis
     }
     if debate_mode:
         result["debate_mode"] = debate_mode
+    if thread:
+        result["thread"] = thread
     return result
 
 
@@ -398,10 +470,18 @@ def action_commands(action: str, debate_mode: str | None = None, registered: lis
         return ["Ask the user or senior director to assign the vacant role before executing or delegating its work."]
     if action == "converse":
         return ["Use ai-collab-converse.py and keep the exchange in one shared thread."]
+    if action == "continue-thread":
+        return ["Read the referenced thread in full and reply in that same thread with ai-collab-converse.py; do not start a new discussion or debate."]
     return ["Execute directly, while updating live state and the session handoff without user prompting."]
 
 
-def build_packet(root: Path, slug: str, prompt: str = "", surface_kind: str = "process") -> dict[str, Any]:
+def build_packet(
+    root: Path,
+    slug: str,
+    prompt: str = "",
+    surface_kind: str = "process",
+    session_id: str = "",
+) -> dict[str, Any]:
     collab = root / ".ai-collab"
     manifest = read_json(collab / "agents.json")
     if not manifest:
@@ -430,10 +510,10 @@ def build_packet(root: Path, slug: str, prompt: str = "", surface_kind: str = "p
         for item in manifest.get("agents", [])
         if isinstance(item, dict) and item.get("agent")
     ]
-    intent = classify_intent(prompt, slug, owners, registered)
+    intent = classify_intent(prompt, slug, owners, registered, root)
     inboxes = unread_inboxes(root, slug)
     mentions = direct_mentions(root, slug)
-    session = register_session(root, slug, row, surface_kind)
+    session = register_session(root, slug, row, surface_kind, session_id or prompt_session_id(prompt, slug))
     awareness = capability_awareness(
         root,
         slug,
@@ -512,9 +592,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prompt", default="")
     parser.add_argument("--hook-stdin", action="store_true")
     parser.add_argument("--surface-kind", default="process", choices=["process", "terminal", "ide-native-chat", "api"])
+    parser.add_argument(
+        "--session-id",
+        default="",
+        help="Adopt this existing runtime session (e.g. the one an IDE-native chat was given) instead of registering a new one.",
+    )
     args = parser.parse_args(argv)
     prompt = hook_prompt() if args.hook_stdin else args.prompt
-    packet = build_packet(project_root(args.root), args.agent, prompt, args.surface_kind)
+    packet = build_packet(project_root(args.root), args.agent, prompt, args.surface_kind, args.session_id)
     print("[AI-COLLAB ALWAYS-ON TURN]")
     print(json.dumps(packet, indent=2, ensure_ascii=False))
     print("[END AI-COLLAB ALWAYS-ON TURN]")

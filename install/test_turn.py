@@ -122,6 +122,73 @@ class TestTurnPreflight(unittest.TestCase):
 
         self.assertEqual(packet["intent"]["action"], "convene-discussion")
 
+    def test_wake_prompt_naming_existing_thread_continues_it_instead_of_debating(self):
+        thread = self.root / ".ai-collab" / "discussions" / "discussion-20261021-132103-smoke.md"
+        thread.write_text("---\nstatus: open\n---\n", encoding="utf-8")
+        packet = self.packet(
+            prompt=(
+                f"You were mentioned in {thread} by @opencode. This is a real visible team "
+                "conversation. Read the entire thread and add your own opinion."
+            )
+        )
+
+        self.assertEqual(packet["intent"]["action"], "continue-thread")
+        self.assertEqual(packet["intent"]["thread"], ".ai-collab/discussions/discussion-20261021-132103-smoke.md")
+        self.assertFalse(any("ai-collab-debate.py" in action for action in packet["required_actions"]))
+
+    def test_unknown_thread_name_does_not_hijack_routing(self):
+        packet = self.packet(prompt="Debatan la discussion-does-not-exist entre ustedes")
+
+        self.assertEqual(packet["intent"]["action"], "convene-discussion")
+
+    def test_preflight_adopts_session_id_from_exact_identity_prompt(self):
+        self.assertEqual(
+            _mod.prompt_session_id(
+                "AI Collab exact identity: agent=codex; project_id=prj_test; agent_id=agt_codex; "
+                "session_id=ses_20261021T132115298Z_af5a66643253; surface_id=vscode-native:codex:abc.",
+                "codex",
+            ),
+            "ses_20261021T132115298Z_af5a66643253",
+        )
+        self.assertEqual(
+            _mod.prompt_session_id("AI Collab exact identity: agent=opencode; session_id=ses_other;", "codex"),
+            "",
+        )
+
+    def test_register_session_reuses_existing_native_chat_session(self):
+        sessions = self.root / ".ai-collab" / "live" / "sessions"
+        sessions.mkdir(parents=True)
+        native = {
+            "schema": "ai-collab.session.v1",
+            "agent": "codex",
+            "agent_id": "agt_codex",
+            "session_id": "ses_native",
+            "surface_kind": "ide-native-chat",
+            "surface_id": "vscode-native:codex:abc",
+            "status": "active",
+        }
+        (sessions / "ses_native.json").write_text(json.dumps(native), encoding="utf-8")
+        row = {"agent": "codex", "agent_id": "agt_codex", "container": "antigravity"}
+
+        session = _mod.register_session(self.root, "codex", row, "process", "ses_native")
+
+        self.assertEqual(session["session_id"], "ses_native")
+        self.assertEqual(session["surface_kind"], "ide-native-chat")
+        self.assertEqual(sorted(p.name for p in sessions.glob("ses_*.json")), ["ses_native.json"])
+
+    def test_register_session_refuses_to_adopt_another_agents_session(self):
+        sessions = self.root / ".ai-collab" / "live" / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "ses_other.json").write_text(
+            json.dumps({"agent": "opencode", "agent_id": "agt_opencode", "session_id": "ses_other"}),
+            encoding="utf-8",
+        )
+        row = {"agent": "codex", "agent_id": "agt_codex", "container": "antigravity"}
+
+        session = _mod.register_session(self.root, "codex", row, "process", "ses_other")
+
+        self.assertNotEqual(session.get("session_id"), "ses_other")
+
     def test_vacant_role_requires_assignment_instead_of_silent_execution(self):
         packet = self.packet(prompt="Haz el deployment a producción")
 
