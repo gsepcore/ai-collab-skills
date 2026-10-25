@@ -3203,7 +3203,12 @@ def process_thread(
             primary_inbox = collab_root / inbox_name
             if primary_inbox.exists():
                 inbox_meta, _inbox_body = parse_frontmatter(primary_inbox.read_text(encoding="utf-8"))
-                if inbox_meta.get("status") in {"unread", "claimed", "running", "blocked", "review"}:
+                # The active inbox only owns the wake path of the agent it is addressed
+                # to (or everyone, for inbox-all.md). Other @mentioned peers still need
+                # their own wake; suppressing them too silenced every reviewer whenever
+                # the thread's owner was blocked or in review.
+                inbox_owner = str(inbox_meta.get("to") or "").strip() or Path(inbox_name).stem.removeprefix("inbox-")
+                if inbox_meta.get("status") in {"unread", "claimed", "running", "blocked", "review"} and inbox_owner in {target_slug, "all"}:
                     results.append({"target_slug": target_slug, "action": "inbox-primary"})
                     continue
 

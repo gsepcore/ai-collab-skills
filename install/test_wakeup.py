@@ -2437,6 +2437,44 @@ project: gsep
         self.assertEqual(events[0]["thread_path"], str(self.thread))
         self.assertIn("mentioned", events[0]["synthetic_prompt"])
 
+    def write_inbox(self, owner, status):
+        (self.collab / f"inbox-{owner}.md").write_text(
+            f"---\nfrom: claude-code\nto: {owner}\ntask_id: task-123\nstatus: {status}\n---\n## Task\nx\n",
+            encoding="utf-8",
+        )
+
+    def test_active_inbox_suppresses_only_its_owner(self):
+        self.write_inbox("codex", "blocked")
+        self.append(author="codex", message="@claude-code @opencode please review.")
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_runner=_inert_adapter_runner,
+        )
+
+        actions = {item["target_slug"]: item["action"] for item in result["results"]}
+        self.assertNotEqual(actions["claude-code"], "inbox-primary")
+        self.assertNotEqual(actions["opencode"], "inbox-primary")
+
+    def test_active_inbox_still_owns_its_owner_wake(self):
+        self.write_inbox("codex", "blocked")
+        self.append()
+        result = process_thread(
+            self.thread,
+            "gsep",
+            now=self.now,
+            events_file=self.events,
+            state_file=self.state,
+            log_file=self.log,
+            adapter_runner=_inert_adapter_runner,
+        )
+
+        self.assertEqual(result["results"][0], {"target_slug": "codex", "action": "inbox-primary"})
+
     def test_thread_mention_does_not_redispatch_before_reply_wait_elapses(self):
         # A successful visible dispatch only proves the prompt reached the
         # target's window, not that it produced a real reply. Immediately
