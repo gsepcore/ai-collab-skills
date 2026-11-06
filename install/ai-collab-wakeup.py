@@ -204,9 +204,35 @@ def append_event(events_file: Path, event: dict[str, Any]) -> None:
     write_json(events_file, events)
 
 
-def update_inbox(path: Path, meta: dict[str, str], body: str) -> None:
-    meta["updated"] = isoformat_z(utc_now())
-    atomic_write(path, render_frontmatter(meta, body))
+def update_inbox(path: Path, meta: dict[str, str], body: str, *, base: dict[str, str] | None = None) -> bool:
+    """Write an inbox under its collab lock (the same `<inbox>.lock` agents and Wakeup use).
+
+    With ``base`` (the frontmatter as the caller read it), only the fields the caller changed
+    are applied on top of the file as it is now, and nothing is written when the task's id or
+    status changed in the meantime, e.g. the agent claimed it while the daemon was waking it.
+    ``meta`` is updated in place to what was written. Returns False when the write was skipped.
+    """
+    lock_file = with_lock(path)
+    try:
+        if base is not None:
+            try:
+                current_meta, current_body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return False
+            if current_meta.get("task_id") != base.get("task_id") or current_meta.get("status") != base.get("status"):
+                return False
+            changes = {key: value for key, value in meta.items() if base.get(key) != value}
+            current_meta.update(changes)
+            meta.clear()
+            meta.update(current_meta)
+            body = current_body
+        meta["updated"] = isoformat_z(utc_now())
+        atomic_write(path, render_frontmatter(meta, body))
+        return True
+    finally:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
 
 
 def parse_csv_value(value: str | None) -> list[str]:
@@ -3372,6 +3398,7 @@ def process_inbox(
         return {"action": "missing", "path": str(inbox_path)}
 
     meta, body = parse_frontmatter(text)
+    read_meta = dict(meta)
     if meta.get("status") in {"done", "failed"}:
         closed = close_thread_for_inbox(inbox_path, project, meta, now=now, log_file=log_file)
         return {"action": "closed-thread" if closed else "ignored", "reason": "status", "status": meta.get("status", "")}
@@ -3411,7 +3438,8 @@ def process_inbox(
     if attempts >= max_attempts:
         meta["status"] = "failed"
         meta["done_at"] = isoformat_z(now)
-        update_inbox(inbox_path, meta, body)
+        if not update_inbox(inbox_path, meta, body, base=read_meta):
+            return {"action": "superseded", "task_id": task_id, "reason": "inbox-changed-while-processing"}
         close_thread_for_inbox(inbox_path, project, meta, now=now, log_file=log_file)
         log(f"FAILED max_attempts task_id={task_id} inbox={inbox_path}", log_file)
         return {"action": "failed", "task_id": task_id, "attempts": attempts}
@@ -3507,6 +3535,7 @@ def process_inbox(
                 "inbox_status": current_meta.get("status", ""),
             }
         meta, body = current_meta, current_body
+        read_meta = dict(current_meta)
 
     meta["attempts"] = str(next_attempts)
     meta["last_attempt"] = timestamp
@@ -3523,7 +3552,9 @@ def process_inbox(
         action = "failed"
     else:
         action = "event"
-    update_inbox(inbox_path, meta, body)
+    if not update_inbox(inbox_path, meta, body, base=read_meta):
+        # The agent (or another writer) changed the task while the adapter ran; its state wins.
+        action = "superseded"
     if meta.get("status") in {"done", "failed"}:
         close_thread_for_inbox(inbox_path, project, meta, now=now, log_file=log_file)
 

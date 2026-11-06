@@ -16,10 +16,16 @@ import re
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None  # type: ignore[assignment]
 
 
 TERMINAL_TASK_STATES = {"done", "failed"}
@@ -112,6 +118,20 @@ def atomic_write(path: Path, content: str) -> None:
         tmp.write(content)
         tmp_path = Path(tmp.name)
     os.replace(tmp_path, path)
+
+@contextmanager
+def file_lock(path: Path) -> Iterator[None]:
+    """Hold collab's lock for ``path`` (flock on the sidecar ``<path>.lock``, as every collab writer does)."""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def read_json(path: Path, fallback: Any) -> Any:
@@ -493,12 +513,6 @@ def cmd_assign(args: argparse.Namespace) -> int:
     owner = str(task.get("owner", "")).strip()
     if not owner:
         raise SystemExit(f"Task has no owner: {args.task_id}")
-    active, status = active_inbox(inbox_path(root, owner))
-    if active and not args.force:
-        raise SystemExit(f"inbox-{owner}.md is active ({status}); refusing to overwrite")
-    task["status"] = "assigned"
-    task["updated"] = isoformat_z(now)
-    save_tasks(root, args.run_id, data)
     message = args.message or str(task.get("description", ""))
     body = f"""---
 from: {args.actor}
@@ -534,7 +548,15 @@ Use `.ai-collab/thread-{task['id']}.md` for questions, review requests, and hand
 - Update your session log.
 - Validation: {task.get('validation') or 'director will validate'}
 """
-    atomic_write(inbox_path(root, owner), body)
+    # Check and write under the inbox lock so a claim made in between is never overwritten.
+    with file_lock(inbox_path(root, owner)):
+        active, status = active_inbox(inbox_path(root, owner))
+        if active and not args.force:
+            raise SystemExit(f"inbox-{owner}.md is active ({status}); refusing to overwrite")
+        atomic_write(inbox_path(root, owner), body)
+    task["status"] = "assigned"
+    task["updated"] = isoformat_z(now)
+    save_tasks(root, args.run_id, data)
     path = append_thread(
         root,
         args.run_id,

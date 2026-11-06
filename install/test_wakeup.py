@@ -12,7 +12,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -343,6 +345,63 @@ class TestProcessInbox(unittest.TestCase):
         self.assertEqual(meta["status"], "failed")
         self.assertEqual(meta["attempts"], "3")
         self.assertEqual(meta["done_at"], "2026-05-12T12:00:00Z")
+
+    def test_agent_claim_during_wake_is_not_overwritten(self):
+        # The agent claims its inbox while the daemon's adapter is still running.
+        self.write_inbox(SAMPLE_INBOX)
+
+        def claim_meanwhile(event, **_kwargs):
+            meta, body = parse_frontmatter(self.inbox.read_text(encoding="utf-8"))
+            meta["status"] = "claimed"
+            meta["claimed_by"] = "codex"
+            meta["claimed_at"] = "2026-05-12T12:00:01Z"
+            self.inbox.write_text(render_frontmatter(meta, body), encoding="utf-8")
+            return {"status": "failed", "adapter_name": "mock-failed", "message": "not delivered"}
+
+        with unittest.mock.patch.object(_mod, "dispatch_wake_event", side_effect=claim_meanwhile):
+            result = process_inbox(
+                self.inbox,
+                "gsep",
+                now=self.now,
+                events_file=self.events,
+                state_file=self.state,
+                log_file=self.log,
+                adapter_mode="mock-failed",
+            )
+
+        self.assertEqual(result["action"], "superseded")
+        meta = self.read_meta()
+        self.assertEqual(meta["status"], "claimed")
+        self.assertEqual(meta["claimed_by"], "codex")
+        self.assertEqual(meta["attempts"], "0")
+
+    def test_inbox_update_waits_for_the_collab_lock(self):
+        self.write_inbox(SAMPLE_INBOX)
+        lock_file = _mod.with_lock(self.inbox)
+        done = threading.Event()
+
+        def run():
+            process_inbox(
+                self.inbox,
+                "gsep",
+                now=self.now,
+                events_file=self.events,
+                state_file=self.state,
+                log_file=self.log,
+                adapter_mode="mock-failed",
+            )
+            done.set()
+
+        worker = threading.Thread(target=run)
+        worker.start()
+        try:
+            self.assertFalse(done.wait(0.3), "the daemon wrote the inbox while another writer held its lock")
+        finally:
+            _mod.fcntl.flock(lock_file.fileno(), _mod.fcntl.LOCK_UN)
+            lock_file.close()
+        worker.join(5)
+        self.assertTrue(done.is_set())
+        self.assertEqual(self.read_meta()["attempts"], "1")
 
     def test_already_at_max_attempts_marks_failed_without_event(self):
         content = SAMPLE_INBOX.replace("attempts: 0", "attempts: 3")

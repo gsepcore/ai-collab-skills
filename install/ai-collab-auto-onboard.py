@@ -13,9 +13,15 @@ import os
 import re
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None  # type: ignore[assignment]
 
 
 START_MARKER = "<!-- AI-COLLAB-START agent={slug} -->"
@@ -59,6 +65,21 @@ def atomic_write(path: Path, content: str) -> None:
         tmp.write(content)
         tmp_path = Path(tmp.name)
     os.replace(tmp_path, path)
+
+
+@contextmanager
+def file_lock(path: Path) -> Iterator[None]:
+    """Hold collab's lock for ``path`` (flock on the sidecar ``<path>.lock``, as every collab writer does)."""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def load_json(path: Path, fallback: Any) -> Any:
@@ -230,6 +251,11 @@ def notify_unknown_slug(collab_dir: Path, slug: str, now: datetime) -> str:
         "A new AI logged its first session here. To onboard it manually, run:\n"
         f"`/collab onboard {slug}` in Claude Code.\n"
     )
+    with file_lock(inbox):
+        return _notify_unknown_slug_locked(inbox, slug, timestamp, message)
+
+
+def _notify_unknown_slug_locked(inbox: Path, slug: str, timestamp: str, message: str) -> str:
     if inbox.exists():
         text = inbox.read_text(encoding="utf-8")
         if f"New agent detected: {slug}" in text:

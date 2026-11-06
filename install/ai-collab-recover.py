@@ -15,9 +15,15 @@ import os
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None  # type: ignore[assignment]
 
 
 CLAUDE_DIR = Path.home() / ".claude"
@@ -41,6 +47,21 @@ def atomic_write_text(path: Path, content: str) -> None:
         tmp.write(content)
         tmp_path = Path(tmp.name)
     os.replace(tmp_path, path)
+
+
+@contextmanager
+def file_lock(path: Path) -> Iterator[None]:
+    """Hold collab's lock for ``path`` (flock on the sidecar ``<path>.lock``, as every collab writer does)."""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def atomic_write_json(path: Path, data: Any) -> None:
@@ -196,26 +217,28 @@ def should_requeue_failed_wakeup(meta: dict[str, str]) -> bool:
 def requeue_failed_wakeups(collab_dir: Path, *, dry_run: bool, now: datetime) -> dict[str, Any]:
     requeued: list[dict[str, str]] = []
     for inbox in sorted(collab_dir.glob("inbox-*.md")):
-        try:
-            meta, body = parse_frontmatter(inbox.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-        if not should_requeue_failed_wakeup(meta):
-            continue
-        task_id = meta["task_id"]
-        requeued.append({"task_id": task_id, "path": str(inbox)})
-        if dry_run:
-            continue
-        timestamp = isoformat_z(now)
-        meta["status"] = "unread"
-        meta["attempts"] = "0"
-        meta["last_attempt"] = ""
-        meta["done_at"] = ""
-        meta["updated"] = timestamp
-        meta["recovered_by"] = "ai-collab-recover"
-        meta["recovered_at"] = timestamp
-        meta["recovery_reason"] = "retry-failed-unclaimed-wakeup"
-        atomic_write_text(inbox, render_frontmatter(meta, body))
+        with file_lock(inbox):
+            # Read and write under the lock so an agent's concurrent claim is never overwritten.
+            try:
+                meta, body = parse_frontmatter(inbox.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+            if not should_requeue_failed_wakeup(meta):
+                continue
+            task_id = meta["task_id"]
+            requeued.append({"task_id": task_id, "path": str(inbox)})
+            if dry_run:
+                continue
+            timestamp = isoformat_z(now)
+            meta["status"] = "unread"
+            meta["attempts"] = "0"
+            meta["last_attempt"] = ""
+            meta["done_at"] = ""
+            meta["updated"] = timestamp
+            meta["recovered_by"] = "ai-collab-recover"
+            meta["recovered_at"] = timestamp
+            meta["recovery_reason"] = "retry-failed-unclaimed-wakeup"
+            atomic_write_text(inbox, render_frontmatter(meta, body))
     return {"status": "updated" if requeued else "skipped", "requeued": requeued}
 
 
